@@ -29,10 +29,10 @@
   - **Voice Agent**: Kokoro-ONNX / Edge-TTS speech synthesis & Whisper STT.
 
 - 🎙️ **Hands-Free Voice Control & Speech Output (TTS)**:
-  - **Natural Neural Voice Output**: Makima speaks back to you naturally using high-quality neural voices.
-  - **Auto Language Switch**: Detects Hindi, English, and Hinglish automatically and responds in the matching voice.
-  - **Zero-Setup Cloud Voice**: Pre-configured with `edge-tts` out of the box (no local model downloads required).
-  - **Wake Phrase Activation**: Activate assistant via wake words like *"Hey Makima"*, *"Makima"*, *"Ok Makima"*.
+  - **Continuous Conversation Mode**: Talk back and forth naturally without repeating wake phrases.
+  - **Natural Neural Voice Output**: Speaks back naturally in high-quality English & Hindi neural voices.
+  - **Auto Language Switch**: Detects Hindi, English, and Hinglish automatically.
+  - **Zero-Setup Cloud Voice**: Powered by `edge-tts` out of the box (no local model downloads required).
 
 - ⚡ **High-Speed Rust Core (`makima-core`)**:
   - Triple-store knowledge graph for entity relationships.
@@ -105,23 +105,22 @@ set MAKIMA_GITHUB_KEY=your_github_pat_token
 
 ---
 
-## 🎙️ How to Start Voice Chat (Voice Mode Setup)
+## 🎙️ How to Start Voice Chat & Always-Listening Mode
 
-There are **3 easy ways** to turn on and start Voice Chat in Makima:
+There are **3 ways** to use Voice Chat in Makima, including **Continuous Always-Listening Conversation**:
 
-### 1. 🗣️ Wake Word Mode (Hands-Free — Recommended)
-1. Launch Makima backend (`python -m apps.brain.main`) and Desktop UI.
-2. Go to **Settings (⚙️) -> Voice Settings** and select **"Wake Word"**.
-3. Speak clearly into your mic: **"Hey Makima"** or **"Makima"**.
-4. Makima will activate, listen to your command, execute it, and **reply back aloud in her voice**!
+### 1. 🔄 Always-Listening & Continuous Conversation Mode (Hands-Free)
+1. Go to **Settings (⚙️) -> Voice Settings** and select **"Wake Word"**.
+2. Speak the wake phrase **once**: *"Hey Makima"* or *"Makima"*.
+3. **Continuous Dialogue Loop**: After Makima speaks her response aloud, **she keeps listening automatically** via real-time Voice Activity Detection (VAD). You can ask follow-up questions immediately **without repeating "Hey Makima"**!
+4. **Auto-Standby**: If you are silent for 10 seconds, Makima automatically goes back to background standby listening mode.
 
 ### 2. 🔘 Push-to-Talk (PTT Mode)
 1. Go to **Settings (⚙️) -> Voice Settings** and select **"Push-to-Talk"**.
-2. Press and hold your PTT key (default `Space` or `Ctrl + Shift + V`), or click the **Mic (🎙️) icon** in the UI to talk.
-3. Release to let Makima answer you aloud.
+2. Hold your PTT key (default `Space` or `Ctrl + Shift + V`) or click the UI **Mic (🎙️) icon** to speak. Release when done.
 
 ### 3. 🖥️ Desktop Overlay Mic Button
-1. Click the floating **Microphone (🎙️) button** on Makima's Desktop Overlay bar anytime to instantly talk to Makima.
+1. Click the floating **Microphone (🎙️) button** on Makima's Desktop Overlay bar anytime to talk.
 
 ---
 
