@@ -29,10 +29,11 @@ duckduckgo-search>=6.0.0
 grpcio>=1.65.0,<2.0.0
 grpcio-tools>=1.65.0,<2.0.0
 
-# Speech & Audio (Optional / Voice Agent)
-# onnxruntime>=1.18.0
-# sounddevice>=0.4.6
-# soundfile>=0.12.1
+# 🎙️ Voice Control & Speech Synthesis (Edge-TTS, Kokoro, Audio IO)
+edge-tts>=6.1.0
+sounddevice>=0.4.6
+soundfile>=0.12.1
+onnxruntime>=1.18.0
 
 # Development, Rust Binding & Testing Tools
 maturin>=1.8.0,<2.0.0

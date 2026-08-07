@@ -28,6 +28,12 @@
   - **Memory Agent**: EternalMemory vector index & HNSW vector search.
   - **Voice Agent**: Kokoro-ONNX / Edge-TTS speech synthesis & Whisper STT.
 
+- 🎙️ **Hands-Free Voice Control & Speech Output (TTS)**:
+  - **Natural Neural Voice Output**: Makima speaks back to you naturally using high-quality neural voices.
+  - **Auto Language Switch**: Detects Hindi, English, and Hinglish automatically and responds in the matching voice.
+  - **Zero-Setup Cloud Voice**: Pre-configured with `edge-tts` out of the box (no local model downloads required).
+  - **Wake Phrase Activation**: Activate assistant via wake words like *"Hey Makima"*, *"Makima"*, *"Ok Makima"*.
+
 - ⚡ **High-Speed Rust Core (`makima-core`)**:
   - Triple-store knowledge graph for entity relationships.
   - HNSW vector index for instant semantic memory lookup.
@@ -69,7 +75,7 @@ Ensure you have the following installed on your machine:
 
 ### 1. Installation
 
-Clone the repository and install all Python dependencies:
+Clone the repository and install all Python dependencies (including voice packages):
 
 ```bash
 git clone https://github.com/Pggamerbgoy/makima-2.git
@@ -96,6 +102,64 @@ Set up your API keys and configuration in `configs/default.yaml` or set environm
 set MAKIMA_OPENROUTER_KEY=your_openrouter_api_key
 set MAKIMA_GITHUB_KEY=your_github_pat_token
 ```
+
+---
+
+## 🎙️ Voice Control & Speech Output Guide
+
+Makima comes equipped with a full **Voice Agent** pipeline for both listening (Speech-to-Text) and speaking back to you (Text-to-Speech).
+
+### 🗣️ How Makima Speaks (Voice Output / TTS)
+
+When you ask Makima a question or give a command via voice or chat, **Makima speaks her response aloud through your system speakers**.
+
+1. **Automatic Language & Voice Selection**:
+   - **English**: Uses natural neural voices like `en-US-AvaNeural` or `en-US-EmmaNeural`.
+   - **Hindi / Hinglish**: Uses fluent Indian neural voices like `hi-IN-SwaraNeural` or `hi-IN-MadhurNeural`.
+
+2. **Instant Zero-Setup Cloud Voice**:
+   Makima uses `edge-tts` by default, requiring **no heavy model downloads** or local GPU requirements.
+
+3. **Offline Voice Engine (Kokoro ONNX)**:
+   For 100% offline local speech synthesis, Makima also supports `kokoro-onnx` local model files.
+
+---
+
+### 🎛️ How to Customize Makima's Voice
+
+You can customize how Makima speaks by editing `configs/voice_config.json`:
+
+```json
+{
+  "wake_phrases": [
+    "hey makima",
+    "makima",
+    "ok makima",
+    "hello makima"
+  ],
+  "tts": {
+    "engine": "edge_tts",
+    "voice_en": "en-US-AvaNeural",
+    "voice_hi": "hi-IN-SwaraNeural",
+    "rate": "+0%",
+    "pitch": "+0Hz"
+  }
+}
+```
+
+#### Popular Voice Options:
+- **English Female (Default)**: `en-US-AvaNeural`, `en-US-JennyNeural`, `en-US-EmmaNeural`
+- **Hindi Female (Default)**: `hi-IN-SwaraNeural`, `hi-IN-AnanyaNeural`
+- **Hindi Male**: `hi-IN-MadhurNeural`
+
+---
+
+### 🎧 How to Use Voice Assistant Mode
+
+1. Start the Makima backend server (`python -m apps.brain.main`).
+2. Speak the wake phrase clearly into your microphone: **"Hey Makima"** or **"Makima"**.
+3. Speak your command (e.g. *"Makima, open YouTube and play my playlist"*, *"Makima, read out the latest news"*).
+4. Makima will execute the task and **speak her response back to you**.
 
 ---
 
