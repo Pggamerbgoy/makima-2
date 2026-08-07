@@ -105,22 +105,31 @@ set MAKIMA_GITHUB_KEY=your_github_pat_token
 
 ---
 
-## 🎙️ How to Start Voice Chat & Always-Listening Mode
+## 🎙️ How to Turn ON Always-Listening & Talking Mode
 
-There are **3 ways** to use Voice Chat in Makima, including **Continuous Always-Listening Conversation**:
+### Method 1: From Desktop App UI (Easy)
+1. Open the Makima Desktop App.
+2. Click **Settings (⚙️) -> Voice Settings**.
+3. Under **Voice Mode**, select **"Wake Word"** (this turns ON continuous background microphone monitoring).
+4. Click **Save Settings**.
+5. Speak **"Hey Makima"** once — after she answers, **Always-Listening Mode is active**! You can continue talking back and forth without repeating the wake phrase.
 
-### 1. 🔄 Always-Listening & Continuous Conversation Mode (Hands-Free)
-1. Go to **Settings (⚙️) -> Voice Settings** and select **"Wake Word"**.
-2. Speak the wake phrase **once**: *"Hey Makima"* or *"Makima"*.
-3. **Continuous Dialogue Loop**: After Makima speaks her response aloud, **she keeps listening automatically** via real-time Voice Activity Detection (VAD). You can ask follow-up questions immediately **without repeating "Hey Makima"**!
-4. **Auto-Standby**: If you are silent for 10 seconds, Makima automatically goes back to background standby listening mode.
+### Method 2: From Config File (`configs/voice_config.json`)
+Make sure `configs/voice_config.json` has `vad.mode` set to `3` and `wake_phrases` configured:
 
-### 2. 🔘 Push-to-Talk (PTT Mode)
-1. Go to **Settings (⚙️) -> Voice Settings** and select **"Push-to-Talk"**.
-2. Hold your PTT key (default `Space` or `Ctrl + Shift + V`) or click the UI **Mic (🎙️) icon** to speak. Release when done.
+```json
+{
+  "wake_phrases": ["hey makima", "makima", "ok makima"],
+  "vad": {
+    "mode": 3
+  },
+  "tts": {
+    "engine": "edge_tts"
+  }
+}
+```
 
-### 3. 🖥️ Desktop Overlay Mic Button
-1. Click the floating **Microphone (🎙️) button** on Makima's Desktop Overlay bar anytime to talk.
+Whenever you run `python -m apps.brain.main` or `StartMakima.bat`, Always-Listening VAD automatically activates.
 
 ---
 
