@@ -224,3 +224,15 @@ makima_brain.egg-info/
 node_modules/
 target/
 
+# Session logs & extra dev tool metadata
+CLAUDE_SESSION_LOG.md
+CLAUDE.md
+opencode.json
+HANDOFF_GUIDE.md
+TODO.md
+research_report.md
+run_claude_qwen.bat
+run_claude_qwen.ps1
+audit_agents.py
+
+
