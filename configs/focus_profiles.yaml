@@ -1,0 +1,52 @@
+# Makima v7.1 Focus Profiles
+# Each profile toggles features for specific contexts.
+# Switching applies in < 200ms. Voice command: "meeting mode on"
+
+profiles:
+  work:
+    description: "Default working mode — all features enabled"
+    wake_word_enabled: true
+    screen_capture_enabled: true
+    proactive_suggestions_enabled: true
+    tts_speak_unrequested: true
+    hud_level: "full"            # full | minimal | hidden
+    cpu_priority: "normal"       # low | normal | high
+    notification_outbound: true
+    notification_inbound: true
+    clipboard_events: true
+
+  quiet:
+    description: "Reduced interruptions — no proactive suggestions or TTS"
+    wake_word_enabled: true
+    screen_capture_enabled: true
+    proactive_suggestions_enabled: false
+    tts_speak_unrequested: false
+    hud_level: "minimal"
+    cpu_priority: "normal"
+    notification_outbound: false
+    notification_inbound: false
+    clipboard_events: false
+
+  meeting:
+    description: "Meeting mode — voice disabled, minimal UI"
+    wake_word_enabled: false
+    screen_capture_enabled: false
+    proactive_suggestions_enabled: false
+    tts_speak_unrequested: false
+    hud_level: "hidden"
+    cpu_priority: "low"
+    notification_outbound: false
+    notification_inbound: false
+    clipboard_events: false
+
+  gaming:
+    description: "Gaming mode — everything off, minimal CPU usage"
+    wake_word_enabled: false
+    screen_capture_enabled: false
+    proactive_suggestions_enabled: false
+    tts_speak_unrequested: false
+    hud_level: "hidden"
+    cpu_priority: "low"
+    notification_outbound: false
+    notification_inbound: false
+    clipboard_events: false

@@ -1,0 +1,297 @@
+/* FormattedMessage styling */
+.formatted-message-container {
+  width: 100%;
+  font-size: 0.9375rem;
+  line-height: 1.6;
+  color: #e2e8f0;
+}
+
+/* User Text */
+.formatted-user-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Thinking Accordion Glow & Pulse */
+@keyframes brainPulse {
+  0% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 2px rgba(129, 140, 248, 0.4));
+    opacity: 0.8;
+  }
+  50% {
+    transform: scale(1.15);
+    filter: drop-shadow(0 0 8px rgba(129, 140, 248, 0.95)) drop-shadow(0 0 12px rgba(99, 102, 241, 0.7));
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 2px rgba(129, 140, 248, 0.4));
+    opacity: 0.8;
+  }
+}
+
+.thinking-accordion {
+  margin-bottom: 0.75rem;
+  border: 1px solid rgba(129, 140, 248, 0.25);
+  background: rgba(18, 19, 26, 0.65);
+  border-radius: 8px;
+  overflow: hidden;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 0 12px rgba(99, 102, 241, 0.12);
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.thinking-accordion:hover {
+  border-color: rgba(129, 140, 248, 0.45);
+  box-shadow: 0 0 16px rgba(99, 102, 241, 0.22);
+}
+
+.thinking-accordion-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: none;
+  color: #a5b4fc;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.thinking-accordion-header:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: #c7d2fe;
+}
+
+.thinking-accordion-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.thinking-brain-icon {
+  color: #818cf8;
+  animation: brainPulse 2.2s infinite ease-in-out;
+}
+
+.thinking-chevron {
+  transition: transform 0.2s ease;
+}
+
+.thinking-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+.thinking-accordion-body {
+  padding: 10px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 0.85rem;
+  color: #94a3b8;
+  line-height: 1.5;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+/* Code Block Wrapper */
+.code-block-wrapper {
+  margin: 0.75rem 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: #1a1b26;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.75rem;
+  color: #61afef;
+  text-transform: lowercase;
+}
+
+.code-block-copy-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #94a3b8;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.code-block-copy-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #f8fafc;
+}
+
+.text-green {
+  color: #4ade80;
+}
+
+/* Inline Code */
+.inline-code {
+  background: rgba(255, 255, 255, 0.08);
+  color: #f472b6;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.85em;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* Markdown General Elements */
+.markdown-body p {
+  margin-bottom: 0.75rem;
+}
+
+.markdown-body p:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  font-weight: 600;
+  color: #f8fafc;
+  margin-top: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.markdown-body h1 { font-size: 1.35rem; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 4px; }
+.markdown-body h2 { font-size: 1.2rem; }
+.markdown-body h3 { font-size: 1.05rem; }
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.25rem;
+  margin-bottom: 0.75rem;
+}
+
+.markdown-body li {
+  margin-bottom: 0.25rem;
+}
+
+.markdown-body blockquote {
+  border-left: 3px solid #6366f1;
+  padding-left: 10px;
+  margin: 0.75rem 0;
+  color: #94a3b8;
+  font-style: italic;
+  background: rgba(99, 102, 241, 0.05);
+  border-radius: 0 4px 4px 0;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.75rem 0;
+  font-size: 0.875rem;
+}
+
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 6px 12px;
+  text-align: left;
+}
+
+.markdown-body th {
+  background: rgba(255, 255, 255, 0.05);
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+.markdown-link {
+  color: #60a5fa;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.markdown-link:hover {
+  color: #93c5fd;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Light Theme Overrides
+   ═══════════════════════════════════════════════════════════════ */
+[data-theme="light"] .formatted-message-container {
+  color: #0f172a;
+}
+
+[data-theme="light"] .formatted-user-text {
+  color: inherit;
+}
+
+[data-theme="light"] .thinking-accordion {
+  border: 1px solid rgba(124, 58, 237, 0.3);
+  background: #f3e8ff;
+  box-shadow: 0 0 12px rgba(124, 58, 237, 0.08);
+}
+
+[data-theme="light"] .thinking-accordion-header {
+  background: rgba(124, 58, 237, 0.08);
+  color: #6b21a8;
+}
+
+[data-theme="light"] .thinking-accordion-header:hover {
+  background: rgba(124, 58, 237, 0.15);
+  color: #581c87;
+}
+
+[data-theme="light"] .thinking-accordion-body {
+  background: #faf5ff;
+  color: #4c1d95;
+  border-top: 1px solid rgba(124, 58, 237, 0.15);
+}
+
+[data-theme="light"] .thinking-brain-icon {
+  color: #7c3aed;
+}
+
+[data-theme="light"] .inline-code {
+  background: rgba(124, 58, 237, 0.1);
+  color: #6d28d9;
+  border: 1px solid rgba(124, 58, 237, 0.2);
+}
+
+[data-theme="light"] .markdown-body h1,
+[data-theme="light"] .markdown-body h2,
+[data-theme="light"] .markdown-body h3,
+[data-theme="light"] .markdown-body h4 {
+  color: #0f172a;
+}
+
+[data-theme="light"] .markdown-body blockquote {
+  border-left-color: #7c3aed;
+  color: #475569;
+  background: rgba(124, 58, 237, 0.06);
+}
+
+[data-theme="light"] .markdown-body th {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+[data-theme="light"] .markdown-body th,
+[data-theme="light"] .markdown-body td {
+  border-color: #cbd5e1;
+}
+
+[data-theme="light"] .markdown-link {
+  color: #6d28d9;
+}

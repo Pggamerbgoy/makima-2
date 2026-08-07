@@ -1,0 +1,217 @@
+/* ═══════════════════════════════════════════════════════════════
+   SettingsPage Styles
+   ═══════════════════════════════════════════════════════════════ */
+
+.settings-layout {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* ─── Sidebar ─── */
+.settings-sidebar {
+  width: 220px;
+  height: 100%;
+  background: var(--surface-container-lowest);
+  border-right: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-md);
+  gap: var(--space-xs);
+  flex-shrink: 0;
+}
+
+.settings-sidebar-header {
+  padding: 8px 12px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.settings-nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  border: none;
+  background: transparent;
+  color: var(--on-surface-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: all var(--transition-fast);
+}
+
+.settings-nav-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--on-surface);
+}
+
+.settings-nav-item.active {
+  background: rgba(109, 40, 217, 0.12);
+  color: var(--primary);
+}
+
+/* ─── Content ─── */
+.settings-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-xl);
+}
+
+.settings-section {
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+.settings-section h2 {
+  font-size: 20px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.settings-row {
+  display: flex;
+  gap: var(--space-md);
+}
+
+/* Segmented Buttons */
+.settings-segmented {
+  display: flex;
+  gap: var(--space-xs);
+  background: var(--surface-container);
+  padding: 4px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+}
+
+.settings-seg-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-xs);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: transparent;
+  color: var(--on-surface-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.settings-seg-btn.active {
+  background: var(--surface-container-high);
+  color: var(--on-surface);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+/* LLM Backends */
+.settings-backends {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.settings-backend-card {
+  padding: var(--space-md);
+}
+
+.settings-backend-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-backend-name {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+/* Toggle Switch */
+.toggle {
+  width: 38px;
+  height: 22px;
+  border-radius: 11px;
+  background: var(--surface-container-high);
+  border: 1px solid var(--border-subtle);
+  position: relative;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.toggle::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--on-surface-muted);
+  transition: transform var(--transition-fast);
+}
+
+.toggle.active {
+  background: var(--primary-container);
+  border-color: var(--primary);
+}
+
+.toggle.active::after {
+  transform: translateX(16px);
+  background: #ffffff;
+}
+
+/* Privacy Card */
+.settings-privacy-card {
+  padding: var(--space-lg);
+}
+
+.settings-privacy-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* Cost Tracking */
+.settings-cost-bar {
+  padding: var(--space-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.settings-cost-info {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 500;
+  font-size: 14px;
+}
+
+.settings-progress-track {
+  width: 100%;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface-container);
+  overflow: hidden;
+}
+
+.settings-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary) 0%, #a855f7 100%);
+  border-radius: 4px;
+  transition: width var(--transition-normal);
+}

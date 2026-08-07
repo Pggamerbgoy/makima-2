@@ -1,0 +1,84 @@
+agents:
+  system:
+    description: "Enterprise OS control, hardware diagnostics, process monitoring, and lifecycle management."
+    capabilities: ["process_management", "hardware_monitor", "desktop_cleanup", "file_operations", "system_diagnostics", "window_management", "service_management", "power_management"]
+    tools: ["get_system_stats", "get_process_list", "kill_process", "set_process_priority", "launch_app", "manage_window", "system_power", "network_diagnostics", "manage_service", "get_network_adapters", "organize_desktop", "move_file", "copy_file", "rename_file", "write_file", "read_file"]
+    tags: ["system", "os", "local", "files", "desktop", "process", "hardware"]
+
+  media:
+    description: "Music/video control: Spotify & YouTube (browser automation)"
+    capabilities: ["media_control", "music_playback", "volume_management", "spotify_control", "youtube_control", "transcript_fetching"]
+    tools: ["play_music", "pause_music", "next_track", "previous_track", "set_volume", "get_media_status", "get_transcript"]
+    tags: ["media", "music", "youtube", "spotify", "sound", "playback"]
+
+  browser:
+    description: "Stealth web browsing, DOM distillation, vision-fusion data extraction"
+    capabilities: ["web_browsing", "dom_distillation", "stealth_browsing", "form_filling", "screenshot_capture", "scraping"]
+    tools: ["browser_navigate", "browser_click", "browser_fill", "browser_get_text", "browser_distill_dom", "browser_screenshot"]
+    tags: ["browser", "web", "scraping", "playwright", "stealth"]
+
+  research:
+    description: "Concurrent multi-hop web research, algorithmic credibility scoring, executive synthesis"
+    capabilities: ["web_search", "query_decomposition", "credibility_scoring", "information_synthesis", "academic_research"]
+    tools: ["web_search", "fetch_url"]
+    tags: ["research", "web", "search", "synthesis", "nemotron"]
+
+  code:
+    description: "Elite Code Generation, AST Auto-Correction, Secure Sandbox Execution, and Multi-file Refactoring"
+    capabilities: ["code_generation", "syntax_debugging", "refactoring", "ast_validation", "sandbox_execution"]
+    tools: ["run_code", "format_code", "lint_code"]
+    tags: ["code", "programming", "python", "rust", "sandbox", "ast"]
+
+  devops:
+    description: "Elite DevOps, SRE, and Infrastructure Management Engine"
+    capabilities: ["docker_management", "cicd_automation", "deployment_diagnostics", "environment_config"]
+    tools: ["docker_ps", "docker_logs", "docker_restart", "check_ci_status"]
+    tags: ["devops", "docker", "deploy", "ci", "logs"]
+
+  data_analyst:
+    description: "Enterprise data analysis, Polars/Pandas manipulation, statistical inference, charting"
+    capabilities: ["data_analysis", "statistical_metrics", "csv_processing", "json_processing", "data_visualization", "chart_generation"]
+    tools: ["load_csv", "filter_data", "compute_stats", "generate_chart"]
+    tags: ["data", "pandas", "polars", "csv", "json", "chart"]
+
+  security:
+    description: "Enterprise security auditing, AST analysis, dependency CVE checks, secret detection, and port scanning."
+    capabilities: ["vulnerability_scanning", "secret_leak_detection", "sql_injection_audit", "dependency_audit", "input_sanitization"]
+    tools: ["scan_code", "check_dependencies", "audit_secrets"]
+    tags: ["security", "audit", "secrets", "injection", "vulnerability"]
+
+  document:
+    description: "Parses PDFs/Docs/Sheets and creates professional Excel, Word, and HTML reports."
+    capabilities: ["document_generation", "excel_formatting", "word_generation", "pdf_generation", "powerpoint_generation", "document_parsing"]
+    tools: ["create_excel", "create_word", "create_pdf", "create_ppt", "parse_document"]
+    tags: ["document", "xlsx", "docx", "pdf", "pptx", "slides"]
+
+  memory:
+    description: "Long-term memory query, HNSW vector search, conversation history retrieval, user preference recall."
+    capabilities: ["long_term_memory", "vector_search", "sqlite_wal", "fact_recall", "memory_forget"]
+    tools: ["search_memory", "save_memory", "forget_memory"]
+    tags: ["memory", "vector", "sqlite", "hnsw", "recall"]
+
+  messaging:
+    description: "WhatsApp, Telegram, Discord, and Email drafting, contact lookup, and message delivery."
+    capabilities: ["whatsapp_drafting", "telegram_dispatch", "discord_webhook", "email_drafting", "contact_lookup"]
+    tools: ["send_whatsapp", "send_telegram", "send_discord", "send_email", "find_contact"]
+    tags: ["messaging", "whatsapp", "telegram", "discord", "email", "communication"]
+
+  automation:
+    description: "Scheduled reminders, background timers, recurring cron routines, UI macro recording, and macros."
+    capabilities: ["scheduled_reminders", "background_timers", "recurring_cron", "ui_macro_recording", "macro_execution"]
+    tools: ["set_reminder", "set_timer", "set_cron", "run_macro"]
+    tags: ["automation", "scheduler", "cron", "timer", "macro"]
+
+  voice:
+    description: "Speech synthesis (Kokoro-ONNX / Edge-TTS), speech recognition (Whisper gRPC), voice settings."
+    capabilities: ["speech_synthesis", "speech_recognition", "voice_settings_tuning", "read_aloud"]
+    tools: ["speak_text", "transcribe_audio"]
+    tags: ["voice", "tts", "stt", "whisper", "kokoro"]
+
+  creative:
+    description: "Creative writing, storytelling, copywriting, image prompt drafting, and design ideation."
+    capabilities: ["creative_writing", "copywriting", "image_prompt_drafting", "design_ideation"]
+    tools: ["generate_text", "suggest_prompts"]
+    tags: ["creative", "writing", "copy", "image", "design"]

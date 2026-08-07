@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package makima.screen;
+
+import "health.proto";
+
+// DXGI screen capture service.
+// Captures desktop frames for vision analysis.
+// Handles DRM content (N4), multi-monitor (N5), and fullscreen detection.
+
+service ScreenService {
+  // Capture a single frame (downscaled for vision API)
+  rpc CaptureFrame(CaptureFrameRequest) returns (CaptureFrameResponse);
+  
+  // Check if active window is fullscreen (for ProactiveSuppressor)
+  rpc CheckFullscreen(FullscreenRequest) returns (FullscreenResponse);
+  
+  // Get frame delta percentage vs last capture (skip if < 2%)
+  rpc GetFrameDelta(FrameDeltaRequest) returns (FrameDeltaResponse);
+  
+  // Health check (required by WatchdogManager)
+  rpc HealthCheck(makima.health.HealthCheckRequest) returns (makima.health.HealthCheckResponse);
+}
+
+message CaptureFrameRequest {
+  int32 max_width = 1;       // downscale target width (default 1280)
+  int32 max_height = 2;      // downscale target height (default 720)
+  int32 monitor_index = 3;   // -1 = active monitor (default)
+  string format = 4;         // "jpeg" or "png" (default "jpeg")
+  int32 quality = 5;         // JPEG quality 1-100 (default 80)
+}
+
+message CaptureFrameResponse {
+  bytes frame_data = 1;      // compressed image bytes
+  int32 width = 2;
+  int32 height = 3;
+  string format = 4;
+  int64 capture_timestamp_ns = 5;
+  bool is_drm_blocked = 6;   // true if DRM prevented capture (N4)
+  string active_window_title = 7;
+  string active_process_name = 8;
+}
+
+message FullscreenRequest {}
+
+message FullscreenResponse {
+  bool is_fullscreen = 1;
+  string window_title = 2;
+  string process_name = 3;
+}
+
+message FrameDeltaRequest {}
+
+message FrameDeltaResponse {
+  float delta_percent = 1;   // 0.0 - 100.0
+  bool is_static = 2;        // true if delta < threshold (default 2%)
+}

@@ -1,0 +1,54 @@
+{
+  "_comment": "Voice pipeline config. Edit freely — hot-reloaded at runtime.",
+  "wake_phrases": [
+    "hey makima",
+    "makima",
+    "aye makima",
+    "ok makima",
+    "hello makima"
+  ],
+  "wake_fuzzy_threshold": 0.75,
+  "language_hints": {
+    "default": "auto",
+    "devanagari_threshold": 0.3,
+    "latin_only": "en",
+    "devanagari_dominant": "hi",
+    "mixed": "auto"
+  },
+  "vad": {
+    "mode": 3,
+    "frame_duration_ms": 30,
+    "sample_rate": 16000,
+    "silence_ratio_threshold": 0.85,
+    "energy_fallback_multiplier": 1.5
+  },
+  "noise_gate": {
+    "calibration_window_s": 3.0,
+    "rolling_window_size": 50,
+    "percentile": 90
+  },
+  "tts": {
+    "engine": "edge_tts",
+    "priority_urgent": 0,
+    "priority_normal": 5,
+    "queue_maxsize": 20,
+    "cancel_on_ptt": true
+  },
+  "confidence": {
+    "high_threshold": 0.7,
+    "low_threshold": 0.3,
+    "auto_confirm_timeout_s": 10,
+    "auto_confirm_min_confidence": 0.5
+  },
+  "whisper_grpc": {
+    "host": "127.0.0.1",
+    "port": 50052,
+    "beam_size": 5,
+    "timeout_s": 10.0
+  },
+  "diarization": {
+    "energy_change_threshold": 0.4,
+    "min_pause_s": 1.5,
+    "rolling_window": 20
+  }
+}

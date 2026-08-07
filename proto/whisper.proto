@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package makima.whisper;
+
+import "health.proto";
+
+// whisper.cpp wrapper service for speech-to-text.
+// Supports both single-shot and streaming transcription.
+// Falls back to --no-gpu on CUDA init failure (N8).
+
+service WhisperService {
+  // Transcribe a complete audio buffer
+  rpc Transcribe(TranscribeRequest) returns (TranscribeResponse);
+  
+  // Stream partial transcription results as audio arrives
+  rpc TranscribeStream(stream AudioChunk) returns (stream TranscriptChunk);
+  
+  // Health check (required by WatchdogManager)
+  rpc HealthCheck(makima.health.HealthCheckRequest) returns (makima.health.HealthCheckResponse);
+}
+
+message TranscribeRequest {
+  bytes audio_data = 1;      // PCM int16, 16kHz mono
+  string language = 2;       // ISO 639-1 code, empty = auto-detect
+  int32 beam_size = 3;       // default 5; reduced on OOM restart (N2)
+  bool translate = 4;        // translate to English if true
+}
+
+message TranscribeResponse {
+  string text = 1;
+  string language = 2;       // detected language
+  float confidence = 3;      // 0.0 - 1.0
+  repeated Segment segments = 4;
+  int64 processing_ms = 5;
+}
+
+message Segment {
+  string text = 1;
+  float start_s = 2;         // start time in seconds
+  float end_s = 3;           // end time in seconds
+  float confidence = 4;
+}
+
+message AudioChunk {
+  bytes pcm_data = 1;
+  bool is_final = 2;         // true = last chunk, finalize transcription
+}
+
+message TranscriptChunk {
+  string partial_text = 1;   // current partial transcription
+  bool is_final = 2;         // true = final result
+  float confidence = 3;
+}

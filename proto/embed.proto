@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+package makima.embed;
+
+import "health.proto";
+
+// ONNX Runtime embedder service.
+// Generates vector embeddings for text using a local ONNX model.
+// Model file integrity verified via SHA256 on startup (N3).
+
+service EmbedService {
+  // Embed a single text
+  rpc Embed(EmbedRequest) returns (EmbedResponse);
+  
+  // Embed a batch of texts
+  rpc EmbedBatch(EmbedBatchRequest) returns (EmbedBatchResponse);
+  
+  // Get model info (dimensions, model name)
+  rpc GetModelInfo(ModelInfoRequest) returns (ModelInfoResponse);
+  
+  // Health check (required by WatchdogManager)
+  rpc HealthCheck(makima.health.HealthCheckRequest) returns (makima.health.HealthCheckResponse);
+}
+
+message EmbedRequest {
+  string text = 1;
+}
+
+message EmbedResponse {
+  repeated float embedding = 1;  // vector of floats (typically 384-dim)
+  int32 dimensions = 2;
+  int64 processing_ms = 3;
+}
+
+message EmbedBatchRequest {
+  repeated string texts = 1;    // max 64 texts per batch
+}
+
+message EmbedBatchResponse {
+  repeated EmbedVector embeddings = 1;
+  int64 processing_ms = 2;
+}
+
+message EmbedVector {
+  repeated float values = 1;
+}
+
+message ModelInfoRequest {}
+
+message ModelInfoResponse {
+  string model_name = 1;
+  int32 dimensions = 2;
+  int64 model_size_bytes = 3;
+  string sha256 = 4;            // verified on startup
+}

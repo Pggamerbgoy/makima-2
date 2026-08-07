@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package makima.audio;
+
+import "health.proto";
+
+// C WASAPI audio capture service.
+// Captures PCM audio from default input device, streams to Python brain.
+// Handles device changes (Bluetooth switch, unplug) internally.
+
+service AudioService {
+  // Stream raw PCM audio frames from microphone
+  rpc StreamAudio(StreamAudioRequest) returns (stream AudioFrame);
+  
+  // Get current audio device info
+  rpc GetDeviceInfo(DeviceInfoRequest) returns (DeviceInfoResponse);
+  
+  // Set audio capture parameters
+  rpc Configure(AudioConfig) returns (ConfigureResponse);
+  
+  // Health check (required by WatchdogManager)
+  rpc HealthCheck(makima.health.HealthCheckRequest) returns (makima.health.HealthCheckResponse);
+}
+
+message StreamAudioRequest {
+  int32 sample_rate = 1;    // default 16000
+  int32 channels = 2;       // default 1 (mono for STT)
+  int32 chunk_ms = 3;       // default 30ms chunks
+}
+
+message AudioFrame {
+  bytes pcm_data = 1;       // raw PCM bytes (int16)
+  int64 timestamp_ns = 2;   // capture timestamp in nanoseconds
+  int32 sample_rate = 3;
+  int32 channels = 4;
+  float rms_db = 5;         // RMS level in dB for VAD
+  bool overflow = 6;        // true if ring buffer overflow occurred (frames dropped)
+}
+
+message DeviceInfoRequest {}
+
+message DeviceInfoResponse {
+  string device_name = 1;
+  string device_id = 2;
+  int32 sample_rate = 3;
+  int32 channels = 4;
+  bool is_default = 5;
+}
+
+message AudioConfig {
+  int32 sample_rate = 1;
+  int32 channels = 2;
+  int32 buffer_size_ms = 3;  // ring buffer size, default 5000ms
+}
+
+message ConfigureResponse {
+  bool success = 1;
+  string error = 2;
+}

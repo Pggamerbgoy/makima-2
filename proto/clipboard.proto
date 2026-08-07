@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package makima.clipboard;
+
+import "health.proto";
+
+// C clipboard watcher service.
+// Monitors WM_CLIPBOARDUPDATE for clipboard changes.
+// Text only by default (never image — privacy).
+// Debounce: max 1 event per 500ms (handles N10 flood).
+
+service ClipboardService {
+  // Get current clipboard text content
+  rpc GetClipboard(GetClipboardRequest) returns (GetClipboardResponse);
+  
+  // Stream clipboard change events (opt-in)
+  rpc StreamChanges(StreamChangesRequest) returns (stream ClipboardEvent);
+  
+  // Health check (required by WatchdogManager)
+  rpc HealthCheck(makima.health.HealthCheckRequest) returns (makima.health.HealthCheckResponse);
+}
+
+message GetClipboardRequest {
+  int32 max_chars = 1;       // default 4000 (MAKIMA_CLIPBOARD_MAX_CHARS)
+}
+
+message GetClipboardResponse {
+  string text = 1;
+  int32 total_chars = 2;     // full length before truncation
+  bool truncated = 3;
+  int64 timestamp = 4;       // when content was last set
+}
+
+message StreamChangesRequest {
+  int32 max_chars = 1;       // preview char limit per event
+}
+
+message ClipboardEvent {
+  string preview = 1;        // truncated preview of clipboard content
+  int32 total_chars = 2;
+  int64 timestamp = 3;
+  string content_type = 4;   // "text", "image", "files", "other"
+}
