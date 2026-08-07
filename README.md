@@ -105,38 +105,42 @@ set MAKIMA_GITHUB_KEY=your_github_pat_token
 
 ---
 
-## 🎙️ Voice Control & Speech Output Guide
+## 🎙️ How to Start Voice Chat (Voice Mode Setup)
 
-Makima comes equipped with a full **Voice Agent** pipeline for both listening (Speech-to-Text) and speaking back to you (Text-to-Speech).
+There are **3 easy ways** to turn on and start Voice Chat in Makima:
 
-### 🗣️ How Makima Speaks (Voice Output / TTS)
+### 1. 🗣️ Wake Word Mode (Hands-Free — Recommended)
+1. Launch Makima backend (`python -m apps.brain.main`) and Desktop UI.
+2. Go to **Settings (⚙️) -> Voice Settings** and select **"Wake Word"**.
+3. Speak clearly into your mic: **"Hey Makima"** or **"Makima"**.
+4. Makima will activate, listen to your command, execute it, and **reply back aloud in her voice**!
+
+### 2. 🔘 Push-to-Talk (PTT Mode)
+1. Go to **Settings (⚙️) -> Voice Settings** and select **"Push-to-Talk"**.
+2. Press and hold your PTT key (default `Space` or `Ctrl + Shift + V`), or click the **Mic (🎙️) icon** in the UI to talk.
+3. Release to let Makima answer you aloud.
+
+### 3. 🖥️ Desktop Overlay Mic Button
+1. Click the floating **Microphone (🎙️) button** on Makima's Desktop Overlay bar anytime to instantly talk to Makima.
+
+---
+
+## 🗣️ How Makima Speaks (Voice Output / TTS)
 
 When you ask Makima a question or give a command via voice or chat, **Makima speaks her response aloud through your system speakers**.
 
 1. **Automatic Language & Voice Selection**:
-   - **English**: Uses natural neural voices like `en-US-AvaNeural` or `en-US-EmmaNeural`.
-   - **Hindi / Hinglish**: Uses fluent Indian neural voices like `hi-IN-SwaraNeural` or `hi-IN-MadhurNeural`.
+   - **English**: Uses natural neural voices like `en-US-AvaNeural` or `en-US-JennyNeural`.
+   - **Hindi / Hinglish**: Uses fluent Indian neural voices like `hi-IN-SwaraNeural` or `hi-IN-AnanyaNeural`.
 
 2. **Instant Zero-Setup Cloud Voice**:
    Makima uses `edge-tts` by default, requiring **no heavy model downloads** or local GPU requirements.
 
-3. **Offline Voice Engine (Kokoro ONNX)**:
-   For 100% offline local speech synthesis, Makima also supports `kokoro-onnx` local model files.
-
----
-
-### 🎛️ How to Customize Makima's Voice
-
-You can customize how Makima speaks by editing `configs/voice_config.json`:
+3. **Customizing Makima's Voice (`configs/voice_config.json`)**:
 
 ```json
 {
-  "wake_phrases": [
-    "hey makima",
-    "makima",
-    "ok makima",
-    "hello makima"
-  ],
+  "wake_phrases": ["hey makima", "makima", "ok makima"],
   "tts": {
     "engine": "edge_tts",
     "voice_en": "en-US-AvaNeural",
@@ -146,20 +150,6 @@ You can customize how Makima speaks by editing `configs/voice_config.json`:
   }
 }
 ```
-
-#### Popular Voice Options:
-- **English Female (Default)**: `en-US-AvaNeural`, `en-US-JennyNeural`, `en-US-EmmaNeural`
-- **Hindi Female (Default)**: `hi-IN-SwaraNeural`, `hi-IN-AnanyaNeural`
-- **Hindi Male**: `hi-IN-MadhurNeural`
-
----
-
-### 🎧 How to Use Voice Assistant Mode
-
-1. Start the Makima backend server (`python -m apps.brain.main`).
-2. Speak the wake phrase clearly into your microphone: **"Hey Makima"** or **"Makima"**.
-3. Speak your command (e.g. *"Makima, open YouTube and play my playlist"*, *"Makima, read out the latest news"*).
-4. Makima will execute the task and **speak her response back to you**.
 
 ---
 
