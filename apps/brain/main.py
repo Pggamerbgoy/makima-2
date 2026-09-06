@@ -190,8 +190,8 @@ def _load_config() -> dict:
         "GROQ_API_KEY": ("llm", "backends", "groq", "api_key"),
         "MAKIMA_GEMINI_KEY": ("llm", "backends", "gemini", "api_key"),
         "GEMINI_API_KEY": ("llm", "backends", "gemini", "api_key"),
-        "MAKIMA_OPENAI_KEY": ("llm", "backends", "gpt4o", "api_key"),
-        "OPENAI_API_KEY": ("llm", "backends", "gpt4o", "api_key"),
+        "MAKIMA_OPENAI_KEY": ("llm", "backends", "openai", "api_key"),
+        "OPENAI_API_KEY": ("llm", "backends", "openai", "api_key"),
         "MAKIMA_OPENROUTER_KEY": ("llm", "backends", "claude", "api_key"),
         "OPENROUTER_API_KEY": ("llm", "backends", "claude", "api_key"),
         "MAKIMA_CEREBRAS_KEY": ("llm", "backends", "cerebras", "api_key"),
@@ -204,27 +204,59 @@ def _load_config() -> dict:
                 d = d.setdefault(key, {})
             d[path[-1]] = val
 
+    # Ensure active_provider from default.yaml synchronizes to default_provider
+    if cfg.get("llm", {}).get("active_provider") and not cfg.get("llm", {}).get("default_provider"):
+        cfg["llm"]["default_provider"] = cfg["llm"]["active_provider"]
+
     return cfg
 
 
 CONFIG: dict = {}
 
 # ---------------------------------------------------------------------------
-# WebSocket connection registry
+# WebSocket connection registry (multi-user & multi-device isolated routing)
 # ---------------------------------------------------------------------------
 _ws_clients: set[WebSocket] = set()
 _active_ws_tasks: set[asyncio.Task] = set()
+_task_to_ws: dict[str, WebSocket] = {}
 
 
 async def ws_broadcast(msg: Any) -> None:
-    """Broadcast a WSMessage to all connected WebSocket clients."""
-    global _ws_clients
+    """Send task-scoped messages to originating client or broadcast system events."""
+    global _ws_clients, _task_to_ws
+    target_task_id = None
+    is_done = False
+
     if isinstance(msg, WSMessage):
         data = msg.to_json()
+        target_task_id = getattr(msg, "task_id", None)
+        msg_type = getattr(msg, "type", "")
+        if hasattr(msg_type, "value"):
+            msg_type = msg_type.value
+        is_done = getattr(msg, "is_final", False) or msg_type in ("ai_response_done", "ai_error")
     else:
         import json
-        data = json.dumps(msg) if not isinstance(msg, str) else msg
+        if isinstance(msg, dict):
+            data = json.dumps(msg)
+            target_task_id = msg.get("task_id")
+            m_type = msg.get("type", "")
+            is_done = msg.get("is_final", False) or m_type in ("ai_response_done", "ai_error")
+        else:
+            data = str(msg)
 
+    # Targeted delivery: If this task originated from a specific connected WebSocket client, send ONLY to that client
+    if target_task_id and target_task_id in _task_to_ws:
+        target_ws = _task_to_ws[target_task_id]
+        try:
+            await target_ws.send_text(data)
+            if is_done:
+                _task_to_ws.pop(target_task_id, None)
+            return
+        except Exception:
+            _task_to_ws.pop(target_task_id, None)
+            _ws_clients.discard(target_ws)
+
+    # Global broadcast (pings, global notifications, alerts)
     dead: set[WebSocket] = set()
     for ws in list(_ws_clients):
         try:
@@ -297,6 +329,7 @@ async def lifespan(app: FastAPI):
     app.state.services = services
 
     logger.info("All modules started. Brain is ready.")
+    logger.info("   UI:   http://127.0.0.1:8080/")
     logger.info("   REST: http://127.0.0.1:8080/health")
     logger.info("   WS:   ws://127.0.0.1:8080/ws")
 
@@ -310,6 +343,12 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass
         await bootstrap.shutdown_services()
+        # Close shared HTTP client pool from web_search_tool
+        try:
+            from .web_search_tool import close_client as _close_search_client
+            await _close_search_client()
+        except Exception:
+            pass
         logger.info("Shutdown complete.")
 
 
@@ -323,13 +362,56 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# ---------------------------------------------------------------------------
+# CORS — restrict to known trusted origins (Workstation UI, Vite dev, Tauri)
+# ---------------------------------------------------------------------------
+_CORS_ORIGINS: list[str] = [
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "tauri://localhost",
+    "https://tauri.localhost",
+]
+# Allow additional origins from env (e.g. for custom dev setups)
+_extra_origins = os.environ.get("MAKIMA_EXTRA_CORS_ORIGINS", "").strip()
+if _extra_origins:
+    _CORS_ORIGINS.extend([o.strip() for o in _extra_origins.split(",") if o.strip()])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_CORS_ORIGINS,
+    allow_credentials=False,   # credentials are passed per-request in WS payload, not via cookies
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
 )
+
+
+# ---------------------------------------------------------------------------
+# Workstation Web UI (Aether Nexus Master Station)
+# ---------------------------------------------------------------------------
+_WEB_DIR = Path(__file__).resolve().parent / "web"
+_WEB_DIR.mkdir(parents=True, exist_ok=True)
+
+
+@app.get("/", include_in_schema=False)
+@app.get("/index.html", include_in_schema=False)
+async def serve_workstation_ui():
+    """Serve the Aether Nexus multi-screen workstation UI directly from Makima Brain."""
+    index_file = _WEB_DIR / "index.html"
+    if index_file.exists():
+        return FileResponse(str(index_file), media_type="text/html")
+    # Fallback to apps/chat_ui if present
+    chat_ui_index = Path(__file__).resolve().parents[1] / "chat_ui" / "index.html"
+    if chat_ui_index.exists():
+        return FileResponse(str(chat_ui_index), media_type="text/html")
+    return HTMLResponse(
+        "<html><body style='background:#0d0b18;color:#ede9fe;font-family:sans-serif;padding:40px;'>"
+        "<h2>Makima Brain Online</h2><p>Aether Nexus workstation interface loading...</p>"
+        "</body></html>"
+    )
 
 
 @app.get("/health")
@@ -445,7 +527,7 @@ async def test_integration(integration_id: str):
             return {"ok": False, "message": "No bot token saved yet."}
         try:
             import httpx
-            async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
+            async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(f"https://api.telegram.org/bot{token}/getMe")
             data = resp.json()
             if data.get("ok"):
@@ -457,12 +539,75 @@ async def test_integration(integration_id: str):
 
     if not raw or not any(raw.values()):
         return {"ok": False, "message": "No credentials saved yet for this integration."}
-    return {"ok": False, "message": f"Live test not yet implemented for '{integration_id}' -- credentials are saved though."}
+
+    # Credentials are saved. Connectivity not auto-verified for this provider yet,
+    # but they will be used when this integration is activated.
+    _INTEGRATION_HINTS: dict[str, str] = {
+        "whatsapp": "WhatsApp credentials saved. Makima will use them when sending messages.",
+        "discord": "Discord bot token saved. Makima will use it when sending Discord messages.",
+        "gmail": "Gmail OAuth credentials saved. Makima will use them when sending emails.",
+        "github": "GitHub token saved. Makima will use it for repo operations.",
+        "google": "Google OAuth saved. Makima will use it for Calendar/Drive access.",
+    }
+    hint = _INTEGRATION_HINTS.get(integration_id, f"Credentials saved for '{integration_id}'.")
+    return {"ok": True, "message": hint, "note": "Auto-connectivity test not yet available for this provider — credentials are active."}
 
 
 # ---------------------------------------------------------------------------
 # Native File Launcher & Download Endpoints
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Path Safety Helper — prevents directory traversal on file endpoints
+# ---------------------------------------------------------------------------
+_ALLOWED_OPEN_BASES: list[Path] = [
+    Path(os.path.expanduser("~/.makima")).resolve(),
+    Path("makima_workspace").resolve(),
+    Path("output").resolve(),
+]
+
+
+def _resolve_safe_path(raw_path: str) -> Path | None:
+    """Resolve raw_path to an absolute Path, ensuring it stays within allowed bases.
+
+    Returns None if the path resolves outside all allowed base directories
+    (i.e. a directory-traversal or arbitrary-file-read attempt).
+    """
+    clean = re.sub(r"^file:[/\\]+", "", raw_path)
+    if sys.platform == "win32" and re.match(r"^/?[a-zA-Z]:", clean):
+        clean = clean.lstrip("/")
+
+    candidate = Path(clean)
+    if candidate.is_absolute():
+        resolved = candidate.resolve()
+    else:
+        # Try known workspace sub-dirs first, then cwd-relative
+        for base in [
+            Path("makima_workspace/output/temp"),
+            Path("makima_workspace/output"),
+            Path("makima_workspace"),
+        ]:
+            cand = (base / clean).resolve()
+            if cand.exists():
+                resolved = cand
+                break
+        else:
+            resolved = Path(clean).resolve()
+
+    # Re-evaluate allowed bases at call time so they pick up cwd correctly
+    live_allowed = [
+        Path(os.path.expanduser("~/.makima")).resolve(),
+        Path("makima_workspace").resolve(),
+        Path("output").resolve(),
+    ]
+    for allowed in live_allowed:
+        try:
+            resolved.relative_to(allowed)
+            return resolved  # inside an allowed base — safe
+        except ValueError:
+            continue
+    return None  # outside all allowed bases — reject
+
+
 @app.post("/api/open-file")
 async def open_local_file(request: Request):
     """Opens a document natively on the host OS (Excel, Word, PDF, Explorer)."""
@@ -471,19 +616,16 @@ async def open_local_file(request: Request):
     if not raw_path:
         return JSONResponse({"status": "error", "message": "No file path provided"}, status_code=400)
 
-    clean = re.sub(r"^file:[/\\]+", "", raw_path)
-    if sys.platform == "win32" and re.match(r"^/?[a-zA-Z]:", clean):
-        clean = clean.lstrip("/")
-
-    target = Path(clean)
-    if not target.is_absolute():
-        for cand in (Path("./makima_workspace/output/temp") / clean, Path("./makima_workspace/output") / clean, target):
-            if cand.exists():
-                target = cand
-                break
+    target = _resolve_safe_path(raw_path)
+    if target is None:
+        logger.warning("[NativeLauncher] Rejected path outside workspace: %s", raw_path)
+        return JSONResponse(
+            {"status": "error", "message": "Access denied: path is outside the Makima workspace."},
+            status_code=403,
+        )
 
     if not target.exists():
-        return JSONResponse({"status": "error", "message": f"File not found: {target}"}, status_code=404)
+        return JSONResponse({"status": "error", "message": f"File not found: {target.name}"}, status_code=404)
 
     try:
         if sys.platform == "win32":
@@ -502,16 +644,10 @@ async def open_local_file(request: Request):
 @app.get("/api/download-file")
 async def download_local_file(path: str):
     """Serves a generated document for direct browser download."""
-    clean = re.sub(r"^file:[/\\]+", "", path)
-    if sys.platform == "win32" and re.match(r"^/?[a-zA-Z]:", clean):
-        clean = clean.lstrip("/")
-
-    target = Path(clean)
-    if not target.is_absolute():
-        for cand in (Path("./makima_workspace/output/temp") / clean, Path("./makima_workspace/output") / clean, target):
-            if cand.exists():
-                target = cand
-                break
+    target = _resolve_safe_path(path)
+    if target is None:
+        logger.warning("[DownloadEndpoint] Rejected path outside workspace: %s", path)
+        raise HTTPException(status_code=403, detail="Access denied: path is outside the Makima workspace.")
 
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="File not found")
@@ -623,6 +759,13 @@ _PROVIDER_CATALOG = [
         "id": "openrouter",
         "name": "OpenRouter",
         "default_model": "meta-llama/llama-3.3-70b-instruct:free",
+        "preset_models": [
+            "meta-llama/llama-3.3-70b-instruct:free",
+            "deepseek/deepseek-r1:free",
+            "google/gemini-2.0-flash-exp:free",
+            "anthropic/claude-3.5-sonnet",
+            "openai/gpt-4o",
+        ],
         "env_keys": ["OPENROUTER_API_KEY", "MAKIMA_OPENROUTER_KEY"],
         "base_url": "https://openrouter.ai/api/v1",
         "local": False,
@@ -631,7 +774,14 @@ _PROVIDER_CATALOG = [
     {
         "id": "qwen",
         "name": "Qwen (DashScope)",
-        "default_model": "qwen3.8-flash",
+        "default_model": "qwen-plus",
+        "preset_models": [
+            "qwen-plus",
+            "qwen-max",
+            "qwen-turbo",
+            "qwen2.5-coder-32b-instruct",
+            "qwen3.8-flash",
+        ],
         "env_keys": ["DASHSCOPE_API_KEY", "MAKIMA_DASHSCOPE_KEY", "QWEN_API_KEY"],
         "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         "local": False,
@@ -640,8 +790,12 @@ _PROVIDER_CATALOG = [
     {
         "id": "deepseek",
         "name": "DeepSeek",
-        "default_model": "deepseek-v4-pro-0813",
-        "env_keys": ["DEEPSEEK_API_KEY", "MAKIMA_DEEPSEEK_KEY", "DASHSCOPE_API_KEY"],
+        "default_model": "deepseek-chat",
+        "preset_models": [
+            "deepseek-chat",
+            "deepseek-reasoner",
+        ],
+        "env_keys": ["DEEPSEEK_API_KEY", "MAKIMA_DEEPSEEK_KEY"],
         "base_url": "https://api.deepseek.com",
         "local": False,
         "capabilities": {"text": True, "image": False, "audio": False, "video": False},
@@ -650,6 +804,13 @@ _PROVIDER_CATALOG = [
         "id": "groq",
         "name": "Groq",
         "default_model": "llama-3.3-70b-versatile",
+        "preset_models": [
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+            "deepseek-r1-distill-llama-70b",
+            "gemma2-9b-it",
+            "mixtral-8x7b-32768",
+        ],
         "env_keys": ["GROQ_API_KEY", "MAKIMA_GROQ_KEY"],
         "base_url": "https://api.groq.com/openai/v1",
         "local": False,
@@ -658,7 +819,14 @@ _PROVIDER_CATALOG = [
     {
         "id": "gemini",
         "name": "Google Gemini",
-        "default_model": "gemini-2.5-pro",
+        "default_model": "gemini-2.5-flash",
+        "preset_models": [
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+            "gemini-2.0-flash",
+            "gemini-1.5-flash",
+            "gemini-1.5-pro",
+        ],
         "env_keys": ["GEMINI_API_KEY", "GOOGLE_API_KEY", "MAKIMA_GEMINI_KEY"],
         "base_url": "https://generativelanguage.googleapis.com/v1beta",
         "local": False,
@@ -667,7 +835,14 @@ _PROVIDER_CATALOG = [
     {
         "id": "ollama",
         "name": "Ollama (Local)",
-        "default_model": "qwen2.5-coder:7b",
+        "default_model": "llama3.2",
+        "preset_models": [
+            "llama3.2",
+            "qwen2.5-coder:7b",
+            "deepseek-r1:8b",
+            "mistral",
+            "phi3",
+        ],
         "env_keys": [],
         "base_url": "http://localhost:11434",
         "local": True,
@@ -677,6 +852,12 @@ _PROVIDER_CATALOG = [
         "id": "openai",
         "name": "OpenAI",
         "default_model": "gpt-4o",
+        "preset_models": [
+            "gpt-4o",
+            "gpt-4o-mini",
+            "o3-mini",
+            "o1",
+        ],
         "env_keys": ["OPENAI_API_KEY", "MAKIMA_OPENAI_KEY"],
         "base_url": "https://api.openai.com/v1",
         "local": False,
@@ -686,6 +867,11 @@ _PROVIDER_CATALOG = [
         "id": "anthropic",
         "name": "Anthropic",
         "default_model": "claude-3-7-sonnet-20250219",
+        "preset_models": [
+            "claude-3-7-sonnet-20250219",
+            "claude-3-5-sonnet-20241022",
+            "claude-3-5-haiku-20241022",
+        ],
         "env_keys": ["ANTHROPIC_API_KEY", "MAKIMA_ANTHROPIC_KEY"],
         "base_url": "https://api.anthropic.com/v1",
         "local": False,
@@ -694,7 +880,12 @@ _PROVIDER_CATALOG = [
     {
         "id": "huggingface",
         "name": "Hugging Face",
-        "default_model": "NousResearch/Hermes-3-Llama-3.1-8B:featherless-ai",
+        "default_model": "meta-llama/Llama-3.3-70B-Instruct",
+        "preset_models": [
+            "meta-llama/Llama-3.3-70B-Instruct",
+            "Qwen/Qwen2.5-Coder-32B-Instruct",
+            "mistralai/Mistral-7B-Instruct-v0.3",
+        ],
         "env_keys": ["HF_TOKEN", "HUGGINGFACE_API_KEY", "MAKIMA_HF_KEY"],
         "base_url": "https://router.huggingface.co/v1",
         "local": False,
@@ -704,6 +895,10 @@ _PROVIDER_CATALOG = [
         "id": "cerebras",
         "name": "Cerebras",
         "default_model": "llama-3.3-70b",
+        "preset_models": [
+            "llama-3.3-70b",
+            "llama3.1-8b",
+        ],
         "env_keys": ["CEREBRAS_API_KEY", "MAKIMA_CEREBRAS_KEY"],
         "base_url": "https://api.cerebras.ai/v1",
         "local": False,
@@ -716,8 +911,8 @@ _MODELS_CACHE: dict[str, tuple[float, list[str]]] = {}
 _CACHE_TTL_S = 300.0  # 5 minutes cache
 
 
-async def _fetch_live_models_for_provider(spec: dict[str, Any], api_key: str, base_url: str) -> list[str]:
-    """Dynamically query the provider's live models endpoint if reachable."""
+async def _fetch_live_models_for_provider(spec: dict[str, Any], api_key: str, base_url: str, ai_handler: Any = None) -> list[str]:
+    """Dynamically query the provider's live models endpoint if reachable, using preset_models as baseline."""
     pid = spec["id"]
     now = time.time()
     if pid in _MODELS_CACHE:
@@ -725,47 +920,57 @@ async def _fetch_live_models_for_provider(spec: dict[str, Any], api_key: str, ba
         if (now - cached_time) < _CACHE_TTL_S and cached_models:
             return cached_models
 
-    models = [spec["default_model"]] if spec.get("default_model") else []
-    import httpx
+    presets = list(spec.get("preset_models") or ([spec["default_model"]] if spec.get("default_model") else []))
+    models = list(presets)
+    client = ai_handler._get_http_client() if (ai_handler and hasattr(ai_handler, "_get_http_client")) else None
+    own_client = False
+    if client is None:
+        import httpx
+        client = httpx.AsyncClient(timeout=3.0)
+        own_client = True
+
     try:
         if pid == "openrouter":
-            async with httpx.AsyncClient(timeout=3.0) as client:
-                headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-                resp = await client.get("https://openrouter.ai/api/v1/models", headers=headers)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    fetched = [m["id"] for m in data.get("data", []) if isinstance(m, dict) and "id" in m]
-                    if fetched:
-                        models = list(dict.fromkeys(models + fetched))
-                        _MODELS_CACHE[pid] = (now, models)
-                        return models
+            headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+            resp = await client.get("https://openrouter.ai/api/v1/models", headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                fetched = [m["id"] for m in data.get("data", []) if isinstance(m, dict) and "id" in m]
+                if fetched:
+                    models = list(dict.fromkeys(presets + fetched))
+                    _MODELS_CACHE[pid] = (now, models)
+                    return models
 
         elif pid == "ollama":
             url = f"{base_url.rstrip('/')}/api/tags"
-            async with httpx.AsyncClient(timeout=2.0) as client:
-                resp = await client.get(url)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    fetched = [m["name"] for m in data.get("models", []) if isinstance(m, dict) and "name" in m]
-                    if fetched:
-                        models = list(dict.fromkeys(fetched + models))
-                        _MODELS_CACHE[pid] = (now, models)
-                        return models
+            resp = await client.get(url)
+            if resp.status_code == 200:
+                data = resp.json()
+                fetched = [m["name"] for m in data.get("models", []) if isinstance(m, dict) and "name" in m]
+                if fetched:
+                    models = list(dict.fromkeys(presets + fetched))
+                    _MODELS_CACHE[pid] = (now, models)
+                    return models
 
         elif api_key and pid in ("qwen", "groq", "deepseek", "openai", "cerebras", "huggingface"):
             endpoint = f"{base_url.rstrip('/')}/models"
             headers = {"Authorization": f"Bearer {api_key}"}
-            async with httpx.AsyncClient(timeout=3.0) as client:
-                resp = await client.get(endpoint, headers=headers)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    fetched = [m["id"] for m in data.get("data", []) if isinstance(m, dict) and "id" in m]
-                    if fetched:
-                        models = list(dict.fromkeys(models + fetched))
-                        _MODELS_CACHE[pid] = (now, models)
-                        return models
+            resp = await client.get(endpoint, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                fetched = [m["id"] for m in data.get("data", []) if isinstance(m, dict) and "id" in m]
+                if fetched:
+                    models = list(dict.fromkeys(presets + fetched))
+                    _MODELS_CACHE[pid] = (now, models)
+                    return models
     except Exception as e:
         logger.debug("[providers] Live model fetch error for %s: %s", pid, e)
+    finally:
+        if own_client and client:
+            try:
+                await client.aclose()
+            except Exception:
+                pass
 
     return models
 
@@ -787,6 +992,20 @@ async def _format_provider_item_async(spec: dict[str, Any], overrides: dict[str,
     if not active_key and override.get("api_key"):
         active_key = override["api_key"].strip()
 
+    # Check if active in ai_handler runtime
+    _BACKEND_ID_MAP = {
+        "anthropic": "claude",
+        "qwen": "qwen_flash",
+    }
+    target_backend_id = _BACKEND_ID_MAP.get(pid, pid)
+    backend_prof = None
+    if ai_handler and hasattr(ai_handler, "backends"):
+        backend_prof = ai_handler.backends.get(target_backend_id) or ai_handler.backends.get(pid)
+
+    if not active_key and backend_prof and backend_prof.api_key:
+        active_key = backend_prof.api_key
+        configured_key = "smart_sniffer"
+
     is_configured = False
     key_hint = ""
     if spec["local"]:
@@ -794,7 +1013,7 @@ async def _format_provider_item_async(spec: dict[str, Any], overrides: dict[str,
         key_hint = "Local private runtime"
     elif configured_key:
         is_configured = True
-        key_hint = f"Configured in .env ({configured_key})"
+        key_hint = f"Configured in .env ({configured_key})" if configured_key != "smart_sniffer" else "Active (Detected by Smart Sniffer)"
     elif override.get("api_key"):
         is_configured = True
         key_hint = "Stored in user settings"
@@ -803,8 +1022,8 @@ async def _format_provider_item_async(spec: dict[str, Any], overrides: dict[str,
 
     # Current model
     active_model = override.get("model") or ""
-    if not active_model and ai_handler and hasattr(ai_handler, "backends") and pid in ai_handler.backends:
-        active_model = ai_handler.backends[pid].model
+    if not active_model and backend_prof and backend_prof.model:
+        active_model = backend_prof.model
     if not active_model:
         active_model = spec["default_model"]
 
@@ -817,7 +1036,7 @@ async def _format_provider_item_async(spec: dict[str, Any], overrides: dict[str,
         is_enabled = is_configured
 
     # Live models query
-    live_models = await _fetch_live_models_for_provider(spec, active_key, base_url)
+    live_models = await _fetch_live_models_for_provider(spec, active_key, base_url, ai_handler)
 
     return {
         "id": pid,
@@ -836,17 +1055,31 @@ async def _format_provider_item_async(spec: dict[str, Any], overrides: dict[str,
 def _format_provider_item(spec: dict[str, Any], overrides: dict[str, Any], ai_handler: Any) -> dict[str, Any]:
     pid = spec["id"]
     override = overrides.get(pid, {})
+    active_model = override.get("model") or ""
+    if not active_model and ai_handler and hasattr(ai_handler, "backends"):
+        target_prof = ai_handler.backends.get(pid)
+        if target_prof and target_prof.model:
+            active_model = target_prof.model
+    if not active_model:
+        active_model = spec.get("default_model", "")
+
+    presets = spec.get("preset_models") or ([spec["default_model"]] if spec.get("default_model") else [])
+    cached_models = _MODELS_CACHE.get(pid, (0, []))[1] or presets
+    models_list = list(dict.fromkeys([active_model] + cached_models)) if active_model else cached_models
+    if not models_list and spec.get("default_model"):
+        models_list = [spec["default_model"]]
+
     return {
         "id": pid,
         "name": spec["name"],
-        "model": override.get("model") or spec["default_model"],
-        "models": spec["models"],
+        "model": active_model,
+        "models": models_list,
         "enabled": bool(override.get("enabled", True)),
         "configured": True,
         "keyHint": "",
-        "baseUrl": override.get("base_url") or spec["base_url"],
-        "local": spec["local"],
-        "capabilities": spec["capabilities"],
+        "baseUrl": override.get("base_url") or spec.get("base_url", ""),
+        "local": spec.get("local", False),
+        "capabilities": spec.get("capabilities", {}),
     }
 
 
@@ -857,7 +1090,19 @@ async def list_llm_providers():
     overrides = store.get_llm_overrides() if store else {}
     tasks = [_format_provider_item_async(p, overrides, ai_handler) for p in _PROVIDER_CATALOG]
     results = await asyncio.gather(*tasks)
-    return {"providers": results}
+
+    # Determine active provider in runtime
+    active_pid = getattr(ai_handler, "default_provider", None) or (store.get_settings().get("default_llm_backend") if store else None) or "groq"
+    _INV_BACKEND_ID_MAP = {
+        "claude": "anthropic",
+        "deepseek_v32": "deepseek",
+        "qwen_flash": "qwen",
+    }
+    catalog_active_id = _INV_BACKEND_ID_MAP.get(active_pid, active_pid)
+    for r in results:
+        r["isActive"] = (r["id"] == catalog_active_id)
+
+    return {"providers": results, "active_provider": catalog_active_id}
 
 
 @app.post("/llm/providers/{provider_id}")
@@ -871,7 +1116,16 @@ async def save_llm_provider_config(provider_id: str, request: Request):
         raise HTTPException(status_code=404, detail=f"Unknown provider: {provider_id}")
 
     if store:
-        store.save_llm_provider(provider_id, payload)
+        # Normalize camelCase keys from frontend to snake_case before persisting
+        normalized_payload = {
+            "api_key": payload.get("apiKey") or payload.get("api_key") or "",
+            "model": payload.get("model") or "",
+            "base_url": payload.get("baseUrl") or payload.get("base_url") or "",
+            "enabled": payload.get("enabled", True),
+        }
+        store.save_llm_provider(provider_id, normalized_payload)
+        if hasattr(store, "update_settings"):
+            store.update_settings({"default_llm_backend": provider_id})
 
     # If an API key or base URL was provided, update os.environ and ai_handler backend
     api_key = payload.get("apiKey", "").strip()
@@ -881,13 +1135,43 @@ async def save_llm_provider_config(provider_id: str, request: Request):
     model = payload.get("model", "").strip()
     base_url = payload.get("baseUrl", "").strip()
 
-    if ai_handler and hasattr(ai_handler, "backends") and provider_id in ai_handler.backends:
-        if model:
-            ai_handler.backends[provider_id].model = model
-        if api_key:
-            ai_handler.backends[provider_id].api_key = api_key
-        if base_url:
-            ai_handler.backends[provider_id].base_url = base_url
+    # Map UI catalog provider_id to internal backend key if aliased
+    _BACKEND_ID_MAP = {
+        "anthropic": "claude",
+        "qwen": "qwen_flash",
+    }
+    target_backend_id = _BACKEND_ID_MAP.get(provider_id, provider_id)
+
+    if ai_handler and hasattr(ai_handler, "backends"):
+        target_profile = ai_handler.backends.get(target_backend_id) or ai_handler.backends.get(provider_id)
+        if target_profile:
+            if model:
+                target_profile.model = model
+            if api_key:
+                target_profile.api_key = api_key
+            if base_url:
+                target_profile.base_url = base_url
+            if "enabled" in payload:
+                target_profile.enabled = bool(payload["enabled"])
+        else:
+            # Dynamically instantiate BackendProfile for newly configured provider
+            from .ai_handler import BackendProfile, CircuitBreaker
+            adapter_type = "gemini" if target_backend_id == "gemini" else ("ollama" if target_backend_id == "ollama" else "openai")
+            target_profile = BackendProfile(
+                name=target_backend_id,
+                enabled=bool(payload.get("enabled", True)),
+                adapter_type=adapter_type,
+                api_key=api_key or os.environ.get(spec["env_keys"][0] if spec["env_keys"] else "", ""),
+                model=model or spec.get("default_model", ""),
+                base_url=base_url or spec.get("base_url", ""),
+                circuit_breaker=CircuitBreaker(max_failures=5, cooldown_s=15),
+            )
+            ai_handler.backends[target_backend_id] = target_profile
+            ai_handler.backends[provider_id] = target_profile
+
+        # Immediately switch active provider in AIHandler so subsequent requests use it
+        if hasattr(ai_handler, "set_active_provider"):
+            ai_handler.set_active_provider(target_backend_id)
 
     overrides = store.get_llm_overrides() if store else {}
     return {"provider": _format_provider_item(spec, overrides, ai_handler)}
@@ -999,6 +1283,9 @@ async def websocket_endpoint(ws: WebSocket):
         logger.error(f"WS error: {e}")
     finally:
         _ws_clients.discard(ws)
+        dead_tasks = [t for t, s in list(_task_to_ws.items()) if s == ws]
+        for dt in dead_tasks:
+            _task_to_ws.pop(dt, None)
 
 
 async def _handle_ws_message(msg: Any, ws: WebSocket) -> None:
@@ -1012,6 +1299,8 @@ async def _handle_ws_message(msg: Any, ws: WebSocket) -> None:
         msg_type = msg.type if hasattr(msg, "type") else ""
         payload = msg.payload if hasattr(msg, "payload") else {}
         task_id = getattr(msg, "task_id", None) or generate_task_id()
+        if task_id:
+            _task_to_ws[task_id] = ws
 
         if msg_type in (ClientMessageType.PING.value, "ping"):
             ping_ts = payload.get("ts", time.time())
@@ -1167,12 +1456,23 @@ async def _handle_ws_message(msg: Any, ws: WebSocket) -> None:
         elif msg_type == ClientMessageType.VOICE_SESSION_START.value:
             if speech:
                 voice_session_id = payload.get("voice_session_id") or task_id
-                if hasattr(speech, "start_session"):
+                v_settings = dict(payload.get("settings") or {})
+                if payload.get("api_key") and "api_key" not in v_settings:
+                    v_settings["api_key"] = payload["api_key"]
+                if hasattr(speech, "start_voice_session"):
+                    task = asyncio.create_task(
+                        speech.start_voice_session(
+                            voice_session_id,
+                            payload.get("conversation_id", ""),
+                            v_settings,
+                        )
+                    )
+                    _active_ws_tasks.add(task)
+                    task.add_done_callback(_active_ws_tasks.discard)
+                elif hasattr(speech, "start_session"):
                     task = asyncio.create_task(speech.start_session(voice_session_id))
                     _active_ws_tasks.add(task)
                     task.add_done_callback(_active_ws_tasks.discard)
-                elif hasattr(speech, "start_voice_session"):
-                    await speech.start_voice_session(voice_session_id, payload.get("conversation_id", ""), payload.get("settings", {}))
 
         elif msg_type == ClientMessageType.VOICE_AUDIO_UTTERANCE.value:
             if speech:

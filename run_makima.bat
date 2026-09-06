@@ -12,5 +12,7 @@ for /f "tokens=5" %%p in ('netstat -aon ^| findstr ":8080" ^| findstr "LISTENING
 :: Disable QuickEdit Mode in this console session so mouse clicks never freeze the event loop
 powershell -NoProfile -Command "$h=[System.IntPtr]([System.Runtime.InteropServices.Marshal]::GetLastWin32Error()); Add-Type -MemberDefinition '[DllImport(\"kernel32.dll\")] public static extern IntPtr GetStdHandle(int nStdHandle); [DllImport(\"kernel32.dll\")] public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode); [DllImport(\"kernel32.dll\")] public static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);' -Name Win32Console -Namespace Win32; $h=([Win32.Win32Console]::GetStdHandle(-10)); $m=0; [Win32.Win32Console]::GetConsoleMode($h, [ref]$m); [Win32.Win32Console]::SetConsoleMode($h, ($m -band -bnot 0x0040) -bor 0x0080)" >nul 2>&1
 
+start "" http://127.0.0.1:8080
+
 python -m apps.brain.main
 pause

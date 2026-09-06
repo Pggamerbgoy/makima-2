@@ -1,21 +1,280 @@
-import { Button, LineEdit, VerticalBox } from "std-widgets.slint";
+﻿import { ScrollView } from "std-widgets.slint";
 
-export component MainWindow inherits Window {
-    title: "Makima";
-    width: compact ? 430px : 430px;
-    height: compact ? 68px : 520px;
-    always-on-top: pinned;
+// ══════════════════════════════════════════════════════════════ Palette ══
+global Pal {
+    out property<color> bg:       #0d0b18;
+    out property<color> surface:  #161228;
+    out property<color> input:    #1d1a30;
+    out property<color> border:   #272040;
+    out property<color> hi:       #6d28d9;
+    out property<color> accent:   #7c3aed;
+    out property<color> soft:     #a78bfa;
+    out property<color> fg:       #ede9fe;
+    out property<color> mid:      #9c96b8;
+    out property<color> low:      #4e4769;
+    out property<color> green:    #34d399;
+    out property<color> red:      #f87171;
+    out property<color> grey:     #6b7280;
+    out property<color> warn-bg:  #1c1007;
+    out property<color> warn-br:  #92400e;
+    out property<color> warn-fg:  #fde68a;
+    // user bubble
+    out property<color> user-bg:  #2d1b69;
+    out property<color> user-br:  #4c2d9c;
+    // assistant bubble
+    out property<color> asst-bg:  #18152c;
+    out property<color> asst-br:  #272040;
+}
+
+// ══════════════════════════════════════════════════════════════ Data model ══
+struct Message {
+    is-user:     bool,
+    text:        string,
+    agent:       string,  // empty for user messages
+}
+
+// ══════════════════════════════════════════════════════════════ Icon btn ══
+component IBtn inherits Rectangle {
+    in property<string> lbl;
+    in property<color>  tint: Pal.mid;
+    callback clicked;
+
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
+    background: ta.pressed  ? Pal.input.darker(0.15)
+              : ta.has-hover ? Pal.input
+              : transparent;
+    animate background { duration: 100ms; }
+
+    ta := TouchArea { clicked => { root.clicked(); } }
+
+    Text {
+        text:  root.lbl;
+        color: root.tint;
+        font-size: 13px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// ══════════════════════════════════════════════════════════════ Pill btn ══
+component PBtn inherits Rectangle {
+    in property<string> lbl;
+    in property<color>  bg-c: Pal.surface;
+    in property<color>  fg-c: Pal.mid;
+    in property<color>  br-c: Pal.border;
+    callback clicked;
+
+    height: 32px;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: ta.has-hover ? Pal.hi : root.br-c;
+    background: ta.pressed  ? root.bg-c.darker(0.15)
+              : ta.has-hover ? root.bg-c.brighter(0.08)
+              : root.bg-c;
+    animate background, border-color { duration: 120ms; }
+
+    ta := TouchArea { clicked => { root.clicked(); } }
+
+    Text {
+        text:  root.lbl;
+        color: root.fg-c;
+        font-size: 12px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// ══════════════════════════════════════════════════════════════ Send btn ══
+component SendBtn inherits Rectangle {
+    callback clicked;
+    in property<length> sz: 30px;
+    width: sz; height: sz;
+    border-radius: 9px;
+    background: ta.pressed  ? Pal.accent.darker(0.2)
+              : ta.has-hover ? Pal.accent
+              : Pal.hi;
+    animate background { duration: 120ms; }
+    ta := TouchArea { clicked => { root.clicked(); } }
+    Text { text: "↑"; color: white; font-size: 15px; horizontal-alignment: center; vertical-alignment: center; }
+}
+
+// ══════════════════════════════════════════════════════════════ Think dots ══
+// Three staggered opacity-pulsing dots — the one motion moment in the UI.
+// Only mounted when thinking == true; no always-running timer overhead.
+component ThinkDots inherits HorizontalLayout {
+    spacing: 4px;
+
+    property<float> a1: 0.3;
+    property<float> a2: 0.3;
+    property<float> a3: 0.3;
+
+    // Staggered pulse via chained animations on a bool toggle
+    property<bool> tick: false;
+    property<bool> tock: false;
+    property<bool> tuck: false;
+
+    // Kick off on init
+    init => {
+        tick = true;
+    }
+
+    animate a1 { duration: 500ms; easing: ease-in-out; }
+    animate a2 { duration: 500ms; easing: ease-in-out; }
+    animate a3 { duration: 500ms; easing: ease-in-out; }
+
+    states [
+        beat1 when tick && !tock && !tuck: {
+            a1: 1.0; a2: 0.3; a3: 0.3;
+        }
+        beat2 when tock && !tuck: {
+            a1: 0.3; a2: 1.0; a3: 0.3;
+        }
+        beat3 when tuck: {
+            a1: 0.3; a2: 0.3; a3: 1.0;
+        }
+    ]
+
+    // Chain: beat1 → beat2 → beat3 → beat1 ...
+    changed a1 => {
+        if (tick && !tock && !tuck && a1 >= 0.95) {
+            tock = true;
+        }
+    }
+    changed a2 => {
+        if (tock && !tuck && a2 >= 0.95) {
+            tuck = true;
+        }
+    }
+    changed a3 => {
+        if (tuck && a3 >= 0.95) {
+            tuck = false; tock = false; tick = false;
+            tick = true;
+        }
+    }
+
+    Rectangle { width: 5px; height: 5px; border-radius: 2.5px; background: Pal.soft; opacity: a1; }
+    Rectangle { width: 5px; height: 5px; border-radius: 2.5px; background: Pal.soft; opacity: a2; }
+    Rectangle { width: 5px; height: 5px; border-radius: 2.5px; background: Pal.soft; opacity: a3; }
+}
+
+// ══════════════════════════════════════════════════════════════ Agent tag ══
+// Small inline badge showing which agent produced the message.
+// Deliberately small and secondary — structural information, not decoration.
+component AgentTag inherits Rectangle {
+    in property<string> agent;
+
+    height: 16px;
+    width: lbl.preferred-width + 10px;
+    border-radius: 4px;
+    background: Pal.hi.with-alpha(0.18);
+
+    lbl := Text {
+        text:      root.agent;
+        color:     Pal.soft;
+        font-size: 10px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// ══════════════════════════════════════════════════════════════ Msg bubble ══
+component MsgBubble inherits Rectangle {
+    in property<bool>   is-user;
+    in property<string> text;
+    in property<string> agent;   // shown only on assistant messages
+
     background: transparent;
 
-    in-out property<bool> compact: true;
-    in-out property<bool> connected: false;
-    in-out property<bool> pinned: true;
-    in-out property<bool> voice-active: false;
-    in-out property<string> status: "Connecting to Makima...";
-    in-out property<string> history: "";
-    in-out property<string> preview: "";
-    in-out property<string> input-text: "";
-    in-out property<string> confirmation: "";
+    VerticalLayout {
+        spacing: 4px;
+        alignment: is-user ? end : start;
+
+        // Agent tag — only for assistant messages with a named agent
+        if !root.is-user && root.agent != "" : HorizontalLayout {
+            alignment: start;
+            AgentTag { agent: root.agent; }
+        }
+
+        // Bubble body
+        Rectangle {
+            border-radius: is-user ? 14px : 14px;
+            // user: top-right corner square; assistant: top-left corner square
+            // Slint doesn't support per-corner radius yet, so we keep uniform
+            background:   is-user ? Pal.user-bg : Pal.asst-bg;
+            border-width: 1px;
+            border-color: is-user ? Pal.user-br : Pal.asst-br;
+            // Max width ~80% of panel; push to right for user, left for assistant
+            // via horizontal-alignment on the outer HorizontalLayout
+            width: min(body.preferred-width + 24px, 310px);
+
+            body := Text {
+                text:       root.text;
+                color:      Pal.fg;
+                font-size:  13px;
+                wrap:       word-wrap;
+                x: 12px;
+                y: 9px;
+                width: parent.width - 24px;
+            }
+
+            // Reserve vertical space for padding
+            height: body.preferred-height + 18px;
+        }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════ Status dot ══
+// Pulsing dot when voice is active, steady otherwise.
+// Uses a Timer toggle to avoid the binding-loop that a self-referencing
+// states block would create in Slint's reactive model.
+component StatusDot inherits Rectangle {
+    in property<bool> is-voice;
+    in property<bool> is-connected;
+
+    width: 7px; height: 7px; border-radius: 3.5px;
+    background: is-voice ? Pal.red : is-connected ? Pal.green : Pal.grey;
+    animate background { duration: 300ms; }
+
+    property<bool> dim: false;
+    opacity: (is-voice && dim) ? 0.35 : 1.0;
+    animate opacity { duration: 600ms; easing: ease-in-out; }
+
+    t := Timer {
+        interval: 600ms;
+        running: is-voice;
+        triggered => { dim = !dim; }
+    }
+
+    // Reset to full opacity when voice stops
+    changed is-voice => {
+        if (!is-voice) { dim = false; }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════ Main window ══
+export component MainWindow inherits Window {
+    title:         "Makima";
+    width:         430px;
+    height:        compact ? 54px : 590px;
+    always-on-top: pinned;
+    background:    transparent;
+    no-frame:      true;
+
+    animate height { duration: 260ms; easing: ease-in-out; }
+
+    in-out property<bool>      compact:      true;
+    in-out property<bool>      connected:    false;
+    in-out property<bool>      pinned:       true;
+    in-out property<bool>      voice-active: false;
+    in-out property<bool>      thinking:     false;
+    in-out property<string>    status:       "Connecting to Makima...";
+    in-out property<string>    active-agent: "";
+    in-out property<string>    preview:      "";
+    in-out property<string>    input-text:   "";
+    in-out property<string>    confirmation: "";
+    in-out property<[Message]> messages:     [];
 
     callback send-message(string);
     callback toggle-compact();
@@ -26,127 +285,260 @@ export component MainWindow inherits Window {
     callback approve-action();
     callback reject-action();
     callback hide-overlay();
+    // Window drag — backend should call window.set-position on these
+    callback drag-start(length, length);
+    callback drag-move(length, length);
 
+    // ════════════════════════════════════════════════════ Compact pill ══
     if compact : Rectangle {
-        border-radius: 20px;
-        background: #171322;
-        border-width: 1px;
-        border-color: connected ? #8b5cf6 : #4b5563;
+        border-radius: 27px;
+        background:    @linear-gradient(135deg, #171230 0%, #0d0b18 100%);
+        border-width:  1px;
+        border-color:  connected ? Pal.hi : Pal.border;
+        drop-shadow-blur:     14px;
+        drop-shadow-color:    #7c3aed28;
+        drop-shadow-offset-x: 0px;
+        drop-shadow-offset-y: 4px;
+        animate border-color { duration: 300ms; }
+
+        // Drag handle — left side of pill (excluding input)
+        pill-drag := TouchArea {
+            x: 0; y: 0;
+            width: 140px; height: parent.height;
+            moved => {
+                root.drag-move(self.mouse-x, self.mouse-y);
+            }
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down) {
+                    root.drag-start(self.mouse-x, self.mouse-y);
+                }
+            }
+        }
 
         HorizontalLayout {
-            padding: 9px;
-            spacing: 8px;
-            Text { text: "M"; color: #c4b5fd; font-size: 20px; font-weight: 700; }
-            Rectangle {
-                width: 8px; height: 8px; border-radius: 4px;
-                background: voice-active ? #ef4444 : (connected ? #55d68a : #6b7280);
-            }
+            padding-left: 14px; padding-right: 10px; spacing: 10px;
+
+            // M logo
+            Text { text: "M"; color: Pal.soft; font-size: 20px; font-weight: 700; vertical-alignment: center; }
+
+            // Status dot
+            StatusDot { is-voice: voice-active; is-connected: connected; }
+
+            // Preview / status text
             Text {
-                text: preview == "" ? status : preview;
-                color: #e4e4e7;
+                text:      preview != "" ? preview : status;
+                color:     Pal.mid;
                 font-size: 12px;
-                width: 130px;
-                overflow: elide;
+                overflow:  elide;
+                width:     90px;
+                vertical-alignment: center;
             }
-            LineEdit {
-                text <=> input-text;
-                placeholder-text: "Reply to Makima...";
-                horizontal-stretch: 1;
-                accepted => { send-message(input-text); input-text = ""; }
+
+            // Inline reply input
+            Rectangle {
+                horizontal-stretch: 1; height: 36px;
+                border-radius: 12px; background: Pal.input;
+                border-width: 1px;
+                border-color: c-ti.has-focus ? Pal.hi : Pal.border;
+                animate border-color { duration: 120ms; }
+
+                HorizontalLayout {
+                    padding-left: 12px; padding-right: 5px; spacing: 6px;
+                    // Placeholder text — layered under the TextInput (Slint TextInput has no
+                    // built-in placeholder-text in v1.17.1; we render it manually)
+                    if root.input-text == "" : Text {
+                        text: "Reply to Makima...";
+                        color: Pal.low; font-size: 12px;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    c-ti := TextInput {
+                        text <=> root.input-text;
+                        color: Pal.fg; font-size: 12px;
+                        single-line: true; vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        accepted => { root.send-message(root.input-text); root.input-text = ""; }
+                    }
+                    SendBtn { sz: 26px; clicked => { root.send-message(root.input-text); root.input-text = ""; } }
+                }
             }
-            Button { text: ">"; clicked => { send-message(input-text); input-text = ""; } }
-            Button { text: "^"; clicked => { toggle-compact(); } }
+
+            // Expand
+            IBtn { lbl: "^"; tint: Pal.low; clicked => { root.toggle-compact(); } }
         }
     }
 
+    // ════════════════════════════════════════════════════ Expanded panel ══
     if !compact : Rectangle {
-        border-radius: 18px;
-        background: #11101a;
-        border-width: 1px;
-        border-color: #3a3152;
+        border-radius: 20px;
+        background:    @linear-gradient(160deg, #18152c 0%, #0d0b18 100%);
+        border-width:  1px;
+        border-color:  Pal.border;
+        clip:          true;
+        drop-shadow-blur:     24px;
+        drop-shadow-color:    #7c3aed22;
+        drop-shadow-offset-x: 0px;
+        drop-shadow-offset-y: 8px;
 
-        VerticalBox {
-            padding: 14px;
-            spacing: 10px;
+        VerticalLayout {
+            padding: 16px; spacing: 10px;
 
-            HorizontalLayout {
-                height: 30px;
-                spacing: 8px;
-                Text { text: "M"; color: #c4b5fd; font-size: 21px; font-weight: 700; }
-                Text { text: "Makima"; color: #f8fafc; font-size: 16px; font-weight: 600; horizontal-stretch: 1; }
-                Rectangle {
-                    width: 8px; height: 8px; border-radius: 4px;
-                    background: voice-active ? #ef4444 : (connected ? #55d68a : #f59e0b);
+            // ── Header (drag region) ───────────────────────────────────
+            header-drag := TouchArea {
+                height: 34px;
+                moved => { root.drag-move(self.mouse-x, self.mouse-y); }
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.down) {
+                        root.drag-start(self.mouse-x, self.mouse-y);
+                    }
                 }
-                Button { text: pinned ? "P" : "p"; clicked => { toggle-pin(); } }
-                Button { text: "-"; clicked => { toggle-compact(); } }
-                Button { text: "X"; clicked => { hide-overlay(); } }
-            }
 
-            Text { text: status; color: #a1a1aa; font-size: 11px; horizontal-stretch: 1; }
-
-            Rectangle {
-                height: 1px;
-                background: #2b2638;
-            }
-
-            Text {
-                text: history;
-                color: #e4e4e7;
-                font-size: 13px;
-                horizontal-stretch: 1;
-                vertical-stretch: 1;
-                vertical-alignment: TextVerticalAlignment.bottom;
-                wrap: word-wrap;
-                overflow: elide;
-            }
-
-            if confirmation != "" : Rectangle {
-                border-radius: 10px;
-                background: #3a241d;
-                border-width: 1px;
-                border-color: #c08457;
                 HorizontalLayout {
-                    padding: 8px;
-                    Text { text: confirmation; color: #fed7aa; font-size: 11px; horizontal-stretch: 1; wrap: word-wrap; }
-                    Button { text: "Allow"; clicked => { approve-action(); } }
-                    Button { text: "Deny"; clicked => { reject-action(); } }
+                    height: 34px; spacing: 8px;
+
+                    // M badge
+                    Rectangle {
+                        width: 30px; height: 30px; border-radius: 9px;
+                        background: @linear-gradient(135deg, #7c3aed 0%, #4c1d95 100%);
+                        Text { text: "M"; color: white; font-size: 15px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+
+                    Text { text: "Makima"; color: Pal.fg; font-size: 15px; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; }
+
+                    // Active agent badge — only when thinking
+                    if root.thinking && root.active-agent != "" : AgentTag { agent: root.active-agent; }
+
+                    StatusDot { is-voice: voice-active; is-connected: connected; }
+
+                    IBtn { lbl: pinned ? "P" : "p"; tint: pinned ? Pal.soft : Pal.low; clicked => { root.toggle-pin(); } }
+                    IBtn { lbl: "-"; tint: Pal.low; clicked => { root.toggle-compact(); } }
+                    IBtn { lbl: "x"; tint: Pal.low; clicked => { root.hide-overlay(); } }
                 }
             }
 
+            // ── Status strip ──────────────────────────────────────────
+            Text { text: root.status; color: Pal.low; font-size: 11px; overflow: elide; }
+
+            // ── Thin divider ──────────────────────────────────────────
+            Rectangle { height: 1px; background: Pal.border; }
+
+            // ── Scrollable message list ───────────────────────────────
+            ScrollView {
+                vertical-stretch: 1;
+
+                VerticalLayout {
+                    width: 398px;
+                    spacing: 8px;
+                    padding-top: 4px;
+                    padding-bottom: 4px;
+
+                    // Empty state
+                    if root.messages.length == 0 && !root.thinking : Text {
+                        text:  "How can I help you?";
+                        color: Pal.low;
+                        font-size: 13px;
+                        horizontal-alignment: center;
+                    }
+
+                    // Message bubbles
+                    for msg in root.messages : HorizontalLayout {
+                        alignment: msg.is-user ? end : start;
+                        MsgBubble {
+                            is-user: msg.is-user;
+                            text:    msg.text;
+                            agent:   msg.agent;
+                        }
+                    }
+
+                    // Thinking indicator — only mounted when active
+                    if root.thinking : HorizontalLayout {
+                        alignment: start;
+                        spacing: 6px;
+
+                        Rectangle {
+                            width: 6px; height: 6px; border-radius: 3px;
+                            background: Pal.soft.with-alpha(0.5);
+                            y: 8px;
+                        }
+
+                        ThinkDots { }
+                    }
+                }
+            }
+
+            // ── Confirmation bar ──────────────────────────────────────
+            if root.confirmation != "" : Rectangle {
+                border-radius: 11px; background: Pal.warn-bg;
+                border-width: 1px; border-color: Pal.warn-br;
+
+                HorizontalLayout {
+                    padding: 10px; spacing: 8px;
+                    Text {
+                        text: "!  " + root.confirmation;
+                        color: Pal.warn-fg; font-size: 12px;
+                        wrap: word-wrap; horizontal-stretch: 1;
+                        vertical-alignment: center;
+                    }
+                    PBtn { lbl: "Allow"; bg-c: #183218; fg-c: #86efac; br-c: #166534; clicked => { root.approve-action(); } }
+                    PBtn { lbl: "Deny";  bg-c: #321818; fg-c: #fca5a5; br-c: #991b1b; clicked => { root.reject-action(); } }
+                }
+            }
+
+            // ── Text input ────────────────────────────────────────────
+            Rectangle {
+                height: 42px; border-radius: 13px; background: Pal.input;
+                border-width: 1px;
+                border-color: e-ti.has-focus ? Pal.hi : Pal.border;
+                animate border-color { duration: 120ms; }
+
+                HorizontalLayout {
+                    padding-left: 14px; padding-right: 8px; spacing: 8px;
+                    if root.input-text == "" : Text {
+                        text: "Ask Makima anything...";
+                        color: Pal.low; font-size: 13px;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                    e-ti := TextInput {
+                        text <=> root.input-text;
+                        color: Pal.fg; font-size: 13px;
+                        single-line: true; vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        accepted => { root.send-message(root.input-text); root.input-text = ""; }
+                    }
+                    SendBtn { clicked => { root.send-message(root.input-text); root.input-text = ""; } }
+                }
+            }
+
+            // ── Action row ────────────────────────────────────────────
             HorizontalLayout {
-                spacing: 7px;
-                LineEdit {
-                    text <=> input-text;
-                    placeholder-text: "Ask Makima...";
+                spacing: 8px;
+                PBtn {
+                    lbl: root.voice-active ? "Stop voice" : "Voice";
                     horizontal-stretch: 1;
-                    accepted => { send-message(input-text); input-text = ""; }
+                    bg-c: root.voice-active ? #2a1010 : Pal.surface;
+                    fg-c: root.voice-active ? #fca5a5 : Pal.mid;
+                    br-c: root.voice-active ? #991b1b : Pal.border;
+                    clicked => { if (root.voice-active) { root.stop-voice(); } else { root.start-voice(); } }
                 }
-                Button { text: ">"; clicked => { send-message(input-text); input-text = ""; }
-                }
-            }
-
-            HorizontalLayout {
-                spacing: 7px;
-                Button { text: voice-active ? "Stop voice" : "Start voice"; clicked => { if voice-active { stop-voice(); } else { start-voice(); } } }
-                Button { text: "Open chat"; clicked => { open-chat(); } }
+                PBtn { lbl: "Open chat"; horizontal-stretch: 1; clicked => { root.open-chat(); } }
             }
         }
     }
 }
 
+// ══════════════════════════════════════════════════════════════ Tray icon ══
 export component TrayIcon inherits SystemTrayIcon {
     tooltip: "Makima";
     Menu {
-        MenuItem { title: "Show Makima"; activated => { show-overlay(); } }
-        MenuItem { title: "Open chat in Chrome"; activated => { open-chat(); } }
+        MenuItem { title: "Show Makima";          activated => { show-overlay(); } }
+        MenuItem { title: "Open chat in browser"; activated => { open-chat(); } }
         MenuSeparator { }
-        MenuItem { title: "Start voice"; activated => { start-voice(); } }
-        MenuItem { title: "Stop voice"; activated => { stop-voice(); } }
+        MenuItem { title: "Start voice session";  activated => { start-voice(); } }
+        MenuItem { title: "Stop voice session";   activated => { stop-voice(); } }
         MenuSeparator { }
-        MenuItem { title: "Quit overlay"; activated => { quit-overlay(); } }
+        MenuItem { title: "Quit Makima overlay";  activated => { quit-overlay(); } }
     }
-
     callback show-overlay();
     callback open-chat();
     callback start-voice();

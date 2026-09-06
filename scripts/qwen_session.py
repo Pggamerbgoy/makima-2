@@ -239,10 +239,10 @@ def main():
         except Exception:
             pass
 
-    api_key = os.getenv(
-        "DASHSCOPE_API_KEY",
-        "sk-ws-H.XEXYYX.2ebM.MEUCIHvVzZqu27dFAuj2YzCAulR0Vckqmt9RYgi4iE5w4AiVAiEAsAqKZT6q5pXNGylMZ8Rtgg6CQ_KfxtvI5rf22zC9ZyQ"
-    )
+    api_key = os.getenv("DASHSCOPE_API_KEY", "")
+    if not api_key:
+        print("[ERROR] DASHSCOPE_API_KEY environment variable is not set.")
+        sys.exit(1)
 
     session = QwenSession(api_key=api_key)
 

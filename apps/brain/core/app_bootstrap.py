@@ -295,9 +295,14 @@ class AppBootstrap:
         settings_store = self.services.get(S.SETTINGS)
         runtime_config = copy.deepcopy(self.config)
         if settings_store and hasattr(settings_store, "get_settings"):
-            runtime_config.setdefault("llm", {})["default_provider"] = settings_store.get_settings().get(
-                "default_llm_backend", "groq"
-            )
+            user_settings = settings_store.get_settings()
+            saved_backend = user_settings.get("default_llm_backend")
+            if saved_backend:
+                runtime_config.setdefault("llm", {})["default_provider"] = saved_backend
+            elif not runtime_config.get("llm", {}).get("default_provider"):
+                runtime_config.setdefault("llm", {})["default_provider"] = (
+                    runtime_config.get("llm", {}).get("active_provider") or "gemini"
+                )
             for provider, overrides in settings_store.get_llm_overrides().items():
                 provider_config = (
                     runtime_config.setdefault("llm", {})
@@ -488,13 +493,15 @@ class AppBootstrap:
     def _init_voice(self) -> Any:
         import os
         from ..voice import VoiceEngine, VoiceConfig
+        from ..ai_handler import is_valid_api_key
 
-        api_key = (
+        raw_key = (
             self.config.get("gemini_api_key")
             or os.environ.get("GEMINI_API_KEY")
             or os.environ.get("MAKIMA_GEMINI_KEY")
             or ""
         )
+        api_key = raw_key if is_valid_api_key(raw_key) else ""
 
         voice_cfg = VoiceConfig.load()
 

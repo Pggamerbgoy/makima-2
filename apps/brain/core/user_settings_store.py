@@ -19,7 +19,7 @@ logger = logging.getLogger("makima.settings_store")
 _DEFAULT_SETTINGS: Dict[str, Any] = {
     "privacy_mode": False,
     "backup_path": "",
-    "default_llm_backend": "groq",
+    "default_llm_backend": "",
     "theme": "dark",
 }
 

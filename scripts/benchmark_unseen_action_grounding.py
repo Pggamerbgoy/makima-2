@@ -143,8 +143,7 @@ async def run_unseen_benchmark():
         print("[ERROR] SystemAgent could not be loaded!")
         return
 
-    # DashScope client for pure LLM reasoning execution
-    key = os.environ.get("DASHSCOPE_API_KEY", "sk-ws-H.DMEXXHX.1XMv.MEYCIQCOSaps08F94rLHKMMQBGVzE2mEll7cQcsOG72CrYDbUQIhAI2M9WN6zYRpequzPCJkQl-LfuaoJyDYUzQUB8QhiLMK")
+    key = os.environ.get("DASHSCOPE_API_KEY", "")
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     
     results = []

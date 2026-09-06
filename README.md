@@ -11,7 +11,7 @@
 
 ## 🌟 Overview
 
-**Makima** is an advanced autonomous desktop assistant engineered for deep OS integration, real-time multi-agent execution, local memory persistence, and voice control. It pairs a **Python multi-agent orchestrator** with a high-performance **Rust core engine** and a modern **Tauri + React UI**.
+**Makima** is an advanced autonomous desktop assistant engineered for deep OS integration, real-time multi-agent execution, local memory persistence, and voice control. It pairs a **Python multi-agent orchestrator** with a high-performance **Rust core engine** and a modern **React + Vite UI**.
 
 ---
 
@@ -85,10 +85,10 @@ cd makima-2
 pip install -r requirements.txt
 ```
 
-### 2. Frontend Setup (Tauri UI)
+### 2. Frontend Setup
 
 ```bash
-cd apps/ui
+cd apps/chat_ui
 npm install
 cd ../..
 ```
@@ -173,8 +173,8 @@ python -m apps.brain.main
 ### Start Desktop UI (Frontend)
 
 ```bash
-cd apps/ui
-npm run tauri dev
+cd apps/chat_ui
+npm run dev
 ```
 
 Or simply run the shortcut launcher:

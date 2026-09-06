@@ -11,6 +11,7 @@ interface VoiceSettings {
   maxUtteranceSeconds: number;
   voiceLanguage: 'auto' | 'en' | 'hi';
   autoReadAloud: boolean;
+  apiKey?: string;
 }
 
 interface Props {
@@ -187,7 +188,18 @@ export function VoiceSessionController({ conversationId, connected, settings, on
         chunksRef.current.push(new Float32Array(event.inputBuffer.getChannelData(0)));
       };
       streamRef.current = stream; contextRef.current = context; analyserRef.current = analyser; processorRef.current = processor;
-      const nextSession = wsClient.startVoiceSession(conversationId, { wake_word_enabled: settings.wakeWordEnabled, followup_timeout_s: settings.followupTimeoutSeconds, max_utterance_seconds: settings.maxUtteranceSeconds, language: settings.voiceLanguage });
+      const geminiKey = settings?.apiKey || (typeof window !== 'undefined' ? (localStorage.getItem('gemini_api_key') || localStorage.getItem('MAKIMA_GEMINI_KEY') || '') : '') || '';
+      const nextSession = wsClient.startVoiceSession(
+        conversationId,
+        {
+          wake_word_enabled: settings.wakeWordEnabled,
+          followup_timeout_s: settings.followupTimeoutSeconds,
+          max_utterance_seconds: settings.maxUtteranceSeconds,
+          language: settings.voiceLanguage,
+          api_key: geminiKey,
+        },
+        geminiKey,
+      );
       sessionRef.current = nextSession; setSessionId(nextSession); onSessionChange?.(nextSession, 'arming');
       const samples = new Uint8Array(analyser.fftSize);
       const tick = () => {
@@ -250,7 +262,14 @@ export function VoiceSessionController({ conversationId, connected, settings, on
         }
       }
       if (event.type === 'voice_tts_stopped') stopAudio();
-      if (event.type === 'voice_error') { setError(event.payload.message || 'Voice session error'); updateState('error'); }
+      if (event.type === 'voice_error') {
+        stopCapture();
+        stopAudio();
+        sessionRef.current = null;
+        setSessionId(null);
+        setError(event.payload?.message || 'Voice session error');
+        updateState('error');
+      }
     });
     return unsubscribe;
   }, [onTurnStarted, playPcm24k, stopAudio, updateState]);

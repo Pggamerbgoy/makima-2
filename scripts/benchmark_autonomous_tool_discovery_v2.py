@@ -32,7 +32,7 @@ if sys.platform == "win32":
 # Configuration & Endpoints
 # -----------------------------------------------------------------------------
 API_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
-WORKING_API_KEY = "sk-ws-H.DMEXXHX.1XMv.MEYCIQCOSaps08F94rLHKMMQBGVzE2mEll7cQcsOG72CrYDbUQIhAI2M9WN6zYRpequzPCJkQl-LfuaoJyDYUzQUB8QhiLMK"
+WORKING_API_KEY = os.environ.get("DASHSCOPE_API_KEY", "")
 
 MODELS_UNDER_TEST = [
     {

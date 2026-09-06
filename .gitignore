@@ -255,5 +255,37 @@ archive/
 .agents/sentinel/
 .agents/swe_1/
 
+# =============================================================================
+# Makima — Product Release Cleanup
+# =============================================================================
 
+# Scratch SQLite databases (browser automation temp files)
+scratch_*.sqlite
+scratch_brave*.sqlite
+scratch_browser*.sqlite
 
+# Session databases (stored in ~/.makima/ at runtime, not in repo)
+makima_sessions.db
+makima_workspace/**/*.db
+
+# Internal AI session logs and handoff guides (dev-only, not for distribution)
+CLAUDE_SESSION_LOG.md
+HANDOFF_GUIDE.md
+CLAUDE.md
+CORE_AUDIT_TRACKER.md
+memory-bank/
+meta/
+
+# Agent runner scripts (internal tooling)
+run_claude_agentrouter.bat
+run_claude_agentrouter.ps1
+run_claude_qwen.bat
+run_claude_qwen.ps1
+
+# Build artifacts
+apps/chat_ui/dist/
+apps/ui/dist/
+
+# Python .env — NEVER commit real keys
+.env
+!.env.example

@@ -457,6 +457,29 @@ class MakimaModel(Model):
         if self.agent_name:
             kwargs["agent_name"] = self.agent_name
 
+        effective_model = getattr(model_settings, "model", None) or self.model_name
+        if effective_model:
+            kwargs["model"] = effective_model
+        if hasattr(model_settings, "temperature") and getattr(model_settings, "temperature", None) is not None:
+            kwargs["temperature"] = getattr(model_settings, "temperature")
+        if hasattr(model_settings, "max_tokens") and getattr(model_settings, "max_tokens", None) is not None:
+            kwargs["max_tokens"] = getattr(model_settings, "max_tokens")
+
+        # Multi-user isolation & BYOK: Inject per-request client credentials and overrides
+        try:
+            from .orchestration_engine import client_request_context
+            req_ctx = client_request_context.get({}) or {}
+            if req_ctx.get("provider"):
+                kwargs["provider"] = req_ctx["provider"]
+            if req_ctx.get("api_key"):
+                kwargs["api_key"] = req_ctx["api_key"]
+            if req_ctx.get("base_url"):
+                kwargs["base_url"] = req_ctx["base_url"]
+            if req_ctx.get("model") and "model" not in kwargs:
+                kwargs["model"] = req_ctx["model"]
+        except Exception:
+            pass
+
         resp = await self.ai_handler.generate(
             messages=messages,
             task=self.task,
@@ -783,6 +806,14 @@ class MakimaModel(Model):
             kwargs["tool_choice"] = "auto"
         if self.agent_name:
             kwargs["agent_name"] = self.agent_name
+
+        effective_model = getattr(model_settings, "model", None) or self.model_name
+        if effective_model:
+            kwargs["model"] = effective_model
+        if hasattr(model_settings, "temperature") and getattr(model_settings, "temperature", None) is not None:
+            kwargs["temperature"] = getattr(model_settings, "temperature")
+        if hasattr(model_settings, "max_tokens") and getattr(model_settings, "max_tokens", None) is not None:
+            kwargs["max_tokens"] = getattr(model_settings, "max_tokens")
 
         seq = 0
         msg_id = f"msg_{uuid.uuid4().hex[:8]}"

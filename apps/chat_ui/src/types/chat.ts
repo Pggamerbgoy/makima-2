@@ -103,6 +103,8 @@ export interface AppSettings {
   systemPrompt?: string;
   privacyMode?: boolean;
   connectors: Record<string, boolean>;
+  apiKeys?: Record<string, string>;
+  baseUrls?: Record<string, string>;
 }
 
 export interface LLMProvider {
@@ -116,6 +118,9 @@ export interface LLMProvider {
   baseUrl: string;
   local: boolean;
   capabilities: { text: boolean; image: boolean; audio: boolean; video: boolean };
+  badge?: string;
+  description?: string;
+  isActive?: boolean;
 }
 
 export interface CanvasItem {

@@ -39,21 +39,34 @@ class MultimodalService:
         return f"Attached document: {item['name']} ({item['mime_type']}, {item['size']} bytes)."
 
     DEFAULT_PROVIDER_CAPABILITIES = {
-        "gemini": {"text": True, "image": True, "audio": True, "video": False},
+        "gemini": {"text": True, "image": True, "audio": True, "video": True},
         "openai": {"text": True, "image": True, "audio": False, "video": False},
         "anthropic": {"text": True, "image": True, "audio": False, "video": False},
+        "claude": {"text": True, "image": True, "audio": False, "video": False},
         "ollama": {"text": True, "image": True, "audio": False, "video": False},
         "groq": {"text": True, "image": False, "audio": False, "video": False},
         "openrouter": {"text": True, "image": True, "audio": False, "video": False},
+        "qwen": {"text": True, "image": True, "audio": True, "video": False},
+        "qwen_flash": {"text": True, "image": True, "audio": True, "video": False},
+        "deepseek": {"text": True, "image": False, "audio": False, "video": False},
+        "deepseek_v32": {"text": True, "image": False, "audio": False, "video": False},
+        "cerebras": {"text": True, "image": False, "audio": False, "video": False},
+        "huggingface": {"text": True, "image": False, "audio": False, "video": False},
     }
 
     def _provider_capabilities(self, provider_id: str | None) -> dict[str, bool]:
-        provider = (provider_id or getattr(self.ai_handler, "default_provider", "") or "").lower()
-        backend = getattr(self.ai_handler, "backends", {}).get(provider)
+        raw_provider = (provider_id or getattr(self.ai_handler, "default_provider", "") or "").lower()
+        provider = raw_provider
+        if hasattr(self.ai_handler, "_resolve_backend_name"):
+            provider = self.ai_handler._resolve_backend_name(raw_provider)
+        backend = getattr(self.ai_handler, "backends", {}).get(provider) or getattr(self.ai_handler, "backends", {}).get(raw_provider)
         backend_caps = dict(getattr(backend, "capabilities", {}) or {})
         if backend_caps:
             return backend_caps
-        return self.DEFAULT_PROVIDER_CAPABILITIES.get(provider, {"text": True, "image": False, "video": False, "audio": False})
+        return self.DEFAULT_PROVIDER_CAPABILITIES.get(
+            provider,
+            self.DEFAULT_PROVIDER_CAPABILITIES.get(raw_provider, {"text": True, "image": False, "video": False, "audio": False})
+        )
 
     def resolve_attachments(
         self,

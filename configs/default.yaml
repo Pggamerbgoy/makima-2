@@ -1,12 +1,12 @@
 llm:
   tls_verify: false
-  active_provider: gemini
+  active_provider: auto
   only_alibaba: false
   backends:
     gemini:
       enabled: true
       api_key_env: GEMINI_API_KEY
-      model: gemini-3-flash-preview
+      model: gemini-2.5-flash
       latency_tier: fast
       context_limit: 1000000
       tasks:
@@ -27,6 +27,34 @@ llm:
       - synthesis
       rate_limit_tpm: 5000000
       rate_limit_rpm: 5000
+      circuit_breaker:
+        max_failures: 5
+        cooldown_s: 15
+    deepseek:
+      enabled: true
+      api_key_env: DEEPSEEK_API_KEY
+      model: deepseek-chat
+      latency_tier: fast
+      host: https://api.deepseek.com
+      context_limit: 128000
+      tasks:
+      - fast_chat
+      - general
+      - intent_classification
+      - routing
+      - system_control
+      - media
+      - automation
+      - trivial
+      - code
+      - debugging
+      - refactoring
+      - research
+      - analysis
+      - creative
+      - synthesis
+      rate_limit_tpm: 1000000
+      rate_limit_rpm: 1000
       circuit_breaker:
         max_failures: 5
         cooldown_s: 15
@@ -132,7 +160,7 @@ llm:
     groq:
       enabled: true
       api_key_env: GROQ_API_KEY
-      model: qwen/qwen3.8-27b
+      model: llama-3.3-70b-versatile
       latency_tier: fast
       host: https://api.groq.com/openai/v1
       context_limit: 128000
@@ -154,12 +182,13 @@ llm:
       circuit_breaker:
         max_failures: 5
         cooldown_s: 10
-    gemini:
+    openai:
       enabled: true
-      api_key_env: GEMINI_API_KEY
-      model: gemini-2.5-flash
-      latency_tier: fast
-      context_limit: 1000000
+      api_key_env: OPENAI_API_KEY
+      model: gpt-4o
+      host: https://api.openai.com/v1
+      latency_tier: standard
+      context_limit: 128000
       tasks:
       - fast_chat
       - general
@@ -173,6 +202,11 @@ llm:
       - research
       - analysis
       - synthesis
+      rate_limit_tpm: 1000000
+      rate_limit_rpm: 1000
+      circuit_breaker:
+        max_failures: 5
+        cooldown_s: 15
     groq_qwen:
       enabled: false
       api_key_env: MAKIMA_GROQ_KEY
@@ -188,9 +222,9 @@ llm:
         max_failures: 10
         cooldown_s: 10
     groq_fast:
-      enabled: false
-      api_key_env: MAKIMA_GROQ_KEY
-      model: llama3-8b-8192
+      enabled: true
+      api_key_env: GROQ_API_KEY
+      model: llama-3.1-8b-instant
       host: https://api.groq.com/openai/v1
       context_limit: 128000
       tasks:
@@ -206,7 +240,7 @@ llm:
         max_failures: 10
         cooldown_s: 10
     openrouter:
-      enabled: false
+      enabled: true
       api_key_env: OPENROUTER_API_KEY
       model: meta-llama/llama-3.3-70b-instruct:free
       host: https://openrouter.ai/api/v1
@@ -231,11 +265,11 @@ llm:
         max_failures: 5
         cooldown_s: 30
     claude:
-      enabled: false
+      enabled: true
       api_key: ''
-      api_key_env: MAKIMA_OPENROUTER_KEY
-      model: qwen/qwen-plus
-      host: https://openrouter.ai/api/v1
+      api_key_env: ANTHROPIC_API_KEY
+      model: claude-3-5-sonnet-20241022
+      host: https://api.anthropic.com/v1
       context_limit: 128000
       tasks:
       - general
@@ -257,9 +291,9 @@ llm:
         max_failures: 5
         cooldown_s: 30
     cerebras:
-      enabled: false
-      api_key_env: MAKIMA_CEREBRAS_KEY
-      model: llama3.1-70b
+      enabled: true
+      api_key_env: CEREBRAS_API_KEY
+      model: llama-3.3-70b
       context_limit: 131072
       tasks:
       - fast_chat
@@ -269,7 +303,7 @@ llm:
         max_failures: 3
         cooldown_s: 60
     ollama:
-      enabled: false
+      enabled: true
       host: http://127.0.0.1:11434
       model: llama3.2
       context_limit: 8192
@@ -424,20 +458,20 @@ privacy:
   mode: false
 agents:
   models:
-    system_agent: deepseek_v32
-    browser_agent: deepseek_v32
-    code_agent: deepseek_v32
-    research_agent: deepseek_v32
-    media_agent: deepseek_v32
-    document_agent: deepseek_v32
-    data_analyst_agent: deepseek_v32
-    messaging_agent: deepseek_v32
-    automation_agent: deepseek_v32
-    security_agent: deepseek_v32
-    devops_agent: deepseek_v32
-    creative_agent: deepseek_v32
-    voice_agent: deepseek_v32
-    memory_agent: deepseek_v32
+    system_agent: auto
+    browser_agent: auto
+    code_agent: auto
+    research_agent: auto
+    media_agent: auto
+    document_agent: auto
+    data_analyst_agent: auto
+    messaging_agent: auto
+    automation_agent: auto
+    security_agent: auto
+    devops_agent: auto
+    creative_agent: auto
+    voice_agent: auto
+    memory_agent: auto
   background_limits:
     max_wall_time_s: 300
     max_tokens: 50000

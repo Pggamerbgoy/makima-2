@@ -2,10 +2,12 @@ import React, { useCallback, useState, useEffect, useRef } from 'react';
 import { MessageBubble } from './components/MessageBubble';
 import { ChatInput } from './components/ChatInput';
 import { SettingsModal } from './components/SettingsModal';
+import { ModelSelectorPopover } from './components/ModelSelectorPopover';
 import { CanvasDrawer } from './components/CanvasDrawer';
 import { VoiceSessionController } from './components/VoiceSessionController';
-import type { Message, ChatSession, AppSettings, Attachment, CanvasItem, MediaLibraryEntry, AgentActivityEvent } from './types/chat';
+import type { Message, ChatSession, AppSettings, Attachment, CanvasItem, MediaLibraryEntry, AgentActivityEvent, LLMProvider } from './types/chat';
 import { wsClient } from './services/wsClient';
+import { getLLMProviders } from './services/brainApi';
 import {
   Sparkles, Code, Cpu, Video, FileText, Download, UploadCloud,
   PanelLeft, Settings, Sun, Moon, MessageSquare, Trash2, Search,
@@ -83,6 +85,8 @@ export const App: React.FC = () => {
   const [dataHubOpen, setDataHubOpen] = useState<boolean>(true);
   const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
   const [settingsTab, setSettingsTab] = useState<'models' | 'general' | 'connectors' | 'voice' | 'developer'>('models');
+  const [modelPopoverOpen, setModelPopoverOpen] = useState<boolean>(false);
+  const [providers, setProviders] = useState<LLMProvider[]>([]);
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [activeCanvasItem, setActiveCanvasItem] = useState<CanvasItem | null>(null);
   const [voiceSessionId, setVoiceSessionId] = useState<string | null>(null);
@@ -167,6 +171,45 @@ export const App: React.FC = () => {
   useEffect(() => {
     wsClient.configure(settings.wsUrl);
   }, [settings.wsUrl]);
+
+  // Fetch available LLM providers on startup
+  useEffect(() => {
+    let mounted = true;
+    getLLMProviders(settings.wsUrl)
+      .then((list) => {
+        if (mounted && list && list.length > 0) {
+          setProviders(list);
+        }
+      })
+      .catch((err) => {
+        console.warn('[App] Could not load LLM providers on startup:', err);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [settings.wsUrl]);
+
+  const handleSelectModel = useCallback((providerId: string, model: string) => {
+    setSettings((prev) => {
+      const next = { ...prev, llmProvider: providerId, model };
+      localStorage.setItem('makima_settings', JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
+  const handleSaveClientApiKey = useCallback((providerId: string, apiKey: string) => {
+    setSettings((prev) => {
+      const apiKeys = { ...(prev.apiKeys || {}) };
+      if (apiKey.trim()) {
+        apiKeys[providerId] = apiKey.trim();
+      } else {
+        delete apiKeys[providerId];
+      }
+      const next = { ...prev, apiKeys };
+      localStorage.setItem('makima_settings', JSON.stringify(next));
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     wsClient.connect();
@@ -492,7 +535,14 @@ export const App: React.FC = () => {
       })
     );
 
-    const taskId = wsClient.sendMessage(text, currentSessionId, attachments);
+    const requestOptions = {
+      provider: settings.llmProvider || undefined,
+      model: settings.model || undefined,
+      apiKey: settings.apiKeys?.[settings.llmProvider] || undefined,
+      baseUrl: settings.baseUrls?.[settings.llmProvider] || undefined,
+    };
+
+    const taskId = wsClient.sendMessage(text, currentSessionId, attachments, requestOptions);
     resetWatchdog(taskId);
     setActiveTaskId(taskId);
     setSessions((prev) => prev.map((session) => session.id === currentSessionId ? { ...session, messages: [...session.messages, { id: `ai_${taskId}`, sender: 'ai', text: '', timestamp: Date.now(), isStreaming: true, taskId, status: 'streaming' }] } : session));
@@ -524,7 +574,14 @@ export const App: React.FC = () => {
       }
     }
 
-    const taskId = wsClient.sendMessage(newText, currentSessionId);
+    const requestOptions = {
+      provider: settings.llmProvider || undefined,
+      model: settings.model || undefined,
+      apiKey: settings.apiKeys?.[settings.llmProvider] || undefined,
+      baseUrl: settings.baseUrls?.[settings.llmProvider] || undefined,
+    };
+
+    const taskId = wsClient.sendMessage(newText, currentSessionId, undefined, requestOptions);
     setActiveTaskId(taskId);
 
     setSessions((prev) =>
@@ -556,7 +613,15 @@ export const App: React.FC = () => {
     const userMessage = [...currentSession.messages.slice(0, index)].reverse().find((item) => item.sender === 'user');
     if (!userMessage) return;
     const taskId = `task_${Math.random().toString(36).slice(2, 9)}`;
-    wsClient.regenerateMessage(taskId, userMessage.text, currentSessionId);
+
+    const requestOptions = {
+      provider: settings.llmProvider || undefined,
+      model: settings.model || undefined,
+      apiKey: settings.apiKeys?.[settings.llmProvider] || undefined,
+      baseUrl: settings.baseUrls?.[settings.llmProvider] || undefined,
+    };
+
+    wsClient.regenerateMessage(taskId, userMessage.text, currentSessionId, requestOptions);
     setActiveTaskId(taskId);
     setSessions((prev) => prev.map((session) => session.id === currentSessionId ? { ...session, messages: [...session.messages, { id: `ai_${taskId}`, sender: 'ai', text: '', timestamp: Date.now(), isStreaming: true, taskId, status: 'streaming' }] } : session));
   };
@@ -733,8 +798,8 @@ export const App: React.FC = () => {
           <button
             type="button"
             className="model-pill-badge"
-            onClick={() => { setSettingsTab('models'); setSettingsOpen(true); }}
-            title="Switch AI model or provider"
+            onClick={() => setModelPopoverOpen(true)}
+            title="Switch AI model or provider (Instant selector)"
           >
             <Sparkles size={12} color="var(--accent-cyan)" />
             <span>{settings.llmProvider.toUpperCase()} · {settings.model || 'Default'}</span>
@@ -1013,7 +1078,10 @@ export const App: React.FC = () => {
             <VoiceSessionController
               conversationId={currentSessionId}
               connected={isConnected}
-              settings={settings}
+              settings={{
+                ...settings,
+                apiKey: settings.apiKeys?.gemini || '',
+              }}
               onTurnStarted={handleVoiceTurnStarted}
               onSessionChange={(sessionId) => setVoiceSessionId(sessionId)}
             />
@@ -1029,6 +1097,8 @@ export const App: React.FC = () => {
               }}
               isGenerating={Boolean(activeTaskId)}
               disabled={!isConnected}
+              activeModelLabel={`${(settings.llmProvider || '').toUpperCase()} · ${settings.model || 'Default'}`}
+              onOpenModelSelector={() => setModelPopoverOpen(true)}
             />
           </div>
         </div>
@@ -1161,6 +1231,19 @@ export const App: React.FC = () => {
 
       {/* Canvas Drawer */}
       <CanvasDrawer item={activeCanvasItem} onClose={() => setActiveCanvasItem(null)} />
+
+      {/* Model Selector Popover — instant 1-click model switching */}
+      <ModelSelectorPopover
+        isOpen={modelPopoverOpen}
+        onClose={() => setModelPopoverOpen(false)}
+        providers={providers}
+        activeProviderId={settings.llmProvider}
+        activeModel={settings.model}
+        onSelectModel={handleSelectModel}
+        onOpenFullSettings={() => { setSettingsTab('models'); setSettingsOpen(true); }}
+        clientApiKeys={settings.apiKeys || {}}
+        onSaveClientApiKey={handleSaveClientApiKey}
+      />
 
       {/* Settings Modal */}
       <SettingsModal

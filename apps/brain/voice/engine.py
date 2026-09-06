@@ -251,13 +251,15 @@ class VoiceEngine:
         import re
         return bool(value) and bool(re.match(r"^[\w\-]{4,128}$", value))
 
-    def _get_client(self) -> Any:
-        if self._client is None:
+    def _get_client(self, api_key: str = "") -> Any:
+        effective_key = api_key or self.api_key
+        if self._client is None or (api_key and api_key != getattr(self, "_active_client_key", None)):
             from google import genai
             self._client = genai.Client(
-                api_key=self.api_key,
+                api_key=effective_key,
                 http_options={"api_version": "v1beta"},
             )
+            self._active_client_key = effective_key
         return self._client
 
     async def start_voice_session(
@@ -472,9 +474,36 @@ class VoiceEngine:
     async def _connect_and_stream(self, session: VoiceSession) -> None:
         """Connect to Gemini Live and stream responses back to the UI."""
         from google.genai import types
+        from ..ai_handler import is_valid_api_key
 
-        client = self._get_client()
         session_id = session.voice_session_id
+        effective_key = (
+            session.settings.get("api_key")
+            or session.settings.get("client_api_key")
+            or self.api_key
+        )
+
+        if not is_valid_api_key(effective_key):
+            logger.warning("[VoiceEngine] No valid Gemini API key found for session %s", session_id)
+            if self.ws_broadcast:
+                from ..ws_protocol import build_voice_event
+                await self.ws_broadcast(build_voice_event(
+                    "voice_error", session_id,
+                    message="Gemini Live requires a valid Gemini API key. Configure GEMINI_API_KEY in Settings → Models or use browser voice.",
+                ))
+            return
+
+        try:
+            client = self._get_client(api_key=effective_key)
+        except Exception as ce:
+            logger.error("Failed to initialize GenAI client: %s", ce)
+            if self.ws_broadcast:
+                from ..ws_protocol import build_voice_event
+                await self.ws_broadcast(build_voice_event(
+                    "voice_error", session_id,
+                    message=f"Gemini client initialization failed: {ce}",
+                ))
+            return
 
         tools = self._build_tools()
         config = types.LiveConnectConfig(

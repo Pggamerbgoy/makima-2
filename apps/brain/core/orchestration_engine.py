@@ -23,6 +23,10 @@ import json
 import logging
 import os
 import re
+from contextvars import ContextVar
+
+# Multi-user & multi-device isolated request context
+client_request_context: ContextVar[dict[str, Any]] = ContextVar("client_request_context", default={})
 import time
 import pickle
 import aiohttp
@@ -393,6 +397,16 @@ class OrchestrationEngine:
             except Exception as _tm_err:
                 logger.debug("TaskManager registration error: %s", _tm_err)
 
+        # Multi-user isolation: Bind per-request client credentials and preferences
+        ctx_token = client_request_context.set({
+            "provider": context.get("provider"),
+            "model": context.get("model"),
+            "api_key": context.get("api_key"),
+            "base_url": context.get("base_url"),
+            "conversation_id": conv_id,
+            "task_id": task_id,
+        })
+
         try:
             if self.reflexion_engine:
                 try:
@@ -726,6 +740,10 @@ class OrchestrationEngine:
             self._active_tasks.discard(task_id)
             self._cancelled_tasks.discard(task_id)
             self._task_handles.pop(task_id, None)
+            try:
+                client_request_context.reset(ctx_token)
+            except Exception:
+                pass
 
     async def _emit_final_response(
         self,

@@ -52,7 +52,7 @@ from pathlib import Path
 
 DASHSCOPE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
 TOKENROUTER_URL = "https://api.tokenrouter.com/v1/chat/completions"
-TOKENROUTER_KEY = os.getenv("TOKENROUTER_API_KEY", "sk-vMQYfvHqLnMVSzef3Za0TiQQriAB1UkjXUpgHdxBDeXP9EP7")
+TOKENROUTER_KEY = os.getenv("TOKENROUTER_API_KEY", "")
 SESSION_DIR = Path.home() / ".makima" / "sessions"
 
 CODEBASE_ANALYSIS_BRIEF = """
@@ -599,7 +599,7 @@ def load_env():
                 os.environ[key.strip()] = val.strip()
 
 def get_api_key() -> str:
-    return os.getenv("DASHSCOPE_API_KEY") or "sk-ws-H.DMLDDML.N9Aa.MEQCIFFPpc9khMoVeAAwV82OZBf7JQNl3TgVN28sd8ethgI_AiB94k4JdQ0clKwJODNIVSqj2_8CpxFq1XwqA6SzmEmelg"
+    return os.getenv("DASHSCOPE_API_KEY", "")
 
 
 def list_agents():

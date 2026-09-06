@@ -88,13 +88,13 @@ API_KEY_PATTERNS = [
 
 # OpenRouter Free-Tier Dynamic Auto-Routing & Model Suite
 _OPENROUTER_AGENT_MODELS = {
-    "code": "cohere/north-mini-code:free",
-    "research": "nvidia/nemotron-3-ultra-550b-a55b:free",
-    "creative": "google/gemma-4-26b-a4b-it:free",
-    "data_analysis": "openai/gpt-oss-20b:free",
-    "automation": "google/gemma-4-31b-it:free",
-    "media": "google/gemma-4-31b-it:free",
-    "general": "nvidia/nemotron-3-super-120b-a12b:free",
+    "code": "qwen/qwen-2.5-coder-32b-instruct:free",
+    "research": "meta-llama/llama-3.3-70b-instruct:free",
+    "creative": "meta-llama/llama-3.3-70b-instruct:free",
+    "data_analysis": "meta-llama/llama-3.3-70b-instruct:free",
+    "automation": "meta-llama/llama-3.3-70b-instruct:free",
+    "media": "meta-llama/llama-3.3-70b-instruct:free",
+    "general": "meta-llama/llama-3.3-70b-instruct:free",
 }
 _CODE_TASKS = frozenset({"code", "debugging", "refactoring"})
 _RESEARCH_TASKS = frozenset({"research", "analysis", "daily_briefing"})
@@ -123,6 +123,29 @@ def _resolve_openrouter_model(task: str) -> str:
 # =============================================================================
 # 2. CIRCUIT BREAKER & DATA MODELS
 # =============================================================================
+
+_EXACT_PLACEHOLDER_KEYS = frozenset({
+    "none", "null", "placeholder", "dummy", "fake", "todo", "changeme", "example", "xxx", "test", "sk-...", "sk-xxx"
+})
+
+_SUBSTRING_PLACEHOLDERS = (
+    "your_", "_here", "placeholder", "insert_", "replace_me", "sk-...", "your-", "-here"
+)
+
+
+def is_valid_api_key(key: Optional[str]) -> bool:
+    """Check whether a provided API key is genuine and non-placeholder."""
+    if not key or not isinstance(key, str):
+        return False
+    clean = key.strip().lower()
+    if len(clean) < 8:
+        return False
+    if clean in _EXACT_PLACEHOLDER_KEYS:
+        return False
+    if any(p in clean for p in _SUBSTRING_PLACEHOLDERS):
+        return False
+    return True
+
 
 @dataclass
 class CircuitBreaker:
@@ -212,15 +235,19 @@ class BackendProfile:
             return self.api_keys[self._key_idx]
         return self.api_key
 
-    def is_available(self) -> bool:
+    def is_available(self, client_api_key: Optional[str] = None) -> bool:
         """Check if backend is healthy, unblocked by circuit breaker, and credentialed."""
-        if not self.enabled:
-            return False
         if not self.circuit_breaker.can_attempt():
+            return False
+        if client_api_key and is_valid_api_key(client_api_key):
+            return True
+        if not self.enabled:
             return False
         if self.adapter_type == "ollama":
             return True
-        return bool(self.api_key) or bool(self.api_keys)
+        if self.api_keys:
+            return any(is_valid_api_key(k) for k in self.api_keys)
+        return is_valid_api_key(self.api_key)
 
 
 # Alias for backward compatibility
@@ -391,7 +418,7 @@ class OpenAICompatibleAdapter(BaseProviderAdapter):
         **kwargs: Any,
     ) -> LLMResponse:
         model = kwargs.get("model") or profile.model
-        if profile.name == "claude" and "model" not in kwargs:
+        if not model and profile.name in ("claude", "openrouter"):
             model = _resolve_openrouter_model(kwargs.get("task", "general"))
 
         base_url = kwargs.get("base_url") or profile.base_url or gateway.get_default_base_url(profile.name)
@@ -448,7 +475,7 @@ class OpenAICompatibleAdapter(BaseProviderAdapter):
         tools_stripped = False
         tool_retry_pruned = False
         for attempt in range(3):
-            key = profile.get_api_key()
+            key = kwargs.get("api_key") or profile.get_api_key()
             headers = {
                 "Authorization": f"Bearer {key}",
                 "Content-Type": "application/json",
@@ -596,12 +623,13 @@ class OpenAICompatibleAdapter(BaseProviderAdapter):
         import httpx
 
         model = kwargs.get("model") or profile.model
-        if profile.name == "claude" and "model" not in kwargs:
+        if not model and profile.name in ("claude", "openrouter"):
             model = _resolve_openrouter_model(kwargs.get("task", "general"))
 
         base_url = kwargs.get("base_url") or profile.base_url or gateway.get_default_base_url(profile.name)
+        key = kwargs.get("api_key") or profile.get_api_key()
         headers = {
-            "Authorization": f"Bearer {profile.get_api_key()}",
+            "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
         }
         body: dict[str, Any] = {
@@ -720,7 +748,7 @@ class GeminiAdapter(BaseProviderAdapter):
         gateway: Any,
         **kwargs: Any,
     ) -> LLMResponse:
-        model = kwargs.get("model") or profile.model or "gemini-3-flash-preview"
+        model = kwargs.get("model") or profile.model or "gemini-2.5-flash"
         contents = []
         system_text = ""
         for msg in messages:
@@ -768,7 +796,7 @@ class GeminiAdapter(BaseProviderAdapter):
 
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         headers = {
-            "x-goog-api-key": profile.get_api_key(),
+            "x-goog-api-key": kwargs.get("api_key") or profile.get_api_key(),
             "Content-Type": "application/json",
         }
 
@@ -818,7 +846,7 @@ class GeminiAdapter(BaseProviderAdapter):
     ) -> AsyncGenerator[str, None]:
         import httpx
 
-        model = kwargs.get("model") or profile.model or "gemini-3-flash-preview"
+        model = kwargs.get("model") or profile.model or "gemini-2.5-flash"
         contents = []
         system_text = ""
         for msg in messages:
@@ -862,7 +890,7 @@ class GeminiAdapter(BaseProviderAdapter):
 
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse"
         headers = {
-            "x-goog-api-key": profile.get_api_key(),
+            "x-goog-api-key": kwargs.get("api_key") or profile.get_api_key(),
             "Content-Type": "application/json",
         }
 
@@ -903,7 +931,7 @@ class OllamaAdapter(BaseProviderAdapter):
         **kwargs: Any,
     ) -> LLMResponse:
         model = kwargs.get("model") or profile.model
-        host = profile.base_url or "http://127.0.0.1:11434"
+        host = kwargs.get("base_url") or profile.base_url or "http://127.0.0.1:11434"
         body: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -950,7 +978,7 @@ class OllamaAdapter(BaseProviderAdapter):
         import httpx
 
         model = kwargs.get("model") or profile.model
-        host = profile.base_url or "http://127.0.0.1:11434"
+        host = kwargs.get("base_url") or profile.base_url or "http://127.0.0.1:11434"
         body = {
             "model": model,
             "messages": messages,
@@ -979,6 +1007,162 @@ class OllamaAdapter(BaseProviderAdapter):
                         break
                 except json.JSONDecodeError:
                     continue
+
+
+class AnthropicAdapter(BaseProviderAdapter):
+    """Adapter for Anthropic Claude native Messages API (/v1/messages)."""
+
+    async def generate(
+        self,
+        profile: BackendProfile,
+        messages: list[dict],
+        client: Any,
+        gateway: Any,
+        task: str = "general",
+        require_json: bool = False,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        model = kwargs.get("model") or profile.model or "claude-3-5-sonnet-20241022"
+        base_url = (kwargs.get("base_url") or profile.base_url or "https://api.anthropic.com/v1").rstrip("/")
+        active_key = kwargs.get("api_key") or profile.get_api_key()
+
+        system_text = ""
+        anthropic_msgs = []
+        for m in messages:
+            role = m.get("role", "user")
+            content = m.get("content", "")
+            if role == "system":
+                system_text += f"{content}\n"
+            elif role in ("user", "assistant"):
+                anthropic_msgs.append({"role": role, "content": str(content)})
+
+        if not anthropic_msgs:
+            anthropic_msgs = [{"role": "user", "content": "Hello"}]
+
+        headers = {
+            "x-api-key": active_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+
+        payload: dict[str, Any] = {
+            "model": model,
+            "max_tokens": kwargs.get("max_tokens", 4096),
+            "messages": anthropic_msgs,
+        }
+        if system_text.strip():
+            payload["system"] = system_text.strip()
+
+        resp = await client.post(
+            f"{base_url}/messages",
+            headers=headers,
+            json=payload,
+            timeout=float(kwargs.get("timeout", 60.0)),
+        )
+        if resp.status_code == 429:
+            retry_after = resp.headers.get("retry-after", "60")
+            raise RateLimitError(f"{profile.name} rate limited", retry_after_s=float(retry_after))
+        resp.raise_for_status()
+        data = resp.json()
+
+        content_blocks = data.get("content", [])
+        text_parts = [b.get("text", "") for b in content_blocks if b.get("type") == "text"]
+        resp_text = "".join(text_parts)
+        usage = data.get("usage", {})
+
+        return LLMResponse(
+            text=resp_text,
+            model=data.get("model", model),
+            backend=profile.name,
+            usage=TokenUsage(
+                prompt_tokens=usage.get("input_tokens", 0),
+                completion_tokens=usage.get("output_tokens", 0),
+                total_tokens=usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
+            ),
+        )
+
+    async def stream_events(
+        self,
+        profile: BackendProfile,
+        messages: list[dict],
+        client: Any,
+        gateway: Any,
+        task: str = "general",
+        **kwargs: Any,
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        model = kwargs.get("model") or profile.model or "claude-3-5-sonnet-20241022"
+        base_url = (kwargs.get("base_url") or profile.base_url or "https://api.anthropic.com/v1").rstrip("/")
+        active_key = kwargs.get("api_key") or profile.get_api_key()
+
+        system_text = ""
+        anthropic_msgs = []
+        for m in messages:
+            role = m.get("role", "user")
+            content = m.get("content", "")
+            if role == "system":
+                system_text += f"{content}\n"
+            elif role in ("user", "assistant"):
+                anthropic_msgs.append({"role": role, "content": str(content)})
+
+        if not anthropic_msgs:
+            anthropic_msgs = [{"role": "user", "content": "Hello"}]
+
+        headers = {
+            "x-api-key": active_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+
+        payload: dict[str, Any] = {
+            "model": model,
+            "max_tokens": kwargs.get("max_tokens", 4096),
+            "messages": anthropic_msgs,
+            "stream": True,
+        }
+        if system_text.strip():
+            payload["system"] = system_text.strip()
+
+        async with client.stream(
+            "POST",
+            f"{base_url}/messages",
+            headers=headers,
+            json=payload,
+            timeout=float(kwargs.get("timeout", 60.0)),
+        ) as resp:
+            if resp.status_code == 429:
+                retry_after = resp.headers.get("retry-after", "60")
+                raise RateLimitError(f"{profile.name} rate limited", retry_after_s=float(retry_after))
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if line.startswith("data: "):
+                    data_str = line[6:].strip()
+                    if not data_str or data_str == "[DONE]":
+                        break
+                    try:
+                        ev_data = json.loads(data_str)
+                        ev_type = ev_data.get("type")
+                        if ev_type == "content_block_delta":
+                            delta = ev_data.get("delta", {})
+                            if delta.get("type") == "text_delta":
+                                chunk = delta.get("text", "")
+                                if chunk:
+                                    clean_chunk = gateway.sanitize_stream_delta(chunk)
+                                    if clean_chunk:
+                                        yield {"type": "text_delta", "text": clean_chunk}
+                    except Exception:
+                        continue
+
+    async def stream(
+        self,
+        profile: BackendProfile,
+        messages: list[dict],
+        client: Any,
+        gateway: Any,
+        **kwargs: Any,
+    ) -> AsyncGenerator[str, None]:
+        async for ev in self.stream_events(profile, messages, client, gateway, **kwargs):
+            if ev.get("type") == "text_delta" and ev.get("text"):
+                yield ev["text"]
 
 
 # =============================================================================
@@ -1011,11 +1195,17 @@ class ParetoRouter:
         ewma_map = dict(ewma_latencies or {})
         task_candidates = self.task_routing.get(task, self.task_routing.get("general", []))
 
+        pref_backend = cons.get("preferred_backend")
+        client_key = cons.get("client_api_key")
+
         # 1. Capability & Availability filtering
         valid_candidates: list[BackendProfile] = []
         for name in task_candidates:
             profile = self.profiles.get(name)
-            if not profile or not profile.is_available():
+            if not profile:
+                continue
+            is_avail = profile.is_available(client_api_key=client_key if name == pref_backend else None)
+            if not is_avail:
                 continue
             if cons.get("require_tools") and not profile.supports_tools:
                 continue
@@ -1027,7 +1217,10 @@ class ParetoRouter:
 
         # Append any remaining available backends in profiles as fallback options
         for profile in self.profiles.values():
-            if profile in valid_candidates or not profile.is_available():
+            if profile in valid_candidates:
+                continue
+            is_avail = profile.is_available(client_api_key=client_key if profile.name == pref_backend else None)
+            if not is_avail:
                 continue
             if cons.get("require_tools") and not profile.supports_tools:
                 continue
@@ -1037,16 +1230,25 @@ class ParetoRouter:
                 continue
             valid_candidates.append(profile)
 
+        # If preferred backend was requested and available, ensure it is in valid_candidates
+        if pref_backend and pref_backend in self.profiles:
+            pref_prof = self.profiles[pref_backend]
+            if pref_prof not in valid_candidates and pref_prof.is_available(client_api_key=client_key):
+                valid_candidates.insert(0, pref_prof)
+
         if not valid_candidates:
             return list(task_candidates)
 
-        # 2. Dynamic Pareto Frontier Sorting: Task Routing Priority -> Latency Tier -> EWMA Latency -> Fail Count
-        def _pareto_key(p: BackendProfile) -> tuple[int, int, float, int]:
+        # 2. Dynamic Pareto Frontier Sorting: Preferred Backend -> Task Routing Priority -> Latency Tier -> EWMA Latency -> Fail Count
+        pref_backend = cons.get("preferred_backend")
+
+        def _pareto_key(p: BackendProfile) -> tuple[int, int, int, float, int]:
+            is_preferred = 0 if (pref_backend and p.name == pref_backend) else 1
             idx = task_candidates.index(p.name) if p.name in task_candidates else 999
             tier = self.TIER_SCORES.get(p.latency_tier, 1)
             ewma = ewma_map.get(p.name, p.ewma_latency_ms)
             lat_val = ewma if ewma > 0 else (100.0 if tier == 0 else (500.0 if tier == 1 else 2000.0))
-            return (idx, tier, lat_val, p.circuit_breaker.fail_count)
+            return (is_preferred, idx, tier, lat_val, p.circuit_breaker.fail_count)
 
         valid_candidates.sort(key=_pareto_key)
         return [p.name for p in valid_candidates]
@@ -1067,16 +1269,89 @@ class AIHandler:
         "groq": "https://api.groq.com/openai/v1",
         "groq_qwen": "https://api.groq.com/openai/v1",
         "groq_fast": "https://api.groq.com/openai/v1",
-        "claude": "https://openrouter.ai/api/v1",
+        "claude": "https://api.anthropic.com/v1",
+        "anthropic": "https://api.anthropic.com/v1",
+        "openai": "https://api.openai.com/v1",
         "gpt4o": "https://api.openai.com/v1",
         "cerebras": "https://api.cerebras.ai/v1",
         "nemotron_free": "https://openrouter.ai/api/v1",
         "openrouter": "https://openrouter.ai/api/v1",
+        "deepseek": "https://api.deepseek.com",
+        "deepseek_v32": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         "qwen": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        "qwen_flash": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         "qwen36_flash": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         "qwen35_flash": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         "qwen_plus": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        "huggingface": "https://router.huggingface.co/v1",
     }
+
+    _BACKEND_ALIASES: dict[str, str] = {
+        "anthropic": "claude",
+        "alibaba": "qwen_flash",
+        "qwen": "qwen_flash",
+    }
+
+    def _resolve_backend_name(self, name: str) -> str:
+        clean = str(name or "").strip().lower()
+        backends_map = getattr(self, "backends", {}) or {}
+        if clean in self._BACKEND_ALIASES:
+            canonical = self._BACKEND_ALIASES[clean]
+            if canonical in backends_map:
+                return canonical
+            return canonical
+        if clean in backends_map:
+            return clean
+        return clean
+
+    def set_active_provider(self, provider_name: str) -> None:
+        """Set the active/default LLM backend dynamically at runtime without server restart."""
+        resolved = self._resolve_backend_name(provider_name)
+        self.default_provider = resolved
+        logger.info("AIHandler: Active provider switched to '%s' (input: '%s')", resolved, provider_name)
+
+    def ensure_backend(
+        self,
+        provider_name: str,
+        api_key: str = "",
+        model: str = "",
+        base_url: str = "",
+    ) -> Optional[BackendProfile]:
+        """Ensure a BackendProfile exists and is ready for a given provider/alias."""
+        resolved = self._resolve_backend_name(provider_name)
+        profile = self.backends.get(resolved) or self.backends.get(provider_name)
+        if profile:
+            profile.enabled = True
+            if api_key:
+                profile.api_key = api_key
+            if model:
+                profile.model = model
+            if base_url:
+                profile.base_url = base_url
+            return profile
+
+        if resolved == "gemini":
+            adapter_type = "gemini"
+        elif resolved == "ollama":
+            adapter_type = "ollama"
+        elif resolved in ("claude", "anthropic"):
+            adapter_type = "openai" if "openrouter" in (base_url or "") else "anthropic"
+        else:
+            adapter_type = "openai"
+
+        resolved_base_url = base_url or self.get_default_base_url(resolved) or self.get_default_base_url(provider_name) or ""
+        profile = BackendProfile(
+            name=resolved,
+            enabled=True,
+            adapter_type=adapter_type,
+            api_key=api_key or os.environ.get(f"{provider_name.upper()}_API_KEY", ""),
+            model=model or "",
+            base_url=resolved_base_url,
+            circuit_breaker=CircuitBreaker(max_failures=5, cooldown_s=15),
+        )
+        self.backends[resolved] = profile
+        self.backends[provider_name] = profile
+        return profile
 
     def __init__(
         self,
@@ -1085,7 +1360,20 @@ class AIHandler:
         ws_broadcast: Any = None,
     ) -> None:
         self.config: dict[str, Any] = dict(config or {})
+        env_provider = (
+            os.environ.get("MAKIMA_PROVIDER")
+            or os.environ.get("MAKIMA_ACTIVE_PROVIDER")
+            or os.environ.get("MAKIMA_DEFAULT_PROVIDER")
+            or ""
+        ).strip().lower()
+        cfg_provider = (
+            self.config.get("llm", {}).get("default_provider")
+            or self.config.get("llm", {}).get("active_provider")
+            or ""
+        ).strip().lower()
+        raw_provider = env_provider or cfg_provider
         self.backends: dict[str, BackendProfile] = {}
+        self.default_provider: str = self._resolve_backend_name(raw_provider) if (raw_provider and raw_provider != "auto") else ""
         self.rate_limit_manager = rate_limit_manager
         self.ws_broadcast = ws_broadcast
         self._http_client: Optional[Any] = None
@@ -1095,42 +1383,58 @@ class AIHandler:
             "openai": OpenAICompatibleAdapter(),
             "gemini": GeminiAdapter(),
             "ollama": OllamaAdapter(),
+            "anthropic": AnthropicAdapter(),
         }
 
-        # Canonical task routing map (Multi-provider priority cascade)
-        # ORDER MATTERS: qwen_flash + deepseek_v32 are confirmed working (HTTP 200 on boot probe).
-        # openrouter (402 no credits) and nemotron_free (429 rate limit) are moved to end as
-        # last-resort fallbacks. This eliminates ~6s wasted on dead backends.
+        # Canonical task routing map: inclusive priority cascade across all available providers
+        # ParetoRouter filters out backends that do not have active credentials in 0.001ms.
+        standard_cascade = [
+            "gemini", "groq", "groq_fast", "deepseek", "qwen_flash",
+            "openai", "claude", "cerebras", "ollama", "openrouter"
+        ]
+        fast_cascade = [
+            "groq_fast", "groq", "cerebras", "gemini", "qwen_flash",
+            "deepseek", "openai", "claude", "ollama"
+        ]
+        code_cascade = [
+            "deepseek", "openai", "claude", "qwen_flash", "gemini",
+            "groq", "cerebras", "ollama"
+        ]
+        deep_cascade = [
+            "deepseek", "claude", "gemini", "openai", "qwen_flash",
+            "groq", "cerebras", "ollama"
+        ]
+
         self.task_routing: dict[str, list[str]] = {
-            "fast_chat":             ["gemini", "qwen_flash", "qwen35_plus_0420", "groq"],
-            "intent_classification": ["gemini", "qwen_flash", "qwen35_plus_0420", "groq"],
-            "entity_extraction":     ["gemini", "qwen_flash", "qwen35_plus_0420", "groq"],
-            "routing":               ["gemini", "qwen_flash", "qwen35_plus_0420", "groq"],
-            "query_rewriting":       ["gemini", "qwen_flash", "qwen35_plus_0420", "groq"],
-            "persona_extraction":    ["gemini", "qwen_flash", "qwen35_plus_0420", "groq"],
-            "research_decomp":       ["gemini", "qwen_flash", "qwen35_plus_0420", "groq"],
-            "general":               ["gemini", "qwen_flash", "qwen35_plus_0420", "groq"],
-            "research":              ["gemini", "qwen_flash", "qwen35_plus_0420", "groq"],
-            "analysis":              ["gemini", "qwen_flash", "qwen35_plus_0420", "groq"],
-            "automation":            ["gemini", "qwen_flash", "qwen35_plus_0420", "groq"],
-            "code":                  ["gemini", "qwen_flash", "qwen35_plus_0420", "groq"],
-            "debugging":             ["gemini", "qwen_flash", "qwen35_plus_0420", "groq"],
-            "refactoring":           ["gemini", "qwen_flash", "qwen35_plus_0420", "groq"],
-            "data_analysis":         ["gemini", "qwen_flash", "qwen35_plus_0420", "groq"],
-            "browser":               ["gemini", "qwen_flash", "qwen35_plus_0420", "groq"],
-            "system_control":        ["gemini", "qwen_flash", "qwen35_plus_0420", "groq"],
-            "media":                 ["gemini", "qwen_flash", "qwen35_plus_0420", "groq"],
-            "vision":                ["gemini", "qwen_flash"],
-            "creative":              ["gemini", "qwen_flash", "qwen35_plus_0420", "groq"],
-            "daily_briefing":        ["gemini", "qwen_flash", "qwen35_plus_0420", "groq"],
-            "decompose":             ["gemini", "qwen_flash", "qwen35_plus_0420", "groq"],
-            "synthesize":            ["gemini", "qwen_flash", "qwen35_plus_0420", "groq"],
-            "consolidation":         ["gemini", "qwen_flash", "qwen35_plus_0420", "groq"],
-            "devops":                ["gemini", "qwen_flash", "qwen35_plus_0420", "groq"],
-            "offline":               ["gemini", "qwen_flash"],
-            "privacy_mode":          ["gemini", "qwen_flash"],
+            "fast_chat":             list(fast_cascade),
+            "intent_classification": list(fast_cascade),
+            "entity_extraction":     list(fast_cascade),
+            "routing":               list(fast_cascade),
+            "query_rewriting":       list(fast_cascade),
+            "persona_extraction":    list(standard_cascade),
+            "research_decomp":       list(deep_cascade),
+            "general":               list(standard_cascade),
+            "research":              list(deep_cascade),
+            "analysis":              list(deep_cascade),
+            "automation":            list(standard_cascade),
+            "code":                  list(code_cascade),
+            "debugging":             list(code_cascade),
+            "refactoring":           list(code_cascade),
+            "data_analysis":         list(deep_cascade),
+            "browser":               list(standard_cascade),
+            "system_control":        list(fast_cascade),
+            "media":                 list(fast_cascade),
+            "vision":                ["gemini", "openai", "claude", "qwen_flash"],
+            "creative":              list(standard_cascade),
+            "daily_briefing":        list(deep_cascade),
+            "decompose":             list(deep_cascade),
+            "synthesize":            list(deep_cascade),
+            "consolidation":         list(deep_cascade),
+            "devops":                list(code_cascade),
+            "offline":               ["ollama", "gemini", "qwen_flash"],
+            "privacy_mode":          ["ollama", "gemini", "qwen_flash"],
             "mock":                  ["mock_primary", "mock_secondary"],
-            "reflexion":             ["gemini", "qwen_flash", "qwen35_plus_0420", "groq"],
+            "reflexion":             list(deep_cascade),
         }
 
         self._init_backends(self.config)
@@ -1207,6 +1511,123 @@ class AIHandler:
         dq = self._backend_latency.setdefault(backend_name, deque(maxlen=8))
         dq.append(latency_ms)
 
+    @staticmethod
+    def _sniff_environment_keys(backend_name: str, explicit_env: str = "") -> list[str]:
+        """
+        Smart Credential Sniffer:
+        Resolves API keys for a backend using:
+        1. Explicitly configured api_key_env
+        2. Well-known environment variable aliases (including MAKIMA_* and provider-specific names)
+        3. Fuzzy environment variable name matching (e.g., MY_GEMINI_KEY, GROQ_KEY, etc.)
+        4. Cryptographic / vendor prefix signatures (e.g., AIzaSy... for Gemini, gsk_... for Groq, etc.)
+        """
+        found_keys: list[str] = []
+        name_lower = backend_name.lower()
+
+        # Step 1: Explicit env
+        if explicit_env and os.environ.get(explicit_env):
+            val = os.environ[explicit_env].strip()
+            if val and val not in found_keys:
+                found_keys.append(val)
+
+        # Step 2: Standard and well-known aliases per backend family
+        alias_map: dict[str, list[str]] = {
+            "gemini": [
+                "GEMINI_API_KEY", "GOOGLE_API_KEY", "MAKIMA_GEMINI_KEY",
+                "GEMINI_KEY", "GOOGLE_KEY", "GEMINI_TOKEN",
+            ],
+            "groq": [
+                "GROQ_API_KEY", "MAKIMA_GROQ_KEY", "GROQ_KEY", "GROQ_TOKEN",
+            ],
+            "openrouter": [
+                "OPENROUTER_API_KEY", "MAKIMA_OPENROUTER_KEY", "OPENROUTER_KEY",
+            ],
+            "claude": [
+                "ANTHROPIC_API_KEY", "MAKIMA_ANTHROPIC_KEY", "CLAUDE_API_KEY",
+                "ANTHROPIC_KEY", "CLAUDE_KEY",
+            ],
+            "openai": [
+                "OPENAI_API_KEY", "MAKIMA_OPENAI_KEY", "OPENAI_KEY", "OPENAI_TOKEN",
+            ],
+            "qwen": [
+                "DASHSCOPE_API_KEY", "QWEN_API_KEY", "MAKIMA_QWEN_KEY",
+                "DASHSCOPE_KEY", "QWEN_KEY", "ALIYUN_API_KEY",
+            ],
+            "deepseek": [
+                "DEEPSEEK_API_KEY", "MAKIMA_DEEPSEEK_KEY", "DEEPSEEK_KEY",
+            ],
+            "cerebras": [
+                "CEREBRAS_API_KEY", "MAKIMA_CEREBRAS_KEY", "CEREBRAS_KEY",
+            ],
+            "huggingface": [
+                "HF_TOKEN", "HUGGINGFACE_API_KEY", "MAKIMA_HF_KEY", "HF_API_KEY",
+            ],
+        }
+
+        # Resolve family
+        family = name_lower
+        if family.startswith("qwen"):
+            family = "qwen"
+        elif family.startswith("groq"):
+            family = "groq"
+        elif family.startswith("gemini"):
+            family = "gemini"
+        elif family.startswith("deepseek"):
+            family = "deepseek"
+        elif family in ("claude", "anthropic"):
+            family = "claude"
+
+        for k_name in alias_map.get(family, []):
+            val = os.environ.get(k_name, "").strip()
+            if val and is_valid_api_key(val) and val not in found_keys:
+                found_keys.append(val)
+
+        # Step 3: Generic patterns e.g. MAKIMA_<NAME>_KEY, <NAME>_API_KEY
+        for generic_k in (f"MAKIMA_{backend_name.upper()}_KEY", f"{backend_name.upper()}_API_KEY", f"{backend_name.upper()}_KEY"):
+            val = os.environ.get(generic_k, "").strip()
+            if val and is_valid_api_key(val) and val not in found_keys:
+                found_keys.append(val)
+
+        # Step 4: Fuzzy Environment Variable Name Scan
+        fuzzy_keywords = {
+            "gemini": ("gemini", "google_ai"),
+            "groq": ("groq",),
+            "openrouter": ("openrouter",),
+            "claude": ("anthropic", "claude"),
+            "openai": ("openai",),
+            "qwen": ("dashscope", "qwen", "aliyun"),
+            "deepseek": ("deepseek",),
+            "cerebras": ("cerebras",),
+            "huggingface": ("huggingface", "hf_token"),
+        }
+        kw_list = fuzzy_keywords.get(family, ())
+        for env_k, env_v in os.environ.items():
+            k_clean = env_k.lower()
+            v_clean = env_v.strip()
+            if not v_clean or not is_valid_api_key(v_clean) or v_clean in found_keys:
+                continue
+            if any(kw in k_clean for kw in kw_list) and any(suf in k_clean for suf in ("key", "token", "secret", "auth", "api")):
+                found_keys.append(v_clean)
+
+        # Step 5: Vendor Prefix Signature Sniffing (Arbitrary variable name like KUCH_BHI=...)
+        prefix_signatures = {
+            "gemini": ("AIzaSy",),
+            "groq": ("gsk_",),
+            "openrouter": ("sk-or-v1-",),
+            "claude": ("sk-ant-",),
+            "openai": ("sk-proj-", "sk-admin-"),
+        }
+        sig_list = prefix_signatures.get(family, ())
+        if sig_list:
+            for env_k, env_v in os.environ.items():
+                v_clean = env_v.strip()
+                if not v_clean or not is_valid_api_key(v_clean) or v_clean in found_keys:
+                    continue
+                if any(v_clean.startswith(sig) for sig in sig_list):
+                    found_keys.append(v_clean)
+
+        return found_keys
+
     def _init_backends(self, config: dict[str, Any]) -> None:
         """Initialize dynamic backend profiles from YAML configuration."""
         backends_cfg = config.get("llm", {}).get("backends", {})
@@ -1221,52 +1642,22 @@ class AIHandler:
                 except Exception as e:
                     logger.warning("Error reading default.yaml config: %s", e)
 
-        for name, cfg in backends_cfg.items():
-            api_key_env = cfg.get("api_key_env", "")
-            raw_keys = []
-            env_keys = [
-                (os.environ.get(api_key_env, "") if api_key_env else ""),
-                os.environ.get(f"MAKIMA_{name.upper()}_KEY", ""),
-                os.environ.get(f"{name.upper()}_API_KEY", ""),
-            ]
-            if name.startswith("groq"):
-                env_keys.extend([os.environ.get("GROQ_API_KEY", ""), os.environ.get("MAKIMA_GROQ_KEY", "")])
-            elif name in ("openrouter", "claude"):
-                env_keys.extend([
-                    os.environ.get("OPENROUTER_API_KEY", ""),
-                    os.environ.get("MAKIMA_OPENROUTER_KEY", ""),
-                    os.environ.get("OPENROUTER_KEY", ""),
-                    os.environ.get("CLAUDE_API_KEY", ""),
-                    os.environ.get("ANTHROPIC_API_KEY", ""),
-                ])
-            elif name.startswith("gemini"):
-                env_keys.extend([
-                    os.environ.get("GEMINI_API_KEY", ""),
-                    os.environ.get("MAKIMA_GEMINI_KEY", ""),
-                    os.environ.get("GOOGLE_API_KEY", ""),
-                ])
-            elif name.startswith("qwen") or name.startswith("deepseek"):
-                env_keys.extend([
-                    os.environ.get("DASHSCOPE_API_KEY", ""),
-                    os.environ.get("QWEN_API_KEY", ""),
-                    os.environ.get("MAKIMA_QWEN_KEY", ""),
-                    os.environ.get("DEEPSEEK_API_KEY", ""),
-                    os.environ.get("ALIYUN_API_KEY", ""),
-                ])
-            elif name.startswith("cerebras"):
-                env_keys.extend([os.environ.get("CEREBRAS_API_KEY", ""), os.environ.get("MAKIMA_CEREBRAS_KEY", "")])
-            elif name.startswith("huggingface"):
-                env_keys.extend([os.environ.get("HF_TOKEN", ""), os.environ.get("HUGGINGFACE_API_KEY", ""), os.environ.get("HF_API_KEY", "")])
+        explicit_backends = bool(config.get("llm", {}).get("backends"))
+        if explicit_backends:
+            self.task_routing = {}
 
-            for k_str in env_keys:
-                if k_str:
-                    raw_keys.append(k_str)
-            if cfg.get("api_key"):
-                raw_keys.append(cfg.get("api_key"))
+        for name, cfg in backends_cfg.items():
+            if "api_key" in cfg and not cfg.get("api_key") and not cfg.get("api_key_env"):
+                raw_keys = []
+            else:
+                api_key_env = cfg.get("api_key_env", "")
+                raw_keys = self._sniff_environment_keys(name, api_key_env)
+                if cfg.get("api_key"):
+                    raw_keys.append(cfg.get("api_key"))
 
             api_keys = []
             for k_str in raw_keys:
-                for k in k_str.split(","):
+                for k in str(k_str).split(","):
                     k = k.strip()
                     if k and k not in api_keys:
                         api_keys.append(k)
@@ -1275,8 +1666,11 @@ class AIHandler:
             if len(api_keys) <= 1:
                 api_keys = []
 
+            # Backend enabled status (respects explicit enabled: false)
+            has_credentials = bool(api_key or api_keys or name == "ollama")
+            is_enabled = bool(cfg.get("enabled", True))
+
             # Strict provider filtering: If disabled or non-Alibaba when only_alibaba is active, skip completely
-            is_enabled = cfg.get("enabled", True)
             only_alibaba = bool(
                 config.get("llm", {}).get("only_alibaba")
                 or config.get("llm", {}).get("only_qwen")
@@ -1285,7 +1679,7 @@ class AIHandler:
             )
             is_alibaba_backend = bool(
                 name.startswith("qwen")
-                or name.startswith("deepseek")
+                or name == "deepseek_v32"
                 or cfg.get("api_key_env") == "DASHSCOPE_API_KEY"
                 or "aliyuncs.com" in str(cfg.get("host", ""))
             )
@@ -1304,25 +1698,34 @@ class AIHandler:
                 adapter_type = "gemini"
             elif name == "ollama":
                 adapter_type = "ollama"
+            elif name in ("claude", "anthropic"):
+                host_str = str(cfg.get("host") or cfg.get("base_url") or "")
+                adapter_type = "openai" if "openrouter" in host_str else "anthropic"
 
             # Resolve latency tier
             latency_tier = cfg.get("latency_tier", "standard")
             if name in ("groq_fast", "cerebras", "groq"):
                 latency_tier = "fast"
-            elif name in ("gemini", "claude"):
+            elif name in ("gemini", "claude", "openai"):
                 latency_tier = "standard"
             elif name in ("ollama", "gpt4o"):
                 latency_tier = "slow"
 
+            tasks_list = cfg.get("tasks") or [
+                "fast_chat", "general", "intent_classification", "routing",
+                "system_control", "media", "automation", "trivial",
+                "code", "research", "analysis", "creative", "synthesis",
+            ]
+
             self.backends[name] = BackendProfile(
                 name=name,
-                enabled=cfg.get("enabled", True),
+                enabled=is_enabled,
                 adapter_type=adapter_type,
                 api_key=api_key,
                 api_keys=api_keys,
                 model=cfg.get("model", ""),
                 context_limit=cfg.get("context_limit", 128000),
-                tasks=cfg.get("tasks", []),
+                tasks=tasks_list,
                 base_url=cfg.get("base_url") or cfg.get("host"),
                 supports_tools=cfg.get("supports_tools", True),
                 supports_json_mode=cfg.get("supports_json_mode", True),
@@ -1335,12 +1738,26 @@ class AIHandler:
                 rate_limit_rpm=cfg.get("rate_limit_rpm", 0),
             )
 
-            for t in cfg.get("tasks", []):
-                if t in self.task_routing:
-                    if name not in self.task_routing[t]:
-                        self.task_routing[t].append(name)
-                else:
-                    self.task_routing[t] = [name]
+            if is_enabled:
+                for t in tasks_list:
+                    if t in self.task_routing:
+                        if name not in self.task_routing[t]:
+                            self.task_routing[t].append(name)
+                    else:
+                        self.task_routing[t] = [name]
+
+        # Alias cross-registration so both UI catalog names and YAML backend names resolve
+        alias_pairs = [
+            ("anthropic", "claude"),
+            ("alibaba", "qwen_flash"),
+            ("qwen", "qwen_flash"),
+            ("openai", "gpt4o"),
+        ]
+        for a_alias, a_target in alias_pairs:
+            if a_target in self.backends and a_alias not in self.backends:
+                self.backends[a_alias] = self.backends[a_target]
+            elif a_alias in self.backends and a_target not in self.backends:
+                self.backends[a_target] = self.backends[a_alias]
 
         # Load per-agent model mappings from YAML configuration
         self.agent_models: dict[str, str] = {}
@@ -1367,9 +1784,40 @@ class AIHandler:
         task: str,
         constraints: Optional[dict[str, Any]] = None,
         agent_name: Optional[str] = None,
+        **kwargs: Any,
     ) -> list[str]:
         """Get ordered list of backends via Dynamic Pareto Router + Per-Agent Model Routing."""
-        if constraints is None:
+        resolved_agent = agent_name or kwargs.get("agent_name")
+        cons = dict(constraints or {})
+        # Multi-user isolation: check per-request client provider context first
+        req_ctx: dict[str, Any] = {}
+        try:
+            from .core.orchestration_engine import client_request_context
+            req_ctx = client_request_context.get({}) or {}
+        except Exception:
+            pass
+
+        req_provider = cons.get("preferred_backend") or kwargs.get("provider") or req_ctx.get("provider")
+        req_key = kwargs.get("api_key") or req_ctx.get("api_key")
+        req_model = kwargs.get("model") or req_ctx.get("model")
+        req_base_url = kwargs.get("base_url") or req_ctx.get("base_url")
+
+        if req_provider:
+            pref_name = self._resolve_backend_name(req_provider)
+            if pref_name not in self.backends:
+                self.ensure_backend(req_provider, api_key=req_key or "", model=req_model or "", base_url=req_base_url or "")
+            profile = self.backends.get(pref_name) or self.backends.get(req_provider)
+            if profile and profile.is_available(client_api_key=req_key):
+                cons["preferred_backend"] = pref_name
+                if req_key:
+                    cons["client_api_key"] = req_key
+        elif self.default_provider and "preferred_backend" not in cons:
+            pref_name = self._resolve_backend_name(self.default_provider)
+            profile = self.backends.get(pref_name) or self.backends.get(self.default_provider)
+            if profile and profile.is_available():
+                cons["preferred_backend"] = pref_name
+
+        if constraints is None and "preferred_backend" not in cons:
             candidates = list(self.task_routing.get(task, self.task_routing.get("general", [])))
             if len(candidates) >= 2:
                 primary = candidates[0]
@@ -1382,18 +1830,31 @@ class AIHandler:
                             candidates.insert(0, alt)
                             break
         else:
-            candidates = self.router.route(task=task, constraints=constraints, ewma_latencies=self._backend_ewma_latency)
+            candidates = self.router.route(task=task, constraints=cons, ewma_latencies=self._backend_ewma_latency)
 
-        # Prioritize agent's configured model from YAML if available and healthy
-        if agent_name:
-            ag_clean = str(agent_name).lower().strip()
+        # Prioritize active/default provider if set and healthy
+        if cons.get("preferred_backend"):
+            pref = cons["preferred_backend"]
+            if pref in candidates:
+                if candidates and candidates[0] != pref:
+                    candidates.remove(pref)
+                    candidates.insert(0, pref)
+            elif pref in self.backends:
+                candidates.insert(0, pref)
+
+        # Prioritize agent's configured model from YAML ONLY if user did not specify preferred_backend or client key
+        has_user_override = bool(cons.get("preferred_backend") or req_provider or req_key)
+        if resolved_agent and not has_user_override:
+            ag_clean = str(resolved_agent).lower().strip()
             pref_backend = (
                 self.agent_models.get(ag_clean)
                 or self.agent_models.get(f"{ag_clean}_agent")
                 or self.agent_models.get(ag_clean.replace("_agent", ""))
             )
-            if pref_backend and pref_backend in self.backends:
-                candidates = [pref_backend] + [b for b in candidates if b != pref_backend]
+            if pref_backend and pref_backend != "auto" and pref_backend in self.backends:
+                profile = self.backends.get(pref_backend)
+                if profile and profile.is_available():
+                    candidates = [pref_backend] + [b for b in candidates if b != pref_backend]
 
         return candidates
 
@@ -1897,8 +2358,32 @@ class AIHandler:
         client = self._get_http_client()
         profile = self.backends[backend_name]
         adapter = self.adapters.get(profile.adapter_type) or self.adapters["openai"]
+
+        # Multi-user isolation: Inject per-request client credentials and model overrides ONLY if targeting this provider
+        req_ctx = {}
+        try:
+            from .core.orchestration_engine import client_request_context
+            req_ctx = client_request_context.get({}) or {}
+        except Exception:
+            pass
+        merged_kwargs = dict(kwargs)
+        req_provider = req_ctx.get("provider") or kwargs.get("provider")
+        target_canonical = self._resolve_backend_name(req_provider) if req_provider else None
+        is_target = not req_provider or (target_canonical == backend_name or req_provider == backend_name)
+        if is_target:
+            if "model" not in merged_kwargs and req_ctx.get("model"):
+                merged_kwargs["model"] = req_ctx["model"]
+            if "api_key" not in merged_kwargs and req_ctx.get("api_key"):
+                merged_kwargs["api_key"] = req_ctx["api_key"]
+            if "base_url" not in merged_kwargs and req_ctx.get("base_url"):
+                merged_kwargs["base_url"] = req_ctx["base_url"]
+        else:
+            merged_kwargs.pop("model", None)
+            merged_kwargs.pop("api_key", None)
+            merged_kwargs.pop("base_url", None)
+
         return await adapter.generate(
-            profile, messages, client, self, task=task, require_json=require_json, **kwargs
+            profile, messages, client, self, task=task, require_json=require_json, **merged_kwargs
         )
 
     async def generate(
@@ -1920,7 +2405,7 @@ class AIHandler:
             "require_tools": bool(kwargs.get("tools")),
             "min_context": kwargs.get("min_context", 0),
         }
-        backend_order = self._get_backend_order(task, constraints=constraints, agent_name=kwargs.get("agent_name"))
+        backend_order = self._get_backend_order(task, constraints=constraints, **kwargs)
         errors: list[str] = []
         current_messages = list(messages)
 
@@ -1933,12 +2418,24 @@ class AIHandler:
             default_per_backend_timeout = 60.0
         per_backend_timeout = float(kwargs.get("per_backend_timeout", default_per_backend_timeout))
 
+        req_ctx: dict[str, Any] = {}
+        try:
+            from .core.orchestration_engine import client_request_context
+            req_ctx = client_request_context.get({}) or {}
+        except Exception:
+            pass
+        req_provider = req_ctx.get("provider") or kwargs.get("provider")
+        target_canonical = self._resolve_backend_name(req_provider) if req_provider else None
+
         for i, backend_name in enumerate(backend_order):
             if backend_name not in self.backends:
                 continue
 
             profile = self.backends[backend_name]
-            if not profile.is_available():
+            is_target = bool(target_canonical and (backend_name == target_canonical or backend_name == req_provider))
+            req_api_key = (req_ctx.get("api_key") or kwargs.get("api_key")) if is_target else None
+
+            if not profile.is_available(client_api_key=req_api_key):
                 continue
 
             # Check rate limiter
@@ -2059,19 +2556,34 @@ class AIHandler:
         **kwargs: Any,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Stream structured completion events (text_delta, tool_call_delta) using Provider Strategy Adapters."""
+        # Multi-user isolation: Extract per-request client credentials and model overrides
+        req_ctx: dict[str, Any] = {}
+        try:
+            from .core.orchestration_engine import client_request_context
+            req_ctx = client_request_context.get({}) or {}
+        except Exception:
+            pass
+
+        req_provider = req_ctx.get("provider") or kwargs.get("provider")
+        target_canonical = self._resolve_backend_name(req_provider) if req_provider else None
+
         client = self._get_http_client()
+
         constraints = {
             "require_tools": bool(kwargs.get("tools")),
             "min_context": kwargs.get("min_context", 0),
         }
-        backend_order = self._get_backend_order(task, constraints=constraints, agent_name=kwargs.get("agent_name"))
+        backend_order = self._get_backend_order(task, constraints=constraints, **kwargs)
         last_error = None
 
         for backend_name in backend_order:
             if backend_name not in self.backends:
                 continue
             profile = self.backends[backend_name]
-            if not profile.is_available():
+            is_target = bool(target_canonical and (backend_name == target_canonical or backend_name == req_provider))
+            req_api_key = (req_ctx.get("api_key") or kwargs.get("api_key")) if is_target else None
+
+            if not profile.is_available(client_api_key=req_api_key):
                 continue
 
             estimated_tokens = kwargs.get("max_tokens", 4096)
@@ -2081,14 +2593,27 @@ class AIHandler:
             adapter = self.adapters.get(profile.adapter_type) or self.adapters["openai"]
             events_yielded = False
 
+            call_kwargs = dict(kwargs)
+            if is_target:
+                if "model" not in call_kwargs and req_ctx.get("model"):
+                    call_kwargs["model"] = req_ctx["model"]
+                if "api_key" not in call_kwargs and req_api_key:
+                    call_kwargs["api_key"] = req_api_key
+                if "base_url" not in call_kwargs and req_ctx.get("base_url"):
+                    call_kwargs["base_url"] = req_ctx["base_url"]
+            else:
+                call_kwargs.pop("model", None)
+                call_kwargs.pop("api_key", None)
+                call_kwargs.pop("base_url", None)
+
             try:
                 stream_ev_fn = getattr(adapter, "stream_events", None)
                 if callable(stream_ev_fn):
-                    async for ev in stream_ev_fn(profile, messages, client, self, task=task, **kwargs):
+                    async for ev in stream_ev_fn(profile, messages, client, self, task=task, **call_kwargs):
                         events_yielded = True
                         yield ev
                 else:
-                    async for chunk in adapter.stream(profile, messages, client, self, task=task, **kwargs):
+                    async for chunk in adapter.stream(profile, messages, client, self, task=task, **call_kwargs):
                         events_yielded = True
                         yield {"type": "text_delta", "text": chunk}
                 if events_yielded:

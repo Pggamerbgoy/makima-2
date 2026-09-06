@@ -94,7 +94,17 @@ export class WSClient {
     this.statusHandlers.forEach((h) => h(status));
   }
 
-  public sendMessage(text: string, conversationId: string, attachments?: Attachment[]): string {
+  public sendMessage(
+    text: string,
+    conversationId: string,
+    attachments?: Attachment[],
+    options?: {
+      provider?: string;
+      model?: string;
+      apiKey?: string;
+      baseUrl?: string;
+    }
+  ): string {
     const taskId = 'task_' + Math.random().toString(36).substring(2, 9);
     const uploaded = (attachments || []).filter((att) => att.mediaId).map((att) => ({
       id: att.mediaId,
@@ -119,6 +129,10 @@ export class WSClient {
         text,
         conversation_id: conversationId,
         ...(uploaded.length ? { attachments: uploaded } : legacyPayload),
+        ...(options?.provider ? { provider: options.provider } : {}),
+        ...(options?.model ? { model: options.model } : {}),
+        ...(options?.apiKey ? { api_key: options.apiKey } : {}),
+        ...(options?.baseUrl ? { base_url: options.baseUrl } : {}),
       },
     };
 
@@ -148,8 +162,25 @@ export class WSClient {
     this.send('cancel_task', taskId);
   }
 
-  public regenerateMessage(taskId: string, text: string, conversationId: string): void {
-    this.send('regenerate_message', taskId, { text, conversation_id: conversationId });
+  public regenerateMessage(
+    taskId: string,
+    text: string,
+    conversationId: string,
+    options?: {
+      provider?: string;
+      model?: string;
+      apiKey?: string;
+      baseUrl?: string;
+    }
+  ): void {
+    this.send('regenerate_message', taskId, {
+      text,
+      conversation_id: conversationId,
+      ...(options?.provider ? { provider: options.provider } : {}),
+      ...(options?.model ? { model: options.model } : {}),
+      ...(options?.apiKey ? { api_key: options.apiKey } : {}),
+      ...(options?.baseUrl ? { base_url: options.baseUrl } : {}),
+    });
   }
 
   public modifyResponse(taskId: string, text: string, instruction: string, conversationId: string): void {
@@ -192,12 +223,13 @@ export class WSClient {
     }
   }
 
-  public startVoiceSession(conversationId: string, settings: Record<string, unknown>): string {
+  public startVoiceSession(conversationId: string, settings: Record<string, unknown>, apiKey?: string): string {
     const voiceSessionId = `voice_${crypto.randomUUID().replace(/-/g, '')}`;
     this.send('voice_session_start', voiceSessionId, {
       voice_session_id: voiceSessionId,
       conversation_id: conversationId,
       settings,
+      api_key: apiKey,
     });
     return voiceSessionId;
   }

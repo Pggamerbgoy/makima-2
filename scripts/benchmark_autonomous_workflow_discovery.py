@@ -46,7 +46,7 @@ if os.path.exists(env_path):
                 k, v = line.strip().split("=", 1)
                 os.environ[k.strip()] = v.strip()
 
-DASHSCOPE_KEY = os.environ.get("DASHSCOPE_API_KEY", "sk-ws-H.DMEXXHX.1XMv.MEYCIQCOSaps08F94rLHKMMQBGVzE2mEll7cQcsOG72CrYDbUQIhAI2M9WN6zYRpequzPCJkQl-LfuaoJyDYUzQUB8QhiLMK")
+DASHSCOPE_KEY = os.environ.get("DASHSCOPE_API_KEY", "")
 OPENROUTER_KEY = DASHSCOPE_KEY
 OPENROUTER_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 NEMOTRON_DEFAULT_KEY = DASHSCOPE_KEY

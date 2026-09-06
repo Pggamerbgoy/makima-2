@@ -419,14 +419,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
   const handleSaveProvider = async () => {
     setProvidersSaving(true); setProviderError(''); setProviderSaved('');
     try {
+      const trimmedKey = apiKey.trim();
       const saved = await saveLLMProvider(llmProvider, {
-        apiKey: apiKey.trim() || undefined, model: model.trim(),
+        apiKey: trimmedKey || undefined, model: model.trim(),
         baseUrl: baseUrl.trim() || undefined,
         enabled: providers.find((p) => p.id === llmProvider)?.enabled ?? true,
       }, wsUrl);
       setProviders((cur) => cur.map((p) => p.id === saved.id ? saved : p));
       setModel(saved.model); setApiKey('');
-      onSave({ ...settings, llmProvider: saved.id, model: saved.model });
+      const nextApiKeys = { ...(settings.apiKeys || {}) };
+      if (trimmedKey) {
+        nextApiKeys[saved.id] = trimmedKey;
+      }
+      onSave({ ...settings, llmProvider: saved.id, model: saved.model, apiKeys: nextApiKeys });
       setProviderSaved(`${saved.name} · ${saved.model} is active.`);
     } catch (err) { setProviderError(err instanceof Error ? err.message : 'Could not save provider.'); }
     finally { setProvidersSaving(false); }

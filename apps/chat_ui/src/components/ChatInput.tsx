@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { FolderOpen, LoaderCircle, Mic, MicOff, Paperclip, Plus, RotateCcw, Send, Square, X } from 'lucide-react';
+import { FolderOpen, LoaderCircle, Mic, MicOff, Paperclip, Plus, RotateCcw, Send, Sparkles, Square, X } from 'lucide-react';
 import type { Attachment, MediaKind, MediaLibraryEntry } from '../types/chat';
 import { uploadMedia } from '../services/mediaApi';
 import { wsClient } from '../services/wsClient';
@@ -36,9 +36,22 @@ interface ChatInputProps {
   wsUrl?: string;
   disabled?: boolean;
   isGenerating?: boolean;
+  activeModelLabel?: string;
+  onOpenModelSelector?: () => void;
 }
 
-export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onRecordingChange, onOpenLibrary, libraryItem, onStop, wsUrl = 'ws://127.0.0.1:8080/ws', disabled, isGenerating }) => {
+export const ChatInput: React.FC<ChatInputProps> = ({ 
+  onSendMessage, 
+  onRecordingChange, 
+  onOpenLibrary, 
+  libraryItem, 
+  onStop, 
+  wsUrl = 'ws://127.0.0.1:8080/ws', 
+  disabled, 
+  isGenerating,
+  activeModelLabel,
+  onOpenModelSelector
+}) => {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [isRecording, setIsRecording] = useState(false);
@@ -117,9 +130,38 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onRecording
         >
           {isRecording ? <MicOff size={19} /> : <Mic size={19} />}
         </button>
-        {isGenerating ? <button className="composer-send-button stop" onClick={onStop} aria-label="Stop generation"><Square size={16} fill="currentColor" /></button> : <button className="composer-send-button" onClick={handleSend} disabled={disabled || !text.trim() && !attachments.some((entry) => entry.uploadState === 'ready')} aria-label="Send message">{disabled ? <LoaderCircle className="spin" size={18} /> : <Send size={18} />}</button>}
+        {isGenerating ? (
+          <button className="composer-send-button stop" onClick={onStop} aria-label="Stop generation">
+            <Square size={16} fill="currentColor" />
+          </button>
+        ) : (
+          <button
+            className="composer-send-button"
+            onClick={handleSend}
+            disabled={disabled || (!text.trim() && !attachments.some((entry) => entry.uploadState === 'ready'))}
+            aria-label="Send message"
+          >
+            {disabled ? <LoaderCircle className="spin" size={18} /> : <Send size={18} />}
+          </button>
+        )}
       </div>
-      <div className="composer-hint">Enter to send · Shift+Enter for newline · {text.length}/12,000</div>
+      <div className="composer-hint">
+        {onOpenModelSelector && (
+          <button
+            type="button"
+            className="composer-model-chip"
+            onClick={onOpenModelSelector}
+            title="Click to switch AI model or provider"
+          >
+            <Sparkles size={11} className="composer-chip-sparkle" />
+            <span className="composer-chip-text">{activeModelLabel || 'Model'}</span>
+            <span className="composer-chip-caret">▾</span>
+          </button>
+        )}
+        <span className="composer-hint-shortcuts">
+          Enter to send · Shift+Enter for newline · {text.length}/12,000
+        </span>
+      </div>
     </div>
   </div>;
 };

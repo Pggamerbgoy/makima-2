@@ -1,13 +1,13 @@
-use std::env;
+﻿use std::env;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use global_hotkey::hotkey::{Code, HotKey, Modifiers};
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use serde_json::{json, Value};
-use slint::{ComponentHandle, Weak};
+use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::{connect_async, tungstenite::Message as WsMsg};
 use uuid::Uuid;
 
 slint::include_modules!();
@@ -31,9 +31,12 @@ enum Command {
 enum UiEvent {
     Connection(bool),
     Status(String),
-    History(String, String),
+    PushMessage { is_user: bool, text: String, agent: String },
+    Preview(String),
     Confirmation(String),
     Voice(bool),
+    Thinking(bool),
+    ActiveAgent(String),
     Attention(bool),
 }
 
@@ -48,16 +51,27 @@ fn emit(ui: &Weak<MainWindow>, event: UiEvent) {
         match event {
             UiEvent::Connection(connected) => window.set_connected(connected),
             UiEvent::Status(status) => window.set_status(status.into()),
-            UiEvent::History(history, preview) => {
-                window.set_history(history.into());
-                window.set_preview(preview.into());
+            UiEvent::PushMessage { is_user, text, agent } => {
+                let model = window.get_messages();
+                let vec_model = model
+                    .as_any()
+                    .downcast_ref::<VecModel<Message>>()
+                    .expect("messages must be a VecModel<Message>");
+                vec_model.push(Message {
+                    is_user,
+                    text: text.into(),
+                    agent: agent.into(),
+                });
+                while vec_model.row_count() > 50 {
+                    vec_model.remove(0);
+                }
             }
+            UiEvent::Preview(text) => window.set_preview(text.into()),
             UiEvent::Confirmation(text) => window.set_confirmation(text.into()),
             UiEvent::Voice(active) => window.set_voice_active(active),
+            UiEvent::Thinking(thinking) => window.set_thinking(thinking),
+            UiEvent::ActiveAgent(agent) => window.set_active_agent(agent.into()),
             UiEvent::Attention(expand) => {
-                // Normal output wakes the compact reply bar. Safety
-                // confirmations expand because their controls need to be
-                // visible immediately.
                 let _ = window.show();
                 window.set_compact(!expand);
             }
@@ -65,20 +79,7 @@ fn emit(ui: &Weak<MainWindow>, event: UiEvent) {
     });
 }
 
-fn append_history(history: &mut String, line: &str) {
-    let line = line.trim();
-    if line.is_empty() {
-        return;
-    }
-    history.push_str(line);
-    history.push('\n');
-    let lines: Vec<&str> = history.lines().collect();
-    let keep_from = lines.len().saturating_sub(10);
-    *history = lines[keep_from..].join("\n") + "\n";
-}
-
 fn handle_server_message(
-    history: &mut String,
     value: &Value,
     ui: &Weak<MainWindow>,
     pending_confirmation: &mut Option<(String, String)>,
@@ -91,9 +92,20 @@ fn handle_server_message(
     match message_type {
         "ai_chunk" => {
             if let Some(text) = payload.get("text").and_then(Value::as_str) {
-                append_history(history, &format!("Makima: {}", text));
+                let agent = payload
+                    .get("agent")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                emit(ui, UiEvent::Thinking(false));
+                emit(ui, UiEvent::ActiveAgent(String::new()));
+                emit(ui, UiEvent::PushMessage {
+                    is_user: false,
+                    text: text.to_string(),
+                    agent,
+                });
                 let preview = text.lines().last().unwrap_or(text).to_string();
-                emit(ui, UiEvent::History(history.clone(), preview));
+                emit(ui, UiEvent::Preview(preview));
                 emit(ui, UiEvent::Attention(false));
             }
         }
@@ -102,18 +114,31 @@ fn handle_server_message(
                 .get("error")
                 .and_then(Value::as_str)
                 .unwrap_or("Request failed");
-            append_history(history, &format!("Error: {}", error));
-            emit(ui, UiEvent::History(history.clone(), error.to_string()));
+            emit(ui, UiEvent::PushMessage {
+                is_user: false,
+                text: format!("Error: {}", error),
+                agent: String::new(),
+            });
             emit(ui, UiEvent::Status("Needs attention".into()));
+            emit(ui, UiEvent::Thinking(false));
+            emit(ui, UiEvent::ActiveAgent(String::new()));
         }
         "agent_started" | "agent_progress" | "thinking_status" => {
             let status = payload
                 .get("status")
                 .or_else(|| payload.get("message"))
-                .or_else(|| payload.get("agent"))
                 .and_then(Value::as_str)
                 .unwrap_or("Makima is working...");
+            let agent = payload
+                .get("agent")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
             emit(ui, UiEvent::Status(status.to_string()));
+            emit(ui, UiEvent::Thinking(true));
+            if !agent.is_empty() {
+                emit(ui, UiEvent::ActiveAgent(agent));
+            }
         }
         "action_confirm_request" => {
             let description = payload
@@ -121,7 +146,7 @@ fn handle_server_message(
                 .or_else(|| payload.get("action"))
                 .and_then(Value::as_str)
                 .unwrap_or("Makima needs approval for an action");
-            let task_id = value
+            let tid = value
                 .get("task_id")
                 .and_then(Value::as_str)
                 .unwrap_or_default()
@@ -131,7 +156,7 @@ fn handle_server_message(
                 .and_then(Value::as_str)
                 .unwrap_or("destructive")
                 .to_string();
-            *pending_confirmation = Some((task_id, action.clone()));
+            *pending_confirmation = Some((tid, action));
             emit(ui, UiEvent::Confirmation(description.to_string()));
             emit(ui, UiEvent::Attention(true));
         }
@@ -146,8 +171,12 @@ fn handle_server_message(
         }
         "voice_transcript_final" => {
             if let Some(text) = payload.get("transcript").and_then(Value::as_str) {
-                append_history(history, &format!("You: {}", text));
-                emit(ui, UiEvent::History(history.clone(), text.to_string()));
+                emit(ui, UiEvent::PushMessage {
+                    is_user: true,
+                    text: text.to_string(),
+                    agent: String::new(),
+                });
+                emit(ui, UiEvent::Preview(text.to_string()));
             }
         }
         _ => {}
@@ -160,7 +189,6 @@ async fn websocket_worker(
     ui: Weak<MainWindow>,
 ) {
     let conversation_id = format!("native-overlay-{}", Uuid::new_v4().simple());
-    let mut history = String::new();
     let mut voice_session_id: Option<String> = None;
     let mut pending_confirmation: Option<(String, String)> = None;
 
@@ -177,8 +205,13 @@ async fn websocket_worker(
                             let message = match command {
                                 Command::Text(text) => {
                                     let id = task_id("task");
-                                    append_history(&mut history, &format!("You: {}", text));
-                                    emit(&ui, UiEvent::History(history.clone(), text.clone()));
+                                    emit(&ui, UiEvent::PushMessage {
+                                        is_user: true,
+                                        text: text.clone(),
+                                        agent: String::new(),
+                                    });
+                                    emit(&ui, UiEvent::Preview(text.clone()));
+                                    emit(&ui, UiEvent::Thinking(true));
                                     json!({"v": 1, "type": "user_message", "task_id": id,
                                         "payload": {"text": text, "conversation_id": conversation_id, "source": "native_overlay"}})
                                 }
@@ -210,36 +243,30 @@ async fn websocket_worker(
                                         "payload": {"action": action}})
                                 }
                             };
-                            if socket.send(Message::Text(message.to_string().into())).await.is_err() { break; }
+                            if socket.send(WsMsg::Text(message.to_string().into())).await.is_err() { break; }
                         }
                         incoming = socket.next() => {
                             match incoming {
-                                Some(Ok(Message::Text(text))) => {
+                                Some(Ok(WsMsg::Text(text))) => {
                                     if let Ok(value) = serde_json::from_str::<Value>(&text) {
-                                        handle_server_message(&mut history, &value, &ui, &mut pending_confirmation);
+                                        handle_server_message(&value, &ui, &mut pending_confirmation);
                                     }
                                 }
-                                Some(Ok(Message::Ping(payload))) => {
-                                    let _ = socket.send(Message::Pong(payload)).await;
+                                Some(Ok(WsMsg::Ping(payload))) => {
+                                    let _ = socket.send(WsMsg::Pong(payload)).await;
                                 }
-                                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                                Some(Ok(WsMsg::Close(_))) | None | Some(Err(_)) => break,
                                 _ => {}
                             }
                         }
                     }
                 }
                 emit(&ui, UiEvent::Connection(false));
-                emit(
-                    &ui,
-                    UiEvent::Status("Makima disconnected; retrying...".into()),
-                );
+                emit(&ui, UiEvent::Status("Makima disconnected; retrying...".into()));
             }
             Err(_) => {
                 emit(&ui, UiEvent::Connection(false));
-                emit(
-                    &ui,
-                    UiEvent::Status("Makima is offline; retrying...".into()),
-                );
+                emit(&ui, UiEvent::Status("Makima is offline; retrying...".into()));
             }
         }
         tokio::time::sleep(Duration::from_secs(3)).await;
@@ -252,6 +279,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let window = MainWindow::new()?;
     let tray = TrayIcon::new()?;
     let (command_tx, command_rx) = mpsc::unbounded_channel();
+
+    // Initialise messages as an empty VecModel — must be set before UI renders
+    let messages_model: ModelRc<Message> = ModelRc::new(VecModel::default());
+    window.set_messages(messages_model);
 
     let window_weak = window.as_weak();
     std::thread::Builder::new()
@@ -339,45 +370,27 @@ fn wire_window_callbacks(
     });
 
     let chat = chat_url.clone();
-    window.on_open_chat(move || {
-        let _ = open::that(&chat);
-    });
+    window.on_open_chat(move || { let _ = open::that(&chat); });
     let chat = chat_url.clone();
-    tray.on_open_chat(move || {
-        let _ = open::that(&chat);
-    });
+    tray.on_open_chat(move || { let _ = open::that(&chat); });
 
     let start = commands.clone();
-    window.on_start_voice(move || {
-        let _ = start.send(Command::VoiceStart);
-    });
+    window.on_start_voice(move || { let _ = start.send(Command::VoiceStart); });
     let start = commands.clone();
-    tray.on_start_voice(move || {
-        let _ = start.send(Command::VoiceStart);
-    });
+    tray.on_start_voice(move || { let _ = start.send(Command::VoiceStart); });
     let stop = commands.clone();
-    window.on_stop_voice(move || {
-        let _ = stop.send(Command::VoiceStop);
-    });
+    window.on_stop_voice(move || { let _ = stop.send(Command::VoiceStop); });
     let stop = commands.clone();
-    tray.on_stop_voice(move || {
-        let _ = stop.send(Command::VoiceStop);
-    });
+    tray.on_stop_voice(move || { let _ = stop.send(Command::VoiceStop); });
 
     let approve = commands.clone();
-    window.on_approve_action(move || {
-        let _ = approve.send(Command::Approve);
-    });
+    window.on_approve_action(move || { let _ = approve.send(Command::Approve); });
     let reject = commands;
-    window.on_reject_action(move || {
-        let _ = reject.send(Command::Reject);
-    });
+    window.on_reject_action(move || { let _ = reject.send(Command::Reject); });
 
     let ui = window.as_weak();
     window.on_hide_overlay(move || {
-        if let Some(window) = ui.upgrade() {
-            window.hide().ok();
-        }
+        if let Some(window) = ui.upgrade() { window.hide().ok(); }
     });
     let ui = window.as_weak();
     tray.on_show_overlay(move || {
@@ -386,26 +399,38 @@ fn wire_window_callbacks(
             window.set_compact(false);
         }
     });
-    tray.on_quit_overlay(move || {
-        let _ = slint::quit_event_loop();
+    tray.on_quit_overlay(move || { let _ = slint::quit_event_loop(); });
+
+    // Drag-to-move: record grab origin on drag_start, apply delta on drag_move
+    let drag_origin: std::sync::Arc<std::sync::Mutex<Option<(f32, f32)>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+
+    let origin_start = drag_origin.clone();
+    let ui_drag = window.as_weak();
+    window.on_drag_start(move |mx, my| {
+        let mut origin = origin_start.lock().unwrap();
+        if let Some(w) = ui_drag.upgrade() {
+            let pos = w.window().position();
+            *origin = Some((pos.x as f32 - mx, pos.y as f32 - my));
+        }
+    });
+
+    let origin_move = drag_origin.clone();
+    let ui_drag2 = window.as_weak();
+    window.on_drag_move(move |mx, my| {
+        let origin = origin_move.lock().unwrap();
+        if let (Some((ox, oy)), Some(w)) = (*origin, ui_drag2.upgrade()) {
+            w.window().set_position(slint::PhysicalPosition::new(
+                (ox + mx) as i32,
+                (oy + my) as i32,
+            ));
+        }
     });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn history_keeps_only_the_latest_ten_lines() {
-        let mut history = String::new();
-        for index in 0..12 {
-            append_history(&mut history, &format!("line {index}"));
-        }
-
-        let lines: Vec<String> = history.lines().map(str::to_string).collect();
-        let expected: Vec<String> = (2..12).map(|index| format!("line {index}")).collect();
-        assert_eq!(lines, expected);
-    }
 
     #[test]
     fn task_ids_include_the_requested_prefix() {
