@@ -6,18 +6,14 @@ and autonomous chart generation engine.
 from __future__ import annotations
 
 import asyncio
-import base64
 import inspect
-import io
 import json
 import logging
 import os
 import re
-import tempfile
 import uuid
-from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Optional
 
 # ━━━ Zero-Crash Resilience: Heavy Data Science Libraries ━━━
 try:
@@ -59,7 +55,7 @@ except ImportError:
     scipy_stats = None
     HAS_SCIPY = False
 
-from .base_agent import BaseAgent
+from .base_agent import BaseAgent, TOOL_DISCIPLINE_BLOCK
 
 logger = logging.getLogger("makima.agents.data_analyst")
 
@@ -84,39 +80,29 @@ class DataAnalystAgent(BaseAgent):
     AGENT_NAME = "data_analyst"
     DESCRIPTION = "Enterprise data analysis, Polars/Pandas manipulation, statistical inference, charting"
     CAPABILITIES = ["data_analysis", "statistical_metrics", "csv_processing", "json_processing", "data_visualization", "chart_generation"]
-    AGENT_TOOLS = ["load_csv", "filter_data", "compute_stats", "generate_chart"]
+    AGENT_TOOLS = ["profile_dataset", "execute_query", "statistical_test", "generate_chart", "export_dataset"]
     TAGS = ["data", "pandas", "polars", "csv", "json", "chart"]
 
     SYSTEM_PROMPT = """You are Makima's Elite Data Analyst & Statistical Inference Engine.
-You analyze complex datasets, generate rigorous statistical profiles, execute high-performance queries, and create publication-quality visualizations.
+You analyze datasets, perform rigorous statistical tests, run high-performance SQL/DataFrame queries, and generate publication-quality charts.
 
-━━━ Available Tools ━━━
-1. profile_dataset(file_path)
-   Returns schema, shape, null counts, memory usage, and descriptive statistics.
-2. execute_query(file_path, query, engine="polars")
-   Executes a SQL query (via Polars SQLContext or Pandasql) or a DataFrame expression. Returns the first 50 rows and shape.
-3. statistical_test(file_path, test_type, col1, col2=None, group_col=None)
-   Performs statistical inference. test_type: 't_test', 'pearson', 'spearman', 'chi_square', 'anova'.
-4. generate_chart(file_path, chart_type, x, y, hue=None, title="Chart")
-   Generates a visualization. chart_type: 'scatter', 'line', 'bar', 'hist', 'box', 'violin', 'heatmap'. Saves to workspace.
-5. export_dataset(file_path, output_path, format="csv")
-   Exports the current dataset to CSV or Parquet.
+AVAILABLE TOOLS:
+- profile_dataset(file_path): Inspect schema, row count, null counts, memory usage, and descriptive statistics.
+- execute_query(file_path, query, engine="polars"): Run SQL / DataFrame queries (first 50 rows returned).
+- statistical_test(file_path, test_type, col1, col2, group_col): Run t_test, pearson, spearman, chi_square, anova.
+- generate_chart(file_path, chart_type, x, y, hue=None, title=None): Generate scatter, line, bar, hist, box, violin, heatmap.
+- export_dataset(file_path, output_path, format="csv"): Export processed dataset.
 
-━━━ Operational Rules ━━━
-1. ALWAYS use `profile_dataset` first to understand schema, data types, and missing values.
-2. Prefer Polars for large datasets (>100k rows) due to multi-threading and memory efficiency.
-3. Handle missing data explicitly in your queries and statistical tests.
-4. When generating charts, ensure axes are labeled and titles are descriptive.
-5. TERMINATION: As soon as you have the data needed to answer the user's question, STOP calling tools and output {"reply": "your final answer"} WITHOUT a 'tool' key. NEVER repeat a tool call with identical parameters — the result is already in your context. If a tool result is missing, use the previous results to answer anyway.
-6. Respond with EXACTLY ONE valid JSON object per turn. No markdown formatting outside the JSON.
-"""
+OPERATIONAL RULES:
+1. Profile First: Use profile_dataset to understand data types, distributions, and null values before computing metrics.
+2. Structured Thinking: Always perform step-by-step reasoning in <thinking>...</thinking> before selecting tools or synthesizing insights.
+3. Statistical Rigor: Report sample size ($N$), test statistics ($t$, $F$, $\\chi^2$), and $p$-values with clear plain-language interpretations.
+4. Clean Output: When a chart is generated, reference its path clearly; format tabular findings cleanly using Markdown tables.""" + "\n" + TOOL_DISCIPLINE_BLOCK
 
     _TOOLS = frozenset({
         "profile_dataset", "execute_query", "statistical_test", 
         "generate_chart", "export_dataset"
     })
-
-    _RESERVED_PARAM_KEYS = frozenset({"thought", "tool", "reply", "params", "arguments"})
 
     def __init__(
         self,
@@ -137,127 +123,83 @@ You analyze complex datasets, generate rigorous statistical profiles, execute hi
             "generate_chart": self._tool_generate_chart,
             "export_dataset": self._tool_export_dataset,
         }
+        def _to_thread_wrapper(fn):
+            async def _wrapped(**kw):
+                return await asyncio.to_thread(fn, **kw)
+            return _wrapped
+
+        self._TOOL_MAP = {
+            k: _to_thread_wrapper(v)
+            for k, v in self._tool_registry.items()
+        }
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # Core Execution Loop
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     async def execute(self, task_id: str, message: str, context: dict[str, Any], entities: dict[str, Any]) -> str:
-        """Main ReAct execution loop for data analysis tasks."""
+        """Main ReAct execution loop for data analysis tasks using unified BaseAgent ReAct engine."""
         self._reset_state()
-        messages = self._build_messages(message, context)
-        executed_calls: set[tuple[str, str]] = set()
-        max_iterations = 8
-        
-        for step in range(max_iterations):
-            raw = await self._llm_call(
-                messages, 
-                task="data_analysis", 
-                require_json=True, 
-                temperature=0.1
-            )
-            parsed = self._parse_json(raw)
+
+        # ── P1 Bridge 4B: Consume structured AgentTask parameters directly ────
+        agent_task = getattr(self, "_current_agent_task", None) or (context.get("agent_task") if isinstance(context, dict) else None)
+        if agent_task and hasattr(agent_task, "operation") and agent_task.operation:
+            op = str(agent_task.operation or "").lower().strip()
+            params = dict(agent_task.parameters or {})
             
-            if not parsed:
-                messages.append({"role": "assistant", "content": raw})
-                messages.append({"role": "user", "content": "[SYSTEM] Invalid JSON format. Return exactly one valid JSON object without markdown wrappers."})
-                continue
+            tool_name = None
+            if any(k in op for k in ("profile", "summary", "stats", "load_csv")):
+                tool_name = "profile_dataset"
+            elif any(k in op for k in ("query", "sql", "filter")):
+                tool_name = "execute_query"
+            elif any(k in op for k in ("test", "correlation", "regression", "hypothesis")):
+                tool_name = "statistical_test"
+            elif any(k in op for k in ("chart", "plot", "graph", "visualize")):
+                tool_name = "generate_chart"
+            elif any(k in op for k in ("export", "save_dataset")):
+                tool_name = "export_dataset"
 
-            thought = parsed.get("thought", "")
-            tool = parsed.get("tool")
-            
-            if not tool:
-                final_reply = parsed.get("reply")
-                if not final_reply:
-                    # Model may return a summary object without a `reply`
-                    # key — surface it instead of dropping it.
-                    payload = {k: v for k, v in parsed.items() if k not in ("thought", "tool", "params", "arguments")}
-                    final_reply = json.dumps(payload, indent=2, default=str) if payload else "Analysis complete."
-                logger.info(f"Task {task_id} completed in {step + 1} steps.")
-                return final_reply
+            if tool_name and tool_name in self._tool_registry:
+                logger.info("[data_analyst] P1-4B: Direct execution of tool '%s'", tool_name)
+                try:
+                    res = await self._use_tool(tool_name, context=context, **params)
+                    res_str = str(res) if not isinstance(res, (dict, list)) else json.dumps(res, indent=2)
+                    self._partial_result = res_str
+                    return res_str
+                except Exception as ex:
+                    logger.warning("[data_analyst] Direct tool '%s' failed, falling back to ReAct: %s", tool_name, ex)
 
-            if tool not in self._TOOLS:
-                messages.append({"role": "assistant", "content": raw})
-                messages.append({"role": "user", "content": f"[ERROR] Unknown tool '{tool}'. Available: {list(self._TOOLS)}"})
-                continue
-
-            params = self._extract_tool_params(parsed)
-            messages.append({"role": "assistant", "content": raw})
-            
-            try:
-                # Execute tool asynchronously to prevent blocking the event loop
-                tool_func = self._tool_registry[tool]
-                call_params = dict(params)
-                call_params.pop("context", None)  # context is injected by the dispatcher
-
-                # Repetition guard: identical (tool, params) calls can never
-                # return new information — force the model to synthesize its
-                # answer instead of looping.
-                call_key = (tool, json.dumps(call_params, sort_keys=True, default=str))
-                if call_key in executed_calls:
-                    messages.append({"role": "user", "content": f"[ERROR] You already executed '{tool}' with identical parameters and received its result. Do not repeat calls. Answer the user now: output one JSON object with a 'reply' key and no 'tool' key."})
-                    continue
-                executed_calls.add(call_key)
-
-                res = await asyncio.to_thread(tool_func, context=context, **call_params)
-                messages.append({"role": "user", "content": f"[TOOL RESULT: {tool}]\n{res}"})
-            except TypeError as e:
-                hint = self._required_params_hint(tool_func)
-                logger.error(f"Tool {tool} failed: {str(e)}", exc_info=True)
-                messages.append({"role": "user", "content": f"[TOOL ERROR: {tool}]\n{type(e).__name__}: {str(e)}{hint}"})
-            except Exception as e:
-                logger.error(f"Tool {tool} failed: {str(e)}", exc_info=True)
-                messages.append({"role": "user", "content": f"[TOOL ERROR: {tool}]\n{type(e).__name__}: {str(e)}"})
-
-        return "Maximum analysis steps reached. Please refine the query or break it into smaller tasks."
-
-    def _extract_tool_params(self, parsed: dict) -> dict:
-        """Normalize tool arguments across the shapes models actually emit.
-
-        Models return `params`, OpenAI-style `arguments`, or flattened
-        top-level keys next to `tool`/`thought`. Collect all three.
-        """
-        params = parsed.get("params")
-        if not isinstance(params, dict):
-            params = {}
-        arguments = parsed.get("arguments")
-        if isinstance(arguments, dict):
-            for k, v in arguments.items():
-                params.setdefault(k, v)
-        for k, v in parsed.items():
-            if k in self._RESERVED_PARAM_KEYS:
-                continue
-            params.setdefault(k, v)
-        return params
-
-    def _required_params_hint(self, tool_func) -> str:
-        """Build a self-correction hint naming the tool's required params."""
+        # ── OpenAI Agents SDK Runner Execution ────────────────────────────────
         try:
-            sig = inspect.signature(tool_func)
-            required = [
-                name
-                for name, p in sig.parameters.items()
-                if p.default is inspect.Parameter.empty
-                and p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
-                and name != "context"
-            ]
-            return f" Required params: {required}." if required else ""
-        except (TypeError, ValueError):
-            return ""
+            final_out = await self.run_sdk_execution(
+                task_id=task_id,
+                message=message,
+                context=context,
+                max_turns=8,
+                task_type="data_analysis",
+                input_guardrails=[],
+                output_guardrails=[],
+            )
+            self._partial_result = final_out
+            return final_out
+        except Exception as sdk_exc:
+            logger.error("[data_analyst] SDK error: %s", sdk_exc)
+            return f"Task complete nahi hua: {str(sdk_exc)}"
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # Data Loading & Caching
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    def _resolve_path(self, file_path: str, context: dict[str, Any]) -> Path:
+    def _resolve_path(self, file_path: str, context: Optional[dict[str, Any]] = None) -> Path:
         """Resolves file path relative to the workspace directory."""
         p = Path(file_path)
         if p.is_absolute():
             return p
-        workspace = context.get("workspace_dir", os.getcwd())
+        eff_ctx = context if context is not None else (getattr(self, "_current_context", {}) or {})
+        workspace = eff_ctx.get("workspace_dir", os.getcwd()) if isinstance(eff_ctx, dict) else os.getcwd()
         return Path(workspace) / p
 
-    def _load_dataframe(self, file_path: str, context: dict[str, Any]) -> CachedDataFrame:
+    def _load_dataframe(self, file_path: str, context: Optional[dict[str, Any]] = None) -> CachedDataFrame:
         """Loads and caches a dataframe, checking for file modifications."""
         resolved_path = self._resolve_path(file_path, context)
         if not resolved_path.exists():
@@ -280,8 +222,13 @@ You analyze complex datasets, generate rigorous statistical profiles, execute hi
                 df = pl.read_csv(resolved_path, infer_schema_length=10000)
             elif ext == ".parquet":
                 df = pl.read_parquet(resolved_path)
-            elif ext in [".json", ".jsonl", ".ndjson"]:
+            elif ext in [".jsonl", ".ndjson"]:
                 df = pl.read_ndjson(resolved_path)
+            elif ext == ".json":
+                try:
+                    df = pl.read_json(resolved_path)
+                except Exception:
+                    df = pl.read_ndjson(resolved_path)
             else:
                 raise ValueError(f"Unsupported file extension for Polars: {ext}")
             shape = df.shape
@@ -291,8 +238,13 @@ You analyze complex datasets, generate rigorous statistical profiles, execute hi
                 df = pd.read_csv(resolved_path)
             elif ext == ".parquet":
                 df = pd.read_parquet(resolved_path)
-            elif ext in [".json", ".jsonl"]:
+            elif ext in [".jsonl", ".ndjson"]:
                 df = pd.read_json(resolved_path, lines=True)
+            elif ext == ".json":
+                try:
+                    df = pd.read_json(resolved_path)
+                except Exception:
+                    df = pd.read_json(resolved_path, lines=True)
             else:
                 raise ValueError(f"Unsupported file extension for Pandas: {ext}")
             shape = df.shape
@@ -307,7 +259,7 @@ You analyze complex datasets, generate rigorous statistical profiles, execute hi
     # Tool Implementations
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    def _tool_profile_dataset(self, file_path: str, context: dict[str, Any], **kwargs) -> str:
+    def _tool_profile_dataset(self, file_path: str, context: Optional[dict[str, Any]] = None, **kwargs) -> str:
         """Generates a comprehensive statistical profile of the dataset."""
         cached = self._load_dataframe(file_path, context)
         df, engine = cached.df, cached.engine
@@ -351,7 +303,7 @@ You analyze complex datasets, generate rigorous statistical profiles, execute hi
 
         return json.dumps(profile, indent=2, default=str)
 
-    def _tool_execute_query(self, file_path: str, query: str, context: dict[str, Any], engine: str = "auto", **kwargs) -> str:
+    def _tool_execute_query(self, file_path: str, query: str, context: Optional[dict[str, Any]] = None, engine: str = "auto", **kwargs) -> str:
         """Executes a SQL or DataFrame query against the dataset."""
         cached = self._load_dataframe(file_path, context)
         df, current_engine = cached.df, cached.engine
@@ -369,7 +321,18 @@ You analyze complex datasets, generate rigorous statistical profiles, execute hi
             table_name = re.sub(r"[^a-zA-Z0-9_]", "_", Path(file_path).stem).lower()
             if not table_name or not table_name[0].isalpha() and table_name[0] != "_":
                 table_name = f"t_{table_name}"
-            ctx = pl.SQLContext(**{table_name: df, "df": df}, eager_execution=True)
+            frames = {
+                table_name: df,
+                "df": df,
+                "data": df,
+                "dataset": df,
+                "table": df,
+                "t": df,
+            }
+            try:
+                ctx = pl.SQLContext(**frames, eager=True)
+            except (TypeError, ValueError):
+                ctx = pl.SQLContext(**frames, eager_execution=True)
             result_df = ctx.execute(query)
         elif engine == "pandas" and HAS_PANDAS:
             # Fallback to pandas query
@@ -388,7 +351,7 @@ You analyze complex datasets, generate rigorous statistical profiles, execute hi
 
         return json.dumps({"shape": list(shape), "preview": head_data}, indent=2, default=str)
 
-    def _tool_statistical_test(self, file_path: str, test_type: str, col1: str, context: dict[str, Any], col2: str = None, group_col: str = None, **kwargs) -> str:
+    def _tool_statistical_test(self, file_path: str, test_type: str, col1: str, context: Optional[dict[str, Any]] = None, col2: Optional[str] = None, group_col: Optional[str] = None, **kwargs) -> str:
         """Performs statistical hypothesis testing using SciPy."""
         if not HAS_SCIPY or not HAS_NUMPY:
             return "SciPy or NumPy not installed. Cannot perform statistical tests."
@@ -441,7 +404,18 @@ You analyze complex datasets, generate rigorous statistical profiles, execute hi
 
         return json.dumps(result, indent=2)
 
-    def _tool_generate_chart(self, file_path: str, chart_type: str, x: str, y: str, context: dict[str, Any], hue: str = None, title: str = "Chart", **kwargs) -> str:
+    def _tool_generate_chart(
+        self,
+        file_path: str,
+        chart_type: str,
+        x: str,
+        y: str,
+        context: Optional[dict[str, Any]] = None,
+        hue: Optional[str] = None,
+        title: str = "Chart",
+        output_path: Optional[str] = None,
+        **kwargs: Any,
+    ) -> str:
         """Generates and saves a visualization using Seaborn/Matplotlib."""
         if not HAS_PLOT:
             return "Matplotlib or Seaborn not installed. Cannot generate charts."
@@ -478,20 +452,26 @@ You analyze complex datasets, generate rigorous statistical profiles, execute hi
             plt.xticks(rotation=45, ha="right")
             plt.tight_layout()
 
-            workspace = context.get("workspace_dir", os.getcwd())
-            output_dir = Path(workspace) / "charts"
-            output_dir.mkdir(parents=True, exist_ok=True)
+            dest_path = output_path or kwargs.get("output_path") or kwargs.get("target_path") or kwargs.get("destination")
+            if dest_path:
+                final_output_path = Path(dest_path)
+                final_output_path.parent.mkdir(parents=True, exist_ok=True)
+            else:
+                eff_ctx = context if context is not None else (getattr(self, "_current_context", {}) or {})
+                workspace = eff_ctx.get("workspace_dir", os.getcwd()) if isinstance(eff_ctx, dict) else os.getcwd()
+                output_dir = Path(workspace) / "charts"
+                output_dir.mkdir(parents=True, exist_ok=True)
+                filename = f"chart_{uuid.uuid4().hex[:8]}.png"
+                final_output_path = output_dir / filename
+
+            fig.savefig(str(final_output_path), dpi=150, bbox_inches="tight")
             
-            filename = f"chart_{uuid.uuid4().hex[:8]}.png"
-            output_path = output_dir / filename
-            fig.savefig(output_path, dpi=150, bbox_inches="tight")
-            
-            return json.dumps({"status": "success", "path": str(output_path), "chart_type": chart_type})
+            return json.dumps({"status": "success", "path": str(final_output_path), "chart_type": chart_type})
             
         finally:
             plt.close(fig)
 
-    def _tool_export_dataset(self, file_path: str, output_path: str, context: dict[str, Any], format: str = "csv", **kwargs) -> str:
+    def _tool_export_dataset(self, file_path: str, output_path: str, context: Optional[dict[str, Any]] = None, format: str = "csv", **kwargs) -> str:
         """Exports the processed dataset to a specified format."""
         cached = self._load_dataframe(file_path, context)
         df, engine = cached.df, cached.engine
@@ -519,29 +499,12 @@ You analyze complex datasets, generate rigorous statistical profiles, execute hi
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     def _parse_json(self, text: str) -> Optional[dict]:
-        """Robust JSON parser with fallback extraction strategies."""
+        """Robust JSON parser using unified try_parse_json."""
         if not text:
             return None
+        if self.ai_handler and hasattr(self.ai_handler, "try_parse_json"):
+            return self.ai_handler.try_parse_json(text)
         try:
             return json.loads(text)
-        except json.JSONDecodeError:
-            pass
-        
-        # Extract from markdown code blocks
-        match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
-        if match:
-            try:
-                return json.loads(match.group(1))
-            except json.JSONDecodeError:
-                pass
-                
-        # Extract from raw text boundaries
-        start = text.find('{')
-        end = text.rfind('}')
-        if start != -1 and end != -1 and end > start:
-            try:
-                return json.loads(text[start:end+1])
-            except json.JSONDecodeError:
-                pass
-                
-        return None
+        except Exception:
+            return None

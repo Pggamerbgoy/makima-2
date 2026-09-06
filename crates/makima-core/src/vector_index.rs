@@ -10,13 +10,18 @@ use pyo3::prelude::*;
 use rand::Rng;
 use std::collections::HashMap;
 
+#[allow(dead_code)]
 const M: usize = 16;           // Max connections per layer
+#[allow(dead_code)]
 const EF_CONSTRUCTION: usize = 200;
+#[allow(dead_code)]
 const EF_SEARCH: usize = 50;
+#[allow(dead_code)]
 const ML: f64 = 0.36067376022224085; // 1.0 / ln(16)
 
 #[derive(Clone)]
 struct Node {
+    #[allow(dead_code)]
     id: String,
     vector: Vec<f32>,
     neighbors: Vec<Vec<String>>,  // neighbors[layer] = vec of ids
@@ -204,18 +209,43 @@ impl VectorIndex {
                 Err(_) => return 0,
             };
             let count = parsed.len();
-            // We need to add them through the normal path, but since we're
-            // inside allow_threads, we rebuild manually
             let mut nodes = self.nodes.write();
             nodes.clear();
-            for (id, vector) in parsed {
+
+            // First pass: insert all nodes with empty neighbors
+            for (id, vector) in &parsed {
                 let node = Node {
                     id: id.clone(),
-                    vector,
+                    vector: vector.clone(),
                     neighbors: vec![Vec::new()],
                 };
-                nodes.insert(id, node);
+                nodes.insert(id.clone(), node);
             }
+
+            // Second pass: rebuild layer-0 neighbor connections
+            let ids: Vec<String> = nodes.keys().cloned().collect();
+            for id in &ids {
+                let vector = nodes[id].vector.clone();
+                let mut candidates: Vec<(OrderedFloat<f32>, String)> = ids.iter()
+                    .filter(|nid| *nid != id)
+                    .map(|nid| (OrderedFloat(cosine_similarity(&vector, &nodes[nid].vector)), nid.clone()))
+                    .collect();
+                candidates.sort_by(|a, b| b.0.cmp(&a.0));
+                candidates.truncate(M);
+                if let Some(node) = nodes.get_mut(id) {
+                    node.neighbors[0] = candidates.into_iter().map(|(_, nid)| nid).collect();
+                }
+            }
+
+            // Reset entry point to the node with the most connections
+            let best_entry = nodes.iter()
+                .max_by_key(|(_, n)| n.neighbors[0].len())
+                .map(|(id, _)| id.clone());
+            drop(nodes);
+
+            let mut entry = self.entry_point.write();
+            *entry = best_entry;
+
             count
         });
         Ok(count)

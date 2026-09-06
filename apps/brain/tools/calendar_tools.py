@@ -127,38 +127,92 @@ async def add_time_block(title: str, date_str: str, start_hour: int, duration_ho
         logger.error(f"add_time_block failed: {e}")
         return {"status": "error", "message": f"Failed to add time block: {str(e)}"}
 
-async def register_calendar_tools(registry: Any) -> None:
+def register_calendar_tools(registry: Any) -> None:
     """Registers all calendar tools into the Makima OS tool registry."""
     try:
-        registry.add_tool(
-            name="schedule_meeting", coroutine=schedule_meeting,
-            description="Schedule a new meeting with attendees and location, checking for conflicts.",
-            parameters={"type": "object", "properties": {
-                "title": {"type": "string"}, "start_time": {"type": "string", "description": "ISO8601 datetime"},
-                "end_time": {"type": "string", "description": "ISO8601 datetime"}, "attendees": {"type": "array", "items": {"type": "string"}},
-                "location": {"type": "string"}}, "required": ["title", "start_time", "end_time", "attendees", "location"]}
-        )
-        registry.add_tool(
-            name="check_schedule_conflicts", coroutine=check_schedule_conflicts,
-            description="Check for existing schedule conflicts within a given time range.",
-            parameters={"type": "object", "properties": {
-                "start_time": {"type": "string"}, "end_time": {"type": "string"}}, "required": ["start_time", "end_time"]}
-        )
-        registry.add_tool(
-            name="find_available_slots", coroutine=find_available_slots,
-            description="Find available time slots on a specific date within working hours.",
-            parameters={"type": "object", "properties": {
-                "date_str": {"type": "string", "description": "YYYY-MM-DD"}, "duration_minutes": {"type": "integer"},
-                "working_hours": {"type": "array", "items": {"type": "integer"}, "description": "[start_hour, end_hour]"}}, 
-                "required": ["date_str", "duration_minutes", "working_hours"]}
-        )
-        registry.add_tool(
-            name="add_time_block", coroutine=add_time_block,
-            description="Add a dedicated time block (e.g., deep work) to the calendar.",
-            parameters={"type": "object", "properties": {
-                "title": {"type": "string"}, "date_str": {"type": "string"}, "start_hour": {"type": "integer"},
-                "duration_hours": {"type": "number"}}, "required": ["title", "date_str", "start_hour", "duration_hours"]}
-        )
+        tools = [
+            {
+                "name": "schedule_meeting",
+                "func": schedule_meeting,
+                "description": "Call this tool EXCLUSIVELY when asked to schedule a new meeting. It requires attendees and location, and will automatically check for conflicts.",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "description": "Meeting title or subject"},
+                        "start_time": {"type": "string", "description": "Start datetime in ISO8601 format (e.g. 2026-08-21T14:00:00)"},
+                        "end_time": {"type": "string", "description": "End datetime in ISO8601 format (e.g. 2026-08-21T15:00:00)"},
+                        "attendees": {"type": "array", "items": {"type": "string"}, "description": "List of attendee email addresses or names"},
+                        "location": {"type": "string", "description": "Meeting room or virtual link"},
+                    },
+                    "required": ["title", "start_time", "end_time", "attendees", "location"],
+                },
+                "category": "calendar",
+            },
+            {
+                "name": "check_schedule_conflicts",
+                "func": check_schedule_conflicts,
+                "description": "Call this tool EXCLUSIVELY to check if the user has any existing calendar conflicts within a given time range.",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "start_time": {"type": "string", "description": "Start datetime in ISO8601 format"},
+                        "end_time": {"type": "string", "description": "End datetime in ISO8601 format"},
+                    },
+                    "required": ["start_time", "end_time"],
+                },
+                "category": "calendar",
+            },
+            {
+                "name": "find_available_slots",
+                "func": find_available_slots,
+                "description": "Call this tool EXCLUSIVELY to find available free time slots on a specific date within the user's working hours.",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "date_str": {"type": "string", "description": "Target date in YYYY-MM-DD format"},
+                        "duration_minutes": {"type": "integer", "description": "Required slot duration in minutes", "default": 30},
+                        "working_hours": {"type": "array", "items": {"type": "integer"}, "description": "Start and end hour range in 24h format, e.g. [9, 17]"},
+                    },
+                    "required": ["date_str", "duration_minutes", "working_hours"],
+                },
+                "category": "calendar",
+            },
+            {
+                "name": "add_time_block",
+                "func": add_time_block,
+                "description": "Call this tool EXCLUSIVELY when the user asks to block out dedicated focus or deep work time on their calendar.",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "description": "Title or label for the time block (e.g. 'Deep Work')"},
+                        "date_str": {"type": "string", "description": "Target date in YYYY-MM-DD format"},
+                        "start_hour": {"type": "integer", "description": "Start hour in 24h format (0-23)"},
+                        "duration_hours": {"type": "number", "description": "Duration in hours (e.g. 1.5)"},
+                    },
+                    "required": ["title", "date_str", "start_hour", "duration_hours"],
+                },
+                "category": "calendar",
+            },
+        ]
+        for t in tools:
+            if hasattr(registry, "register"):
+                registry.register(
+                    name=t["name"],
+                    func=t["func"],
+                    description=t["description"],
+                    schema=t["schema"],
+                    category=t["category"],
+                )
+            elif hasattr(registry, "add_tool"):
+                registry.add_tool(
+                    name=t["name"],
+                    func=t["func"],
+                    description=t["description"],
+                    schema=t["schema"],
+                    category=t["category"],
+                )
+            else:
+                registry[t["name"]] = t["func"]
         logger.info("Successfully registered 4 advanced calendar tools.")
     except Exception as e:
         logger.error(f"Failed to register calendar tools: {e}")

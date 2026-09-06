@@ -10,18 +10,12 @@ import asyncio
 import json
 import logging
 import re
+import sys
 import tempfile
 import traceback
 from ast import NodeVisitor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-
-# Zero-crash resilience: Optional high-performance event loop
-try:
-    import uvloop
-    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-except ImportError:
-    pass
 
 # Zero-crash resilience: Optional shutil for temp dir cleanup
 try:
@@ -29,7 +23,7 @@ try:
 except ImportError:
     shutil = None
 
-from .base_agent import BaseAgent
+from .base_agent import BaseAgent, TOOL_DISCIPLINE_BLOCK
 
 logger = logging.getLogger("makima.agents.code")
 
@@ -55,7 +49,7 @@ class SecurityNodeVisitor(NodeVisitor):
             if alias.name.split('.')[0] in self.DANGEROUS_MODULES:
                 self.warnings.append(f"Unsafe import: {alias.name} at line {node.lineno}")
         self.generic_visit(node)
-        
+
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         if node.module and node.module.split('.')[0] in self.DANGEROUS_MODULES:
             self.warnings.append(f"Unsafe import: from {node.module} at line {node.lineno}")
@@ -69,44 +63,156 @@ class CodeAgent(BaseAgent):
     AGENT_TOOLS = ["run_code", "format_code", "lint_code"]
     TAGS = ["code", "programming", "python", "rust", "sandbox", "ast"]
 
-    SYSTEM_PROMPT = """You are Makima's Elite Code Agent, an expert software engineer.
-Capabilities:
-- Generate production-ready, highly optimized, and secure code.
-- Refactor existing codebases with multi-file precision.
-- Debug complex tracebacks and resolve architectural flaws.
-- Execute code securely and interpret the results.
+    SYSTEM_PROMPT = """You are Makima's Elite Code Agent, a principal software engineer and systems architect.
+You write robust, production-grade, modular, and secure code across Python, Rust, TypeScript, and Go.
 
-Strict Rules:
-1. ALWAYS use markdown code blocks with language tags (e.g., ```python).
-2. For multi-file outputs, specify the filename in the tag (e.g., ```python:src/main.py).
-3. Ensure all Python code is syntactically valid and passes AST parsing.
-4. Never use dangerous functions (eval, exec, os.system) unless explicitly requested for a specific secure sandbox context.
-5. Provide brief, high-signal architectural explanations. Avoid fluff.
-6. If fixing an error, output ONLY the corrected code blocks and a 1-sentence summary of the fix.
-"""
+CORE ENGINEERING RULES:
+1. Structured Thinking: Always decompose the problem, enumerate boundary edge cases, and plan the architecture inside a <thinking>...</thinking> block before generating code.
+2. Zero Stubs & Complete Code: Never output lazy placeholders (e.g. '// TODO', 'pass', '...'). Always provide complete, working implementations.
+3. Strict Syntax & Type Safety: Ensure all generated code is syntactically flawless, statically type-annotated, and passes AST validation.
+4. Markdown File Tagging: ALWAYS use language-tagged markdown blocks with optional file paths (e.g. ```python:src/engine.py).
+5. Security First: Never use dangerous built-ins (eval, exec, unvalidated subprocess calls) without rigorous sanitization and sandboxing.
+6. Error Remediation: When fixing a bug, provide the root cause diagnosis, the exact corrected snippet, and an explanation of the fix.""" + "\n" + TOOL_DISCIPLINE_BLOCK
+
+    def __init__(
+        self,
+        ai_handler: Any = None,
+        memory: Any = None,
+        tool_registry: Any = None,
+        ws_broadcast: Any = None,
+        orchestrator: Any = None,
+        guardrails: Any = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(ai_handler, memory, tool_registry, ws_broadcast, orchestrator, guardrails, **kwargs)
+        self._TOOL_MAP = {
+            "run_code": self._tool_run_code,
+            "format_code": self._tool_format_code,
+            "lint_code": self._tool_lint_code,
+        }
+
+    async def _tool_run_code(self, code: str = "", timeout: Any = 15, **kwargs: Any) -> dict[str, Any]:
+        """Execute code in a secure sandbox."""
+        if not code:
+            return {"stdout": "", "stderr": "No code provided", "returncode": -1}
+        try:
+            timeout_val = int(timeout)
+        except (ValueError, TypeError):
+            timeout_val = 15
+        return await self._execute_in_sandbox(code, timeout=timeout_val)
+
+    async def _tool_format_code(self, code: str = "", language: str = "python", **kwargs: Any) -> str:
+        """Format source code."""
+        if not code:
+            return ""
+        if language.lower() == "python":
+            try:
+                parsed = ast.parse(code)
+                return ast.unparse(parsed)
+            except Exception:
+                return code
+        return code
+
+    async def _tool_lint_code(self, code: str = "", language: str = "python", **kwargs: Any) -> dict[str, Any]:
+        """Lint source code for syntax and AST errors."""
+        if not code:
+            return {"valid": False, "errors": ["No code provided"], "warnings": []}
+        if language.lower() == "python":
+            valid, err = self._validate_python_ast(code)
+            warnings = self._scan_security(code)
+            return {
+                "valid": valid,
+                "errors": [err] if err else [],
+                "warnings": warnings,
+            }
+        return {"valid": True, "errors": [], "warnings": []}
 
     async def execute(self, task_id: str, message: str, context: dict[str, Any], entities: dict[str, Any]) -> str:
-        self._reset_state()
         try:
-            # 1. Intent Analysis
-            raw_intent = await self._analyze_intent(message)
-            intent_data = raw_intent if isinstance(raw_intent, dict) else {}
+            raw_response = await self.run_sdk_execution(
+                task_id=task_id,
+                message=message,
+                context=context,
+                max_turns=8,
+                task_type="code",
+            )
+
+            # AST Validation & Healing on generated code blocks
+            blocks = self._extract_code_blocks(raw_response)
+            if blocks:
+                healed_blocks = []
+                execution_results = []
+                for block in blocks:
+                    if block["lang"] == "python":
+                        code = block["code"]
+                        is_valid, err = self._validate_python_ast(code)
+                        ast_retries = 0
+                        while not is_valid and ast_retries < 3:
+                            code = await self._self_heal_code(code, err, block["filename"])
+                            is_valid, err = self._validate_python_ast(code)
+                            ast_retries += 1
+                        sec_warnings = self._scan_security(code)
+                        block["code"] = code
+                        block["ast_valid"] = is_valid
+                        block["ast_error"] = err
+                        block["sec_warnings"] = sec_warnings
+                    healed_blocks.append(block)
+                healed_response = self._extract_and_replace(raw_response, healed_blocks)
+                diagnostics = self._format_diagnostics(healed_blocks, execution_results)
+                if diagnostics:
+                    healed_response += f"\n\n---\n### 🔍 Diagnostics & Execution\n{diagnostics}"
+                final_out = healed_response
+            else:
+                final_out = raw_response or "Code generation completed."
+
+            self._partial_result = final_out
+            return final_out
+        except Exception as sdk_exc:
+            logger.warning("[code] SDK Runner encountered exception, falling back: %s", sdk_exc)
+
+        try:
+            # ── P1 Bridge 4B: Consume structured AgentTask parameters first ───
+            agent_task = getattr(self, "_current_agent_task", None) or context.get("agent_task")
+            intent_data = None
+
+            if agent_task:
+                params = dict(agent_task.parameters or {})
+                task_intent = str(agent_task.operation or params.get("intent") or "generate").lower()
+                target_file = agent_task.target_entity if (agent_task.target_entity and any(x in agent_task.target_entity for x in (".", "/", "\\"))) else None
+                files = params.get("files") or ([target_file] if target_file else [])
+                query = params.get("query")
+                needs_search = bool(params.get("needs_search") or query)
+                needs_context = bool(params.get("needs_context") or files)
+                intent_data = {
+                    "intent": task_intent,
+                    "needs_context": needs_context,
+                    "files": files,
+                    "needs_search": needs_search,
+                    "query": query,
+                }
+                logger.info("[code] P1-4B: Consumed structured AgentTask parameters directly (intent=%s, files=%s)", task_intent, files)
+
+            # Legacy fallback: analyze intent via fast LLM call
+            if not intent_data:
+                raw_intent = await self._analyze_intent(message)
+                intent_data = raw_intent if isinstance(raw_intent, dict) else {}
+
             intent = intent_data.get("intent", "generate")
-            
+
             # 2. Context & Search Gathering
             extra_context = ""
             if intent_data.get("needs_search") and intent_data.get("query"):
                 search_res = await self._use_tool("web_search", query=intent_data["query"])
                 extra_context += f"\n[Web Search Results]\n{search_res}\n"
-                
+
             if intent_data.get("needs_context") and intent_data.get("files"):
                 file_context = await self._fetch_context(intent_data["files"])
                 extra_context += f"\n[Workspace Context]\n{file_context}\n"
-                
+
             # 3. Initial Generation
             messages = self._build_messages(message, context, extra_system=extra_context)
             raw_response = await self._llm_call(messages, task="code")
-            
+
             # 4. Code Extraction & Validation/Healing
             blocks = self._extract_code_blocks(raw_response)
             if not blocks:
@@ -115,7 +221,7 @@ Strict Rules:
 
             healed_blocks = []
             execution_results = []
-            
+
             for block in blocks:
                 if block["lang"] == "python":
                     code = block["code"]
@@ -123,7 +229,8 @@ Strict Rules:
                     # AST Validation & Healing
                     is_valid, err = self._validate_python_ast(code)
                     ast_retries = 0
-                    while not is_valid and ast_retries < 2:
+                    MAX_SELF_HEAL_RETRIES = 5
+                    while not is_valid and ast_retries < MAX_SELF_HEAL_RETRIES:
                         code = await self._self_heal_code(code, err, block["filename"])
                         is_valid, err = self._validate_python_ast(code)
                         ast_retries += 1
@@ -213,7 +320,7 @@ Strict Rules:
 
     def _extract_code_blocks(self, text: str) -> List[Dict[str, Any]]:
         """Extracts markdown code blocks with language and optional filename."""
-        pattern = re.compile(r"```(\w+)(?::([^\s\n]+))?\n(.*?)```", re.DOTALL)
+        pattern = re.compile(r"```([a-zA-Z0-9_\-\+]+)(?::([^\s\r\n]+))?[ \t]*\r?\n(.*?)```", re.DOTALL)
         blocks = []
         for match in pattern.finditer(text):
             lang = match.group(1).lower()
@@ -270,20 +377,51 @@ Strict Rules:
             logger.warning("[code] Self-heal failed: %s", e)
         return original_code
 
-    async def _execute_in_sandbox(self, code: str, timeout: int = 15) -> Dict[str, Any]:
-        """Dispatches code to a secure sandbox or falls back to restricted local execution."""
+    async def _execute_in_sandbox(self, code: str, timeout: int = 15, allow_local_fallback: bool = True) -> Dict[str, Any]:
+        """Dispatch code through configured sandbox with safe isolated subprocess fallback."""
         if self.tool_registry and hasattr(self.tool_registry, "_tools") and "execute_python_sandbox" in self.tool_registry._tools:
             try:
                 result = await self._use_tool("execute_python_sandbox", code=code, timeout=timeout)
+                if isinstance(result, dict):
+                    return {
+                        "stdout": result.get("stdout", ""), 
+                        "stderr": result.get("stderr", ""), 
+                        "returncode": result.get("returncode", -1)
+                    }
+                elif isinstance(result, str):
+                    try:
+                        parsed = json.loads(result)
+                        if isinstance(parsed, dict):
+                            return {
+                                "stdout": parsed.get("stdout", ""),
+                                "stderr": parsed.get("stderr", ""),
+                                "returncode": parsed.get("returncode", -1)
+                            }
+                    except Exception:
+                        pass
+                    return {"stdout": result, "stderr": "", "returncode": 0 if not self._tool_failed(result) else -1}
                 return {
-                    "stdout": result.get("stdout", ""), 
-                    "stderr": result.get("stderr", ""), 
-                    "returncode": result.get("returncode", -1)
+                    "stdout": str(result) if result else "",
+                    "stderr": "",
+                    "returncode": 0
                 }
             except Exception as e:
-                logger.warning("Sandbox tool failed, falling back to local restricted execution: %s", e)
+                logger.error("Sandbox tool failed: %s", e)
+                if not allow_local_fallback:
+                    return {
+                        "stdout": "",
+                        "stderr": f"Secure code sandbox failed: {e}",
+                        "returncode": -1,
+                    }
 
-        return await self._local_subprocess_exec(code, timeout)
+        if allow_local_fallback:
+            return await self._local_subprocess_exec(code, timeout=timeout)
+
+        return {
+            "stdout": "",
+            "stderr": "Secure code sandbox is unavailable; local execution was refused.",
+            "returncode": -1,
+        }
 
     async def _local_subprocess_exec(self, code: str, timeout: int) -> Dict[str, Any]:
         """Executes code locally with strict timeouts and isolated environment."""
@@ -293,7 +431,8 @@ Strict Rules:
             file_path.write_text(code, encoding="utf-8")
             
             # python -I runs in isolated mode (ignores env vars and user site-packages)
-            cmd = ["python", "-I", "-u", str(file_path)]
+            python_bin = sys.executable or "python"
+            cmd = [python_bin, "-I", "-u", str(file_path)]
             
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -335,7 +474,7 @@ Strict Rules:
 
     def _extract_and_replace(self, text: str, processed_blocks: List[Dict[str, Any]]) -> str:
         """Replaces original code blocks in the text with healed/validated versions."""
-        pattern = re.compile(r"```(\w+)(?::([^\s\n]+))?\n(.*?)```", re.DOTALL)
+        pattern = re.compile(r"```([a-zA-Z0-9_\-\+]+)(?::([^\s\r\n]+))?[ \t]*\r?\n(.*?)```", re.DOTALL)
         block_iter = iter(processed_blocks)
         
         def replacer(match: re.Match) -> str:

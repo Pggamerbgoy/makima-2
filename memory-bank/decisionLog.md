@@ -1,8 +1,61 @@
 # Decision Log — Makima Subsystem Architecture & Module Verification
 
-Date: 2026-08-04  
-Tier: Tier 3 (RAG Memory Layer — Local ONNX Embeddings + Hybrid Search)  
-Skills active: master-workflow, module-design, rigorous-code-development  
+Date: 2026-08-27  
+Tier: Tier 2 (DAG Engine & Multi-Agent Execution Hardening)  
+Skills active: master-workflow, codebase-gap-analysis, rigorous-code-development  
+
+### DECISION: Comprehensive Multi-Agent Ecosystem Optimization & Resilience Hardening
+* **Problem / Goal**: Autonomously audit all existing agent files across `apps/brain/agents/`, find architectural gaps, add missing error handling, optimize execution logic, and refactor directly without test files.
+* **Refactors & Improvements Implemented**:
+  1. **`research_agent.py`**:
+     - Hardened snippet parsing in `_parse_search_results` against `None` values for `url`, `title`, and `snippet` fields.
+     - Added null/empty string safety in `_calculate_keyword_relevance`.
+  2. **`code_agent.py`**:
+     - Updated markdown code block extraction regex in `_extract_code_blocks` and `_extract_and_replace` to support multi-character language tags, whitespace/tabs, and CRLF line endings.
+  3. **`creative_agent.py`**:
+     - Added an eviction cap (max 256 items) to prevent unbounded memory growth in `_cache`.
+     - Harmonized `execute()` method signature with `BaseAgent` (`entities: Optional[Dict[str, Any]] = None`).
+  4. **`automation_agent.py`**:
+     - Added safe type casting for `delay_seconds` in `_handle_set_reminder` (handling numeric strings and floats).
+     - Guarded `WorkflowEngine._run` against non-dict `step.params` before unpacking.
+  5. **`memory_agent.py`**:
+     - Enhanced `_execute_memory_forget` cache invalidation to use `await self.semantic_cache.invalidate_matching(target_str)` for complete multi-query cache invalidation.
+  6. **`devops_agent.py`**:
+     - Ensured `_tool_docker_inspect` output is cleanly stripped with a JSON object fallback.
+  7. **`data_analyst_agent.py`, `media_agent.py`, `browser_agent.py`, `security_agent.py`, `messaging_agent.py`**:
+     - Applied null-safety, tool manifest synchronization, and JSON parsing resilience.
+* **Verification**:
+  - All 17 agent and subsystem files compiled cleanly (`python -m py_compile`, exit code 0).
+  - Manual line-by-line inspection verified per 5-point adversarial checklist. Zero test files created.
+* **Residual Risk**: Runtime calls to external binaries (Docker/K8s/Playwright/PowerShell) require proper host environment availability.
+
+---
+
+### DECISION: Enhanced DAG Engine & Multi-Agent Tool/Data Resilience
+* **Problem / Goal**: Audit and improve Makima's core DAG engine (`dag_engine.py`) and agent execution layers without relying on unit test files.
+* **Root Causes & Issues Identified**:
+  1. `DAGPlan.from_decomposition_result` only read `assigned_agent` on `SubtaskNode` instead of `agent_name`, causing all subtasks from `DecompositionResult` to lose their assigned agent and fall through without dispatching.
+  2. Subtask tool specifications (`required_tools`, `required_capabilities`, `parameters`) were dropped when constructing `DAGPlan`.
+  3. `DAGEngine.execute_plan` did not fast-circuit-break when upstream dependencies failed, resulting in loop stalls until deadlock cleanup.
+  4. Previous node outputs (`_previous_results`) and contextual entity slots were not piped down to dependent nodes during wave execution.
+  5. `media_agent.py` had a potential `NoneType.lower()` exception when calculating candidate title similarities.
+  6. `browser_agent.py` listed `browser_parallel_scrape` and `browser_parallel_search` in tools and prompt but lacked corresponding `_tool_` method implementations.
+  7. `security_agent.py` port scanner silently dropped string-typed port inputs (`["80", "443"]`) from LLM outputs.
+  8. `data_analyst_agent.py` raised parse errors when loading standard JSON array files under Polars/Pandas because it assumed all `.json` files were newline-delimited (`ndjson`).
+  9. `messaging_agent.py` broadcast engine did not pass the agent instance to `ContactResolver`.
+* **Resolution Implemented**:
+  1. Updated `apps/brain/core/dag_engine.py`: Extracted `agent_name`, `required_tools`, `required_capabilities`, and `parameters` in `from_decomposition_result`; added upstream dependency failure circuit breaker; piped `_previous_results` into downstream kernel dispatches; added retry backoff.
+  2. Updated `apps/brain/agents/media_agent.py`: Added null-safety guards in `_score_match` and title extraction.
+  3. Updated `apps/brain/agents/browser_agent.py`: Implemented `_tool_browser_parallel_scrape` and `_tool_browser_parallel_search`.
+  4. Updated `apps/brain/agents/security_agent.py`: Cleaned and cast string/int port numbers (1-65535).
+  5. Updated `apps/brain/agents/data_analyst_agent.py`: Supported both standard JSON array and NDJSON parsing.
+  6. Updated `apps/brain/agents/messaging_agent.py`: Routed agent instance through `draft_batch` and `_handle_broadcast`.
+* **Verification**:
+  - `python -m py_compile` across all modified core and agent files passed with exit code 0.
+  - Manual code inspection performed per 5-point adversarial checklist. No test files created.
+* **Residual Risk**: External network calls in real browser/port-scan actions depend on OS permissions and network availability.
+
+---  
 
 ### DECISION: EternalMemory upgraded from keyword-only to hybrid semantic retrieval (v8.1)
 * **Problem / Goal**: `EternalMemory.search()` was pure SQL `LIKE %query%` keyword search (its own docstring called it the "Keyword search fallback"; the Rust `_rust_index` facade was a dead stub). Users asked for real memory semantics ("socho memory ki tarah... and vector?"). Decision: SQLite stays the source of truth (exact lookup, time filters, forget cascade); the vector index is a projection on top — NOT a SQL replacement.
@@ -162,3 +215,24 @@ Skills active: master-workflow, rigorous-code-development, problem-reasoning, mo
 - **Groq API Backend**: Verified live via `MAKIMA_GROQ_KEY` in `.env`. Responded successfully with `llama-3.3-70b-versatile`.
 - **OpenRouter Free Tier Backend**: Verified key `MAKIMA_OPENROUTER_KEY` loaded for coding/fallback tasks.
 - **Privacy Mode Enforcement (Rule 5)**: Verified hard privacy checks across `BrowserAgent`, `MediaAgent`, and `SpeechOrchestrator`.
+
+---
+
+Date: 2026-08-27  
+Tier: Tier 1 (Autonomous Ecosystem Hardening & Complete Tool Registration)  
+Skills active: master-workflow, codebase-gap-analysis, rigorous-code-development  
+
+### DECISION: Autonomous Ecosystem Hardening & Complete Agent Tool Registration
+* **Problems Addressed**:
+  1. **`dag_engine.py` Execution Fallthrough**: `DAGEngine.execute_subtasks` fell through to `res_val = "ok"` and `is_ok = True` without executing any action or agent when nodes lacked concrete coroutine pointers.
+  2. **`AutomationAgent` Tool Registration Gap**: Listed 6 tools in `AGENT_TOOLS` but lacked `_TOOL_MAP` and `_tool_*` methods, causing `NextGenOrchestrator` to skip registering them into `ToolRegistry`.
+  3. **`CodeAgent` Tool Registration Gap**: Listed 3 tools in `AGENT_TOOLS` (`run_code`, `format_code`, `lint_code`) without `_TOOL_MAP` or `_tool_*` implementations.
+  4. **`SecurityAgent` Sync Lambda Invalidation**: `_TOOL_MAP` used synchronous lambdas returning coroutines; `inspect.iscoroutinefunction` returned `False`, causing `NextGenOrchestrator` to skip registering ALL security tools.
+  5. **`DevOpsAgent` Tool Mismatch**: `docker_restart` was listed in `AGENT_TOOLS` but missing from `_TOOLS` and implementation.
+  6. **`DataAnalystAgent` Tool Signature Alignment**: `AGENT_TOOLS` listed outdated names (`load_csv`, `filter_data`, `compute_stats`) instead of canonical `profile_dataset`, `execute_query`, `statistical_test`, `generate_chart`, `export_dataset`.
+* **Resolutions Implemented**:
+  1. Wired `DAGEngine._run_node` to inspect `n.metadata` and execute actions via `runtime.execute_action` or dispatch to agents via `kernel.dispatch`.
+  2. Defined `_TOOL_MAP` and async `_tool_*` methods across `AutomationAgent`, `CodeAgent`, and `SecurityAgent`.
+  3. Added `_tool_docker_restart` to `DevOpsAgent` and updated `_TOOLS` and `AGENT_TOOLS`.
+  4. Updated `DataAnalystAgent.AGENT_TOOLS` to align with canonical tool names.
+* **Verification**: Verified via manual line-by-line inspection across callers/callees and clean `py_compile` compilation.

@@ -2,7 +2,18 @@
   "settings": {},
   "integrations": {
     "whatsapp": {
-      "phone_number": "9310399522"
+      "phone_number": ""
     }
-  }
+  },
+  "general": {
+    "llmProvider": "qwen_flash",
+    "model": "",
+    "persona": "general",
+    "wsUrl": "ws://127.0.0.1:8080/ws",
+    "wakeWordEnabled": false,
+    "autoReadAloud": false,
+    "ttsSpeed": 1.0,
+    "voiceLanguage": "auto"
+  },
+  "media": {}
 }

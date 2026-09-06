@@ -156,8 +156,17 @@ class OAuthManager:
                 f"Register a {provider} OAuth App and set that variable."
             )
 
+        # Prune expired pending states (> 600s)
+        now = time.time()
+        expired_states = [
+            s for s, e in self._pending.items()
+            if now - e.get("created_at", now) > 600.0
+        ]
+        for s in expired_states:
+            self._pending.pop(s, None)
+
         state = secrets.token_urlsafe(32)
-        entry: dict = {"provider": provider}
+        entry: dict = {"provider": provider, "created_at": now}
 
         params: dict = {
             "client_id": client_id,
@@ -327,8 +336,12 @@ def _s256(verifier: str) -> str:
 
 def _is_expired(token_data: dict, buffer_s: int = 60) -> bool:
     """Returns True if access_token appears to be expired (with 60s buffer)."""
-    obtained_at = token_data.get("obtained_at", 0.0)
-    expires_in = token_data.get("expires_in", 0)
-    if not expires_in:
+    obtained_at = float(token_data.get("obtained_at", 0.0) or 0.0)
+    raw_expires = token_data.get("expires_in", 0)
+    if not raw_expires:
         return False   # GitHub tokens don't expire; treat as valid
-    return time.time() >= (obtained_at + int(expires_in) - buffer_s)
+    try:
+        expires_in = float(raw_expires)
+    except (ValueError, TypeError):
+        return False
+    return time.time() >= (obtained_at + expires_in - buffer_s)

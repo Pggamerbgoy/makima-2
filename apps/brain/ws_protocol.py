@@ -18,6 +18,7 @@ Rejects unknown 'v' field with version_mismatch error.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import time
@@ -77,6 +78,13 @@ class ServerMessageType(str, Enum):
     AI_RESPONSE_DONE = "ai_response_done"
     AI_ERROR = "ai_error"
     THINKING_STATUS = "thinking_status"
+
+    # Media lifecycle.  These events are scoped by task_id so concurrent
+    # uploads/generations cannot update the wrong message in the UI.
+    MEDIA_UPLOAD_STARTED = "media_upload_started"
+    MEDIA_PROCESSING = "media_processing"
+    MEDIA_READY = "media_ready"
+    MEDIA_ERROR = "media_error"
     
     # Agent lifecycle
     AGENT_STARTED = "agent_started"
@@ -84,6 +92,8 @@ class ServerMessageType(str, Enum):
     AGENT_ERROR = "agent_error"
     AGENT_PROGRESS = "agent_progress"
     AGENT_GUARDRAIL_HIT = "agent_guardrail_hit"
+    TOOL_CALL_STARTED = "tool_call_started"
+    TOOL_CALL_FINISHED = "tool_call_finished"
     
     # Action confirmation
     ACTION_CONFIRM_REQUEST = "action_confirm_request"
@@ -104,6 +114,7 @@ class ServerMessageType(str, Enum):
     # LLM / cost
     PROVIDER_RATE_LIMITED = "provider_rate_limited"
     ALL_BACKENDS_DOWN = "all_backends_down"
+    TOOLS_DEGRADED = "tools_degraded"
     COST_UPDATE = "cost_update"
     COST_BUDGET_HIT = "cost_budget_hit"
     
@@ -113,6 +124,7 @@ class ServerMessageType(str, Enum):
     # Clipboard & notifications
     CLIPBOARD_CHANGED = "clipboard_changed"
     NOTIFICATION_RECEIVED = "notification_received"
+    TOAST_NOTIFICATION = "toast_notification"
     
     # Graph
     GRAPH_CONFLICT = "graph_conflict"
@@ -126,6 +138,7 @@ class ServerMessageType(str, Enum):
     
     # Config
     CONFIG_PARSE_ERROR = "config_parse_error"
+    CREDENTIALS_DATA = "credentials_data"
     
     # Voice
     STATUS_LISTENING = "status_listening"
@@ -136,6 +149,16 @@ class ServerMessageType(str, Enum):
     STT_TRANSCRIPT_PREVIEW = "stt_transcript_preview"
     STT_LOW_CONFIDENCE = "stt_low_confidence"
     STT_CONFIRMED = "stt_confirmed"
+    # Hands-free browser voice session
+    VOICE_SESSION_STATE = "voice_session_state"
+    VOICE_TRANSCRIPT_PARTIAL = "voice_transcript_partial"
+    VOICE_TRANSCRIPT_FINAL = "voice_transcript_final"
+    VOICE_TURN_STARTED = "voice_turn_started"
+    VOICE_TTS_AUDIO = "voice_tts_audio"
+    VOICE_TTS_STARTED = "voice_tts_started"
+    VOICE_TTS_STOPPED = "voice_tts_stopped"
+    VOICE_AUDIO_CHUNK = "voice_audio_chunk"
+    VOICE_ERROR = "voice_error"
     
     # Browser
     CAPTCHA_DETECTED = "captcha_detected"
@@ -172,6 +195,11 @@ class ServerMessageType(str, Enum):
     # Multi-agent progress
     MULTI_AGENT_PROGRESS = "multi_agent_progress"
     
+    # Proactive autonomy (ProactiveOrchestrator)
+    PROACTIVE_SUGGESTION = "proactive_suggestion"
+    PROACTIVE_ACTION = "proactive_action"
+    AUTONOMY_MODE_CHANGED = "autonomy_mode_changed"
+    
     # Daily briefing
     DAILY_BRIEFING = "daily_briefing"
     
@@ -181,6 +209,11 @@ class ServerMessageType(str, Enum):
     
     # App usage
     APP_USAGE_UPDATE = "app_usage_update"
+    
+    # Ghost Watchdog (Proactive)
+    GHOST_ALERT = "ghost_alert"
+    GHOST_HEALTH_CHECK = "ghost_health_check"
+    GHOST_WEBHOOK_RECEIVED = "ghost_webhook_received"
     
     # Misc
     VERSION_MISMATCH = "version_mismatch"
@@ -196,6 +229,8 @@ class ClientMessageType(str, Enum):
     # Chat
     USER_MESSAGE = "user_message"
     CANCEL_TASK = "cancel_task"
+    REGENERATE_MESSAGE = "regenerate_message"
+    MODIFY_RESPONSE = "modify_response"
     
     # Confirmations
     CONFIRM_ACTION = "confirm_action"
@@ -218,6 +253,13 @@ class ClientMessageType(str, Enum):
     STT_CONFIRM = "stt_confirm"
     STT_CORRECT = "stt_correct"
     STT_CANCEL = "stt_cancel"
+    VOICE_SESSION_START = "voice_session_start"
+    VOICE_AUDIO_UTTERANCE = "voice_audio_utterance"
+    VOICE_SESSION_PAUSE = "voice_session_pause"
+    VOICE_SESSION_RESUME = "voice_session_resume"
+    VOICE_SESSION_STOP = "voice_session_stop"
+    VOICE_BARGE_IN = "voice_barge_in"
+    VOICE_SPEAK = "voice_speak"
     
     # Memory
     FORGET_ENTITY = "forget_entity"
@@ -236,6 +278,8 @@ class ClientMessageType(str, Enum):
     
     # Settings
     UPDATE_CONFIG = "update_config"
+    SAVE_CREDENTIAL = "save_credential"
+    GET_CREDENTIALS = "get_credentials"
     
     # Privacy
     TOGGLE_PRIVACY = "toggle_privacy"
@@ -279,6 +323,10 @@ class ClientMessageType(str, Enum):
     # Cost
     GET_COST_SUMMARY = "get_cost_summary"
     GET_BUDGET_STATUS = "get_budget_status"
+
+    # Proactive autonomy
+    SET_AUTONOMY_MODE = "set_autonomy_mode"
+    GET_AUTONOMY_STATUS = "get_autonomy_status"
 
 
 # ─── Exceptions ──────────────────────────────────────────────────────────────
@@ -371,9 +419,10 @@ class WSMessage:
     msg_id: str = field(default_factory=lambda: uuid.uuid4().hex[:16])
     
     def to_dict(self) -> dict[str, Any]:
+        msg_type = self.type.value if hasattr(self.type, "value") else str(self.type)
         data = {
             "v": self.v,
-            "type": self.type,
+            "type": msg_type,
             "payload": self.payload,
             "timestamp": self.timestamp,
             "msg_id": self.msg_id
@@ -506,21 +555,12 @@ class WebSocketEventBridge:
             try:
                 msg = await self.out_buffer.get()
                 
-                # Use MessagePack for large payloads (>10KB), otherwise JSON
-                if HAS_MSGPACK and len(msg.payload) > 10000:
-                    raw_bytes = msg.to_msgpack()
-                    if hasattr(self.ws, "send_bytes"):
-                        await self.ws.send_bytes(raw_bytes)
-                    elif hasattr(self.ws, "send"):
-                        await self.ws.send(raw_bytes)
-                    self.telemetry.record_tx(len(raw_bytes))
-                else:
-                    raw_str = msg.to_json()
-                    if hasattr(self.ws, "send_text"):
-                        await self.ws.send_text(raw_str)
-                    elif hasattr(self.ws, "send"):
-                        await self.ws.send(raw_str)
-                    self.telemetry.record_tx(len(raw_str.encode("utf-8")))
+                raw_str = msg.to_json()
+                if hasattr(self.ws, "send_text"):
+                    await self.ws.send_text(raw_str)
+                elif hasattr(self.ws, "send"):
+                    await self.ws.send(raw_str)
+                self.telemetry.record_tx(len(raw_str.encode("utf-8")))
                     
             except asyncio.CancelledError:
                 break
@@ -609,10 +649,30 @@ def build_ping(ts: float) -> WSMessage:
 def build_pong(ts: float) -> WSMessage:
     return WSMessage(v=PROTOCOL_VERSION, type=ServerMessageType.PONG, payload={"ts": ts})
 
-def build_ai_chunk(task_id: str, text: str, is_final: bool = False) -> WSMessage:
+def build_ai_chunk(
+    task_id: str,
+    text: str,
+    is_final: bool = False,
+    agent: str = "",
+    format: str = "markdown",
+    media: Optional[list[dict[str, Any]]] = None,
+    sources: Optional[list[dict[str, Any]]] = None,
+) -> WSMessage:
+    payload: dict[str, Any] = {"text": text, "is_final": is_final}
+    if agent:
+        payload["agent"] = agent
+        payload["agent_name"] = agent
+    if format:
+        payload["format"] = format
+    if media:
+        payload["media"] = media
+    if sources:
+        payload["sources"] = sources
     return WSMessage(
-        v=PROTOCOL_VERSION, type=ServerMessageType.AI_CHUNK,
-        payload={"text": text, "is_final": is_final}, task_id=task_id,
+        v=PROTOCOL_VERSION,
+        type=ServerMessageType.AI_CHUNK,
+        payload=payload,
+        task_id=task_id,
     )
 
 def build_ai_error(task_id: str, error: str, code: str = "unknown") -> WSMessage:
@@ -620,6 +680,12 @@ def build_ai_error(task_id: str, error: str, code: str = "unknown") -> WSMessage
         v=PROTOCOL_VERSION, type=ServerMessageType.AI_ERROR,
         payload={"error": error, "code": code}, task_id=task_id,
     )
+
+
+def build_media_event(event_type: str, task_id: str, media_id: str, **payload: Any) -> WSMessage:
+    """Build a task-scoped media lifecycle event."""
+    data = {"media_id": media_id, **payload}
+    return WSMessage(v=PROTOCOL_VERSION, type=event_type, task_id=task_id, payload=data)
 
 def build_agent_started(task_id: str, agent: str, subtask: str = "") -> WSMessage:
     return WSMessage(
@@ -631,6 +697,57 @@ def build_agent_done(task_id: str, agent: str, result_summary: str = "") -> WSMe
     return WSMessage(
         v=PROTOCOL_VERSION, type=ServerMessageType.AGENT_DONE,
         payload={"agent": agent, "result_summary": result_summary}, task_id=task_id,
+    )
+
+def build_tool_call_started(
+    task_id: str,
+    tool_name: str,
+    parameters: dict[str, Any] | None = None,
+    agent: str = "",
+) -> WSMessage:
+    """Build a real-time event when a tool begins execution.
+
+    Canonical single definition (a duplicate earlier in this file was removed —
+    Python silently kept only the last one before, causing field drift).
+    Payload carries legacy aliases ('tool', 'arguments') plus canonical
+    'tool_name'/'parameters' for consumer compatibility.
+    """
+    params = parameters or {}
+    return WSMessage(
+        v=PROTOCOL_VERSION,
+        type=ServerMessageType.TOOL_CALL_STARTED,
+        task_id=task_id,
+        payload={
+            "tool": tool_name,
+            "tool_name": tool_name,
+            "arguments": params,
+            "parameters": params,
+            "agent": agent,
+        },
+    )
+
+
+def build_tool_call_finished(
+    task_id: str,
+    tool_name: str,
+    result: Any = "",
+    duration_ms: float = 0.0,
+    is_success: bool = True,
+    agent: str = "",
+) -> WSMessage:
+    """Build a real-time event when a tool finishes execution."""
+    return WSMessage(
+        v=PROTOCOL_VERSION,
+        type=ServerMessageType.TOOL_CALL_FINISHED,
+        task_id=task_id,
+        payload={
+            "tool": tool_name,
+            "tool_name": tool_name,
+            "result": str(result)[:500] if result is not None else "",
+            "duration_ms": round(duration_ms, 2),
+            "is_success": bool(is_success),
+            "agent": agent,
+        },
     )
 
 def build_service_health(snapshot: dict[str, Any]) -> WSMessage:
@@ -678,6 +795,25 @@ def build_cost_update(provider: str, tokens: int, cost_usd: float, total_usd: fl
         payload={"provider": provider, "tokens": tokens, "cost_usd": cost_usd, "total_usd": total_usd},
     )
 
+def build_toast_notification(
+    task_id: str,
+    message: str,
+    level: str = "info",  # info | success | warning | error
+    duration_ms: int = 3000,
+) -> WSMessage:
+    """Build a transient toast notification event for lightweight UI feedback without chat spam."""
+    return WSMessage(
+        v=PROTOCOL_VERSION,
+        type=ServerMessageType.TOAST_NOTIFICATION,
+        task_id=task_id,
+        payload={
+            "message": message,
+            "level": level,
+            "duration_ms": duration_ms,
+        },
+    )
+
+
 def build_action_confirm(task_id: str, action: str, description: str, risk_level: str = "medium") -> WSMessage:
     return WSMessage(
         v=PROTOCOL_VERSION, type=ServerMessageType.ACTION_CONFIRM_REQUEST,
@@ -708,6 +844,61 @@ def build_stt_confirmed(task_id: str, final_transcript: str, was_corrected: bool
         payload={"final_transcript": final_transcript, "was_corrected": was_corrected}, task_id=task_id,
     )
 
+
+def build_voice_audio_chunk(
+    audio_data: bytes | str,
+    format: str = "mp3",
+    sequence: int = 0,
+    is_final: bool = False,
+    session_id: str = "",
+    task_id: Optional[str] = None,
+    metadata: Optional[dict[str, Any]] = None,
+) -> WSMessage:
+    """Build a streaming voice audio chunk message.
+
+    Encodes raw audio bytes as base64 string for JSON wire compatibility.
+    Includes sequence ordering and finality markers for streaming TTS.
+    """
+    if isinstance(audio_data, bytes):
+        audio_b64 = base64.b64encode(audio_data).decode("utf-8")
+    else:
+        audio_b64 = str(audio_data)
+
+    payload: dict[str, Any] = {
+        "audio_data": audio_b64,
+        "format": format,
+        "sequence": sequence,
+        "clause_index": sequence,
+        "is_final": is_final,
+        "session_id": session_id,
+        "voice_session_id": session_id,
+    }
+    if metadata:
+        payload["metadata"] = metadata
+        payload.update(metadata)
+
+    return WSMessage(
+        v=PROTOCOL_VERSION,
+        type=ServerMessageType.VOICE_AUDIO_CHUNK,
+        task_id=task_id,
+        payload=payload,
+    )
+
+
+def build_voice_event(event_type: str, voice_session_id: str, *, task_id: str | None = None, **payload: Any) -> WSMessage:
+    """Build a session-scoped voice event.
+
+    The session id is deliberately present in the payload as well as the task
+    id at the envelope level.  A single browser can have several chat tasks,
+    but only the matching active voice controller should react to these events.
+    """
+    return WSMessage(
+        v=PROTOCOL_VERSION,
+        type=event_type,
+        task_id=task_id,
+        payload={"voice_session_id": voice_session_id, **payload},
+    )
+
 def build_task_event(event_type: str, task_data: dict) -> WSMessage:
     return WSMessage(v=PROTOCOL_VERSION, type=event_type, payload=task_data)
 
@@ -718,6 +909,14 @@ def build_multi_agent_progress(task_id: str, agents: list[dict]) -> WSMessage:
     return WSMessage(
         v=PROTOCOL_VERSION, type=ServerMessageType.MULTI_AGENT_PROGRESS,
         payload={"agents": agents}, task_id=task_id,
+    )
+
+def build_proactive_event(event_type: "str | ServerMessageType", payload: dict[str, Any]) -> WSMessage:
+    """Build a proactive-autonomy event (suggestion / action / mode change)."""
+    return WSMessage(
+        v=PROTOCOL_VERSION,
+        type=event_type,
+        payload=payload,
     )
 
 def build_browser_session_update(session_id: str, status: str, url: str = "") -> WSMessage:
@@ -758,6 +957,22 @@ def build_import_complete(conversation_id: str, message_count: int) -> WSMessage
 
 def build_macro_event(event_type: str, macro_data: dict) -> WSMessage:
     return WSMessage(v=PROTOCOL_VERSION, type=event_type, payload=macro_data)
+
+
+def build_ghost_alert(source: str, severity: str, title: str, message: str) -> WSMessage:
+    return WSMessage(
+        v=PROTOCOL_VERSION, type=ServerMessageType.GHOST_ALERT,
+        payload={"source": source, "severity": severity, "title": title, "message": message},
+    )
+
+def build_ghost_health_check(status: dict) -> WSMessage:
+    return WSMessage(v=PROTOCOL_VERSION, type=ServerMessageType.GHOST_HEALTH_CHECK, payload=status)
+
+def build_ghost_webhook_received(source: str, severity: str) -> WSMessage:
+    return WSMessage(
+        v=PROTOCOL_VERSION, type=ServerMessageType.GHOST_WEBHOOK_RECEIVED,
+        payload={"source": source, "severity": severity},
+    )
 
 
 # ─── Task ID Generator ───────────────────────────────────────────────────────

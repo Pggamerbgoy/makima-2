@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 from urllib.parse import urlparse
 
-from .base_agent import BaseAgent
+from .base_agent import BaseAgent, TOOL_DISCIPLINE_BLOCK
 
 logger = logging.getLogger("makima.agents.research")
 
@@ -51,78 +51,144 @@ class ResearchAgent(BaseAgent):
     TAGS = ["research", "web", "search", "synthesis", "nemotron"]
 
     SYSTEM_PROMPT = """You are Makima's Elite Research Agent.
-Your mandate is to execute rigorous, multi-hop research. You decompose complex queries, 
-evaluate source credibility using both heuristics and semantic analysis, and synthesize 
-authoritative academic reports. You never hallucinate. You always cite sources using bracketed 
-numbers (e.g., [1], [2]). You prioritize official, academic, and highly credible domains.
+Your mandate is to execute rigorous web research, evaluate source credibility, and synthesize clear, beautifully formatted reports aligned with modern ChatGPT and Google Gemini presentation standards, using bracketed citations [1], [2].
 
-SYNTHESIS & FORMATTING STANDARDS (NEMOTRON RIGOR):
-1. **Academic Structure**: Incorporate an Abstract, Case Studies, Methodologies & Collaborations, Economic & Societal Impact, and formal Academic Reference lists.
-2. **Visual Enhancements**:
-   - **Mermaid Flowcharts & Timelines**: Use ```mermaid timeline``` or ```mermaid``` to visualize architectures and chronologies. ALWAYS wrap node label text in double quotes if it contains colons, commas, or punctuation (e.g. `C["2000s: RNNs, CNNs"]`).
-   - **LaTeX Mathematical Formulas**: Use LaTeX delimiters (e.g. $PR(p) = ...$) for mathematical or algorithmic formulas.
-   - **Markdown Benchmark Tables**: Include structured Markdown comparison tables for metrics, dates, and benchmarks.
-   - **Executive Callouts**: Use blockquote callouts (`> 📌 **Key Insight**: ...`) for critical takeaways.
+SYNTHESIS & REPORTING STANDARDS:
+1. Presentation Hierarchy (ChatGPT & Gemini Standard):
+   - Use clean `## Section Headers` (e.g. ## Executive Summary, ## Technical Breakdown, ## Comparison, ## Key Takeaways, ## References).
+   - Use bullet points with bold lead-ins for all technical enumerations:
+     - **Mechanism / Feature**: 1–2 focused sentences explaining the impact.
+   - Keep paragraphs compact (2–3 sentences max) with clean line breaks so text is easy to scan.
+2. Structured Thinking: Perform deep query decomposition and source evaluation internally before synthesizing findings.
+3. Visual Formatting: Include clean Markdown tables for comparisons, Mermaid diagrams where helpful, and blockquote callouts (> 💡 **Key Takeaway**:).
+4. Direct Answers: Lead with the core answer first. Base all facts on live search results.""" + "\n" + TOOL_DISCIPLINE_BLOCK
 
-By default, you synthesize concise, executive-grade briefs. HOWEVER, if the user explicitly 
-requests a "long", "comprehensive", "deep dive", or multi-page report, you MUST drop the 
-executive brevity and generate a highly detailed, comprehensive, and exhaustive document 
-that matches their requested length and depth.
-
-CRITICAL DISAMBIGUATION RULE:
-- When researching corporate/technology entities (e.g. "Apple", "Amazon", "Tesla", "Meta"), focus 100% on the technology corporation (products, financials, news, market data, leadership). DO NOT generate botanical, agricultural, or fruit science tables unless the user explicitly requests "apple fruit" or "botany".
-"""
+    def __init__(
+        self,
+        ai_handler: Any = None,
+        memory: Any = None,
+        tool_registry: Any = None,
+        ws_broadcast: Any = None,
+        orchestrator: Any = None,
+        guardrails: Any = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(ai_handler, memory, tool_registry, ws_broadcast, orchestrator, guardrails, **kwargs)
+        try:
+            from ..web_search_tool import web_search, fetch_url
+            self._TOOL_MAP = {
+                "web_search": web_search,
+                "fetch_url": fetch_url,
+            }
+        except Exception:
+            pass
 
     # ──────────────────────────────────────────────
     # Core Execution Contract
     # ──────────────────────────────────────────────
 
+    def _score_research_depth(self, message: str) -> str:
+        """Scores query research depth: 'shallow' | 'medium' | 'deep'."""
+        msg = message.lower().strip()
+        word_count = len(msg.split())
+        
+        deep_keywords = ["thesis", "paper", "exhaustive", "comprehensive", 
+                         "in-depth", "full report", "whitepaper", "detailed analysis",
+                         "detailed report", "multi-page", "extensive", "benchmark comparison", "deep dive"]
+        if any(kw in msg for kw in deep_keywords) or word_count > 25:
+            return "deep"
+
+        # Explicitly shallow only if short query AND user explicitly requested a quick/brief summary
+        explicit_shallow_keywords = ["quick summary", "brief summary", "in 1 sentence", "in one line", "quick overview", "tl;dr", "tldr"]
+        if any(kw in msg for kw in explicit_shallow_keywords) or (word_count <= 4 and any(kw in msg for kw in ("who is", "what is", "define"))):
+            return "shallow"
+
+        return "medium"
+
     async def execute(
-        self, 
-        task_id: str, 
-        message: str, 
-        context: dict[str, Any], 
-        entities: dict[str, Any]
+        self, task_id: str, message: str, context: dict[str, Any],
+        entities: dict[str, Any],
     ) -> str:
-        """
-        Main execution loop for the Research Agent.
-        Follows the BaseAgent contract strictly.
-        """
+        """Adaptive Research Depth Execution — Shallow (4s), Medium (10s), Deep (30s+)."""
         self._reset_state()
-        logger.info("[research] Initiating elite research pipeline for task %s", task_id)
+        # ── P1 Bridge 4B: Consume structured AgentTask parameters first ───────
+        agent_task = getattr(self, "_current_agent_task", None) or context.get("agent_task")
+        depth = None
+        if agent_task and hasattr(agent_task, "parameters") and agent_task.parameters:
+            raw_depth = str(agent_task.parameters.get("depth") or agent_task.parameters.get("research_depth") or "").lower().strip()
+            if raw_depth in ("shallow", "medium", "deep"):
+                depth = raw_depth
+                logger.info("[research] P1-4B: Consumed structured depth from AgentTask: %s", depth)
 
+        if not depth:
+            depth = self._score_research_depth(message)
+        logger.info(f"[research] Adaptive research depth selected: {depth.upper()}")
+
+
+        if depth == "deep":
+            try:
+                enriched = self._enrich_query(message, context, entities)
+                sub_queries = await self._decompose_query(enriched)
+                if not sub_queries:
+                    sub_queries = [SubQuery(query=message, intent="general")]
+                snippets = await self._execute_concurrent_searches(sub_queries)
+                ranked = self._score_and_rank_snippets(snippets, message)
+                if ranked:
+                    report = await self._synthesize_executive_report(message, ranked)
+                    if report:
+                        self._partial_result = report
+                        return report
+            except Exception as e:
+                logger.warning(f"[research] Deep pipeline fallback to ReAct: {e}")
+        else:
+            # Shallow & Medium fast-path: 1-shot search + direct synthesis (under 3-4s total)
+            try:
+                raw_results = await self._use_tool("web_search", query=message, max_results=4)
+                if raw_results and "no results" not in str(raw_results).lower():
+                    sq = SubQuery(query=message, intent="general")
+                    snippets = self._parse_search_results(raw_results, sq)
+                    ranked = self._score_and_rank_snippets(snippets, message)
+                    if ranked:
+                        report = await self._synthesize_executive_report(message, ranked)
+                        if report:
+                            self._partial_result = report
+                            return report
+            except Exception as e:
+                logger.warning(f"[research] Fast-path search fallback to ReAct: {e}")
+
+        # Shallow / Medium or Deep Fallback: Adaptive ReAct loop
+        configs = {
+            "shallow": {"max_tokens": 800, "max_turns": 3, "prompt_suffix": "Keep the summary concise and high-signal (< 300 words)."},
+            "medium":  {"max_tokens": 1800, "max_turns": 5, "prompt_suffix": "Provide a well-structured summary with sections and inline citations."},
+            "deep":    {"max_tokens": 4000, "max_turns": 8, "prompt_suffix": "Provide an exhaustive, in-depth academic analysis with full citations and data tables."},
+        }
+        cfg = configs.get(depth, configs["medium"])
+
+        extra_system = (
+            f"[RESEARCH DEPTH: {depth.upper()}]\n"
+            "You have web_search and fetch_url tools available.\n"
+            "ALWAYS use web_search first to find live search results.\n"
+            f"{cfg['prompt_suffix']}\n"
+            "Format: Use markdown headers, bullet points, and bold key findings."
+        )
+
+        # ── OpenAI Agents SDK Runner Execution ────────────────────────────────
         try:
-            # 1. Context & Entity Enrichment
-            enriched_message = self._enrich_query(message, context, entities)
-
-            # 2. Multi-hop Query Decomposition
-            sub_queries = await self._decompose_query(enriched_message)
-            if not sub_queries:
-                logger.warning("[research] Decomposition failed, falling back to original query.")
-                sub_queries = [SubQuery(query=message, intent="general", target_tlds=[])]
-
-            # 3. Concurrent Web Search & Parsing
-            raw_snippets = await self._execute_concurrent_searches(sub_queries)
-            
-            if not raw_snippets:
-                logger.warning("[research] No valid snippets retrieved. Generating fallback response.")
-                return await self._generate_fallback_response(message, context)
-
-            # 4. Credibility & Relevance Scoring
-            scored_snippets = self._score_and_rank_snippets(raw_snippets, enriched_message)
-
-            # 5. Executive Synthesis
-            final_report = await self._synthesize_executive_report(message, scored_snippets)
-            
-            logger.info("[research] Successfully completed research pipeline for task %s", task_id)
-            return final_report
-
-        except asyncio.CancelledError:
-            logger.warning("[research] Task %s was cancelled.", task_id)
-            return "Research task was cancelled by the system or user."
-        except Exception as e:
-            logger.exception("[research] Critical failure in execute pipeline: %s", e)
-            return self._format_error_report(message, str(e))
+            final_out = await self.run_sdk_execution(
+                task_id=task_id,
+                message=message,
+                context=context,
+                max_turns=cfg["max_turns"],
+                task_type="research",
+                extra_system=extra_system,
+                input_guardrails=[],
+                output_guardrails=[],
+            )
+            self._partial_result = final_out
+            return final_out
+        except Exception as sdk_exc:
+            logger.error("[research] SDK error: %s", sdk_exc)
+            return f"Task complete nahi hua: {str(sdk_exc)}"
 
     # ──────────────────────────────────────────────
     # Phase 1: Enrichment & Decomposition
@@ -140,15 +206,15 @@ CRITICAL DISAMBIGUATION RULE:
 
     async def _decompose_query(self, message: str) -> list[SubQuery]:
         """Uses LLM to break down the primary objective into atomic sub-queries."""
-        decomp_prompt = f"""Analyze the following research objective and decompose it into 1 to 4 atomic, highly specific search queries.
-For each query, identify the core intent and preferred domain extensions (e.g., .edu, .gov, .org, .com) to ensure high credibility.
-
-Return ONLY a valid JSON object matching this exact schema:
+        decomp_prompt = f"""Deconstruct the following research objective into 2 focused search queries.
+Respond with a JSON object in this format:
+```json
 {{
     "sub_queries": [
-        {{"query": "string", "intent": "string", "target_tlds": [".edu", ".gov"]}}
+        {{"query": "focused search query string", "intent": "benchmark or architecture"}}
     ]
 }}
+```
 
 Objective: {message}
 """
@@ -157,7 +223,7 @@ Objective: {message}
                 [{"role": "user", "content": decomp_prompt}],
                 task="research_decomp",
                 require_json=True,
-                max_tokens=400,
+                max_tokens=800,
                 temperature=0.2
             )
             parsed = self.ai_handler.try_parse_json(raw_response) or {}
@@ -197,14 +263,27 @@ Objective: {message}
         """Fetches results for a single subquery and parses them into ResearchSnippets."""
         try:
             # 1. Primary search: Clean subquery (NO site:*.edu / site:*.gov query pollution)
-            clean_query = sub_query.query.strip()
-            raw_result = await self._use_tool("web_search", query=clean_query, max_results=3)
+            clean_query = re.sub(r'site:\S+', '', sub_query.query).strip()
+            raw_result = None
+            try:
+                raw_result = await self._use_tool("web_search", query=clean_query, max_results=3)
+            except Exception:
+                pass
+            if not raw_result or "not found in registry" in str(raw_result).lower() or str(raw_result).startswith("[Failed]"):
+                from ..web_search_tool import web_search
+                raw_result = await web_search(query=clean_query, max_results=3)
             
             # 2. If clean query returned no results and target TLDs exist, try site filtering as fallback
             if (not raw_result or "no results" in str(raw_result).lower()) and sub_query.target_tlds:
                 tld_suffix = " ".join([f"site:{tld.lstrip('*')}" for tld in sub_query.target_tlds[:2]])
                 retry_query = f"{clean_query} {tld_suffix}".strip()
-                raw_result = await self._use_tool("web_search", query=retry_query, max_results=3)
+                try:
+                    raw_result = await self._use_tool("web_search", query=retry_query, max_results=3)
+                except Exception:
+                    pass
+                if not raw_result or "not found in registry" in str(raw_result).lower() or str(raw_result).startswith("[Failed]"):
+                    from ..web_search_tool import web_search
+                    raw_result = await web_search(query=retry_query, max_results=3)
 
             if not raw_result or "no results" in str(raw_result).lower():
                 return []
@@ -229,10 +308,13 @@ Objective: {message}
         if isinstance(raw_result, list):
             for item in raw_result:
                 if isinstance(item, dict):
+                    url_val = item.get("url") or item.get("link") or ""
+                    title_val = item.get("title") or "Untitled"
+                    content_val = item.get("snippet") or item.get("content") or item.get("description") or ""
                     snippets.append(ResearchSnippet(
-                        url=str(item.get("url", item.get("link", ""))),
-                        title=str(item.get("title", "Untitled")),
-                        content=str(item.get("snippet", item.get("content", item.get("description", ""))))
+                        url=str(url_val).strip(),
+                        title=str(title_val).strip(),
+                        content=str(content_val).strip()
                     ))
         elif isinstance(raw_result, str):
             # Fallback: Regex extraction for text-based tool outputs
@@ -250,7 +332,7 @@ Objective: {message}
                         content=snippet_match.group(1).strip() if snippet_match else block.strip()
                     ))
 
-        return [s for s in snippets if s.url and s.content]
+        return [s for s in snippets if s.url and s.url != "None" and s.content and s.content != "None"]
 
     # ──────────────────────────────────────────────
     # Phase 3: Algorithmic Credibility Scoring
@@ -295,7 +377,6 @@ Objective: {message}
             # Subdomain/Path Heuristics (KAMI-16 FIX: match 'medium.com' without trailing slash)
             if any(sub in domain for sub in ['blog.', 'forum.', 'reddit.', 'quora.', 'medium.com']):
                 score -= 0.25
-                score -= 0.25
             if any(sub in domain for sub in ['scholar.', 'research.', 'science.', 'ncbi.', 'ieee.']):
                 score += 0.25
                 
@@ -318,8 +399,10 @@ Objective: {message}
     def _calculate_keyword_relevance(self, query: str, content: str) -> float:
         """Simple but effective TF-based keyword overlap scoring."""
         try:
-            query_words = set(re.findall(r'\b\w+\b', query.lower()))
-            content_words = set(re.findall(r'\b\w+\b', content.lower()))
+            if not query or not content:
+                return 0.5
+            query_words = set(re.findall(r'\b\w+\b', str(query).lower()))
+            content_words = set(re.findall(r'\b\w+\b', str(content).lower()))
             
             # Remove stop words for better signal
             stop_words = {"the", "and", "is", "in", "it", "of", "to", "a", "for", "on", "with", "as", "by"}
@@ -338,82 +421,35 @@ Objective: {message}
     # ──────────────────────────────────────────────
 
     async def _synthesize_executive_report(self, original_message: str, snippets: list[ResearchSnippet]) -> str:
-        """Generates a massive 10+ page (6,000+ words) research report using a 2-Step Modular Synthesizer."""
+        """Generates a comprehensive, academic research report from verified snippets."""
         snippet_context = self._format_snippets_for_prompt(snippets)
-        
-        # Check if long-form is requested
+        logger.info("[research] Synthesizing comprehensive research report for %d snippets...", len(snippets))
+
+        # Check if long-form / deep dive is requested
         msg_lower = original_message.lower()
-        is_long_form = any(k in msg_lower for k in ["long", "comprehensive", "deep dive", "page"])
-        
-        if not is_long_form:
-            # Concise Briefing Mode
-            synthesis_prompt = f"""You are Makima's Elite Research Synthesizer.
-Original Objective: {original_message}
+        is_deep = any(k in msg_lower for k in ["long", "comprehensive", "deep dive", "exhaustive", "benchmark", "detailed"])
+        max_tokens = 2200 if is_deep else 1500
 
-Verified Snippets:
+        synthesis_prompt = f"""You are Makima's Elite Research Synthesizer.
+Research Objective: {original_message}
+
+Verified Live Search Findings & Sources:
 {snippet_context}
 
-Format a concise, modern executive briefing with Abstract, Key Highlights, Deep-Dive Analysis, and Verified Sources inline [1], [2]. Include Markdown tables and Mermaid diagrams where relevant.
+SYNTHESIS & REPORTING REQUIREMENTS (ChatGPT & Gemini Presentation Standard):
+1. **## Executive Summary**: Direct, high-signal 1–2 paragraphs summarizing the findings without boilerplate.
+2. **## Technical Breakdown**: Thematic breakdown with bold lead-in bullet points (**Mechanism**: Explanation).
+3. **## Comparative Analysis & Benchmark Table**: Structured Markdown comparison table evaluating specifications, performance, and tradeoffs.
+4. **## Visual Diagram**: Include at least one valid Mermaid diagram (e.g. ```mermaid graph TD```). ALWAYS enclose node labels with quotes.
+5. **## Strategic Takeaways**: Actionable bulleted takeaways with callouts (`> 💡 **Key Takeaway**: ...`).
+6. **## References**: Clean numbered references with clickable markdown links (`[[1] Title](URL)`).
 """
-            return (await self._llm_call([{"role": "system", "content": self.SYSTEM_PROMPT}, {"role": "user", "content": synthesis_prompt}], task="research", max_tokens=3000, temperature=0.3)).strip()
-
-        # ─── 2-STEP MODULAR SYNTHESIZER (TRUE 10+ PAGES / 6,000+ WORDS) ───
-        logger.info("[research] Initiating 2-Step Modular Synthesizer for 10+ page massive output...")
-        
-        # STEP 1: Part A (Foundations, History, Infrastructure, Mathematics & Architecture)
-        part_a_prompt = f"""You are Makima's Elite Research Synthesizer writing PART 1 of a massive 10-page academic research paper.
-Objective: {original_message}
-
-Verified Snippets:
-{snippet_context}
-
-PART 1 REQUIREMENTS (WRITE 2,500 - 3,000 WORDS EXHAUSTIVELY):
-1. **Title & Abstract**: Professional academic title and abstract.
-2. **Section 1: Introduction & Scope**: Comprehensive introduction to the topic.
-3. **Section 2: Historical Background & Evolution**: Early origins, BackRub, PageRank, company growth, IPO, key acquisitions.
-4. **Section 3: Technical Architecture & Core Algorithms**:
-   - PageRank Mathematical Formulation: MUST include LaTeX equation $PR(p) = \\frac{{1-d}}{{N}} + d \\sum_{{q \\in B_p}} \\frac{{PR(q)}}{{L(q)}}$ with full variable definitions.
-   - Distributed Systems: Deep dive into Bigtable, Spanner (TrueTime), and Borg cluster management.
-5. **VISUAL EMBEDDINGS**:
-   - MUST include at least 1 **Mermaid Timeline/Gantt Chart** (```mermaid timeline```) visualizing early milestones.
-   - MUST include at least 1 **Markdown Comparison Table** comparing distributed infrastructure components.
-   - Use blockquote callouts (`> 📌 **Key Insight**: ...`).
-6. Cite sources inline using bracketed numbers [1], [2].
-7. Do NOT write a conclusion yet; end Part 1 smoothly for Part 2 to continue.
-"""
-        logger.info("[research] Generating Part 1 (Foundations & Architecture)...")
-        part_a = await self._llm_call(
-            [{"role": "system", "content": self.SYSTEM_PROMPT}, {"role": "user", "content": part_a_prompt}],
-            task="research", max_tokens=6000, temperature=0.3
-        )
-
-        # STEP 2: Part B (AI Breakthroughs, Open Source, Case Studies, Impact, Conclusion, References)
-        part_b_prompt = f"""You are Makima's Elite Research Synthesizer writing PART 2 of a massive 10-page academic research paper.
-Objective: {original_message}
-
-Verified Snippets:
-{snippet_context}
-
-PART 2 REQUIREMENTS (WRITE 2,500 - 3,000 WORDS EXHAUSTIVELY):
-Continue seamlessly from Part 1. Cover the remaining topics in extreme academic depth:
-1. **Section 4: Artificial Intelligence & Machine Learning Breakthroughs**: DeepMind (AlphaGo, AlphaFold GNNs), Google Brain, Transformers (BERT, LaMDA, PaLM, Gemini).
-2. **Section 5: Machine Learning Frameworks & Open Source**: TensorFlow, JAX/XLA, Kubernetes, Android.
-3. **Section 6: Frontier Science & Emerging Initiatives**: Quantum AI (Sycamore processor), Healthcare & Verily, Waymo autonomous driving.
-4. **Section 7: Economic, Societal & Ethical Impact**: SMEs, global infrastructure, privacy, AI ethics.
-5. **Section 8: Conclusion & Future Directions**: Final authoritative summary.
-6. **VISUAL EMBEDDINGS**:
-   - MUST include at least 1 **Mermaid Architecture Diagram** (```mermaid```) visualizing NLP/AI model evolution. ALWAYS wrap node label text in double quotes if it contains colons or commas (e.g. `C["2000s: RNNs, CNNs"]`).
-   - MUST include at least 1 **Markdown Comparison Table** comparing AI models (BERT vs PaLM vs Gemini).
-   - Use blockquote callouts (`> 📌 **Key Insight**: ...`).
-7. **Section 9: Verified Sources & References**: Complete list of citations with titles and clickable markdown links.
-"""
-        logger.info("[research] Generating Part 2 (AI Breakthroughs, Science & Impact)...")
-        part_b = await self._llm_call(
-            [{"role": "system", "content": self.SYSTEM_PROMPT}, {"role": "user", "content": part_b_prompt}],
-            task="research", max_tokens=6000, temperature=0.3
-        )
-
-        return f"{part_a.strip()}\n\n---\n\n{part_b.strip()}"
+        return (await self._llm_call(
+            [{"role": "system", "content": self.SYSTEM_PROMPT}, {"role": "user", "content": synthesis_prompt}],
+            task="research",
+            max_tokens=max_tokens,
+            temperature=0.25,
+        )).strip()
 
     def _format_snippets_for_prompt(self, snippets: list[ResearchSnippet]) -> str:
         """Formats snippets into a clean, token-efficient string for the LLM prompt."""
@@ -432,35 +468,15 @@ Continue seamlessly from Part 1. Cover the remaining topics in extreme academic 
     # ──────────────────────────────────────────────
 
     def _extract_json(self, text: str) -> Optional[dict | list]:
-        """Robustly extracts JSON from LLM responses, handling markdown wrappers and trailing text."""
+        """Robustly extracts JSON from LLM responses using unified try_parse_json."""
         if not text:
             return None
-            
-        # 1. Direct parse
+        if self.ai_handler and hasattr(self.ai_handler, "try_parse_json"):
+            return self.ai_handler.try_parse_json(text)
         try:
             return json.loads(text)
-        except json.JSONDecodeError:
-            pass
-            
-        # 2. Markdown code block extraction
-        match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
-        if match:
-            try:
-                return json.loads(match.group(1))
-            except json.JSONDecodeError:
-                pass
-                
-        # 3. Bracket matching fallback
-        for start_char, end_char in [('{', '}'), ('[', ']')]:
-            start = text.find(start_char)
-            end = text.rfind(end_char)
-            if start != -1 and end != -1 and end > start:
-                try:
-                    return json.loads(text[start:end + 1])
-                except json.JSONDecodeError:
-                    continue
-                    
-        return None
+        except Exception:
+            return None
 
     async def _generate_fallback_response(self, message: str, context: dict[str, Any]) -> str:
         """Generates a direct LLM response when web search yields zero results."""

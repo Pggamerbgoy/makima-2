@@ -185,11 +185,16 @@ expenses.csv
 sales.csv
 gaps.json
 *.log
+scripts/ingest_*.py
+scratch_*.sqlite
+makima_live_test_sandbox/
 
 # Downloaded models & local runtime data
 models/
 data/blackboard/
+data/media_history/
 data/media_history.json
+data/tmp/
 
 # Databases & local state DBs
 *.db
@@ -234,5 +239,21 @@ research_report.md
 run_claude_qwen.bat
 run_claude_qwen.ps1
 audit_agents.py
+
+# Temp test & agent scratch logs
+.pytest_temp/
+.refactor_backup/
+archive/
+.agents/auditor_*
+.agents/challenger_*
+.agents/reviewer_*
+.agents/worker_*
+.agents/teamwork_preview_*
+.agents/explorer_*
+.agents/orchestrator_*
+.agents/victory_*
+.agents/sentinel/
+.agents/swe_1/
+
 
 

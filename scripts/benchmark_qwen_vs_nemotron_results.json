@@ -1,0 +1,142 @@
+{
+  "qwen_plus": {
+    "model_label": "Qwen Plus",
+    "model_id": "qwen/qwen-plus",
+    "passed": 3,
+    "total": 3,
+    "pass_rate": 100.0,
+    "avg_latency_ms": 3456.8302666660506,
+    "results": [
+      {
+        "task_id": 1,
+        "task_name": "Diagnostic & Corrective Window Management",
+        "passed": true,
+        "turns": 3,
+        "tools_called": [
+          [
+            "get_process_list",
+            "{}"
+          ],
+          [
+            "get_system_stats",
+            "{}"
+          ],
+          [
+            "manage_window",
+            "{\"title\": \"Chrome\", \"action\": \"minimize\"}"
+          ]
+        ],
+        "forbidden_hit": false,
+        "latency_ms": 3834.2073999992863
+      },
+      {
+        "task_id": 2,
+        "task_name": "App Launch with Self-Healing Recovery",
+        "passed": true,
+        "turns": 3,
+        "tools_called": [
+          [
+            "search_installed_apps",
+            "{\"query\": \"WordPad\"}"
+          ],
+          [
+            "launch_app",
+            "{\"app_path\": \"notepad.exe\"}"
+          ],
+          [
+            "launch_app",
+            "{\"app_path\": \"notepad.exe\"}"
+          ]
+        ],
+        "forbidden_hit": false,
+        "latency_ms": 4332.882699999573
+      },
+      {
+        "task_id": 3,
+        "task_name": "Media & System Priority Workflow",
+        "passed": true,
+        "turns": 2,
+        "tools_called": [
+          [
+            "play_media",
+            "{\"query\": \"focus music\", \"platform\": \"spotify\"}"
+          ],
+          [
+            "set_volume",
+            "{\"level\": 40}"
+          ]
+        ],
+        "forbidden_hit": false,
+        "latency_ms": 2203.4006999992926
+      }
+    ]
+  },
+  "nemotron_ultra": {
+    "model_label": "Nvidia Nemotron Ultra (Free)",
+    "model_id": "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "passed": 3,
+    "total": 3,
+    "pass_rate": 100.0,
+    "avg_latency_ms": 12592.488900000111,
+    "results": [
+      {
+        "task_id": 1,
+        "task_name": "Diagnostic & Corrective Window Management",
+        "passed": true,
+        "turns": 3,
+        "tools_called": [
+          [
+            "get_process_list",
+            "{}"
+          ],
+          [
+            "manage_window",
+            "{\"title\":\"Google Chrome\",\"action\":\"minimize\"}"
+          ]
+        ],
+        "forbidden_hit": false,
+        "latency_ms": 22157.01850000005
+      },
+      {
+        "task_id": 2,
+        "task_name": "App Launch with Self-Healing Recovery",
+        "passed": true,
+        "turns": 3,
+        "tools_called": [
+          [
+            "search_installed_apps",
+            "{\"query\":\"WordPad\"}"
+          ],
+          [
+            "launch_app",
+            "{\"app_path\":\"notepad.exe\"}"
+          ],
+          [
+            "launch_app",
+            "{\"app_path\":\"notepad.exe\"}"
+          ]
+        ],
+        "forbidden_hit": false,
+        "latency_ms": 5788.161100000252
+      },
+      {
+        "task_id": 3,
+        "task_name": "Media & System Priority Workflow",
+        "passed": true,
+        "turns": 3,
+        "tools_called": [
+          [
+            "play_media",
+            "{\"platform\":\"spotify\",\"query\":\"focus music\"}"
+          ],
+          [
+            "set_volume",
+            "{\"level\":40}"
+          ]
+        ],
+        "forbidden_hit": false,
+        "latency_ms": 9832.28710000003
+      }
+    ]
+  }
+}

@@ -30,7 +30,7 @@ import httpx
 
 logger = logging.getLogger("makima.web_search")
 
-_DDG_HTML_URL = "https://html.duckduckgo.com/html/"
+_DDG_HTML_URL = "https://lite.duckduckgo.com/lite/"
 _DDG_JSON_URL = "https://api.duckduckgo.com/"
 
 _USER_AGENT = (
@@ -90,27 +90,31 @@ class _DDGHTMLParser(HTMLParser):
         self._pending_snippet = ""
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag != "a":
+        if tag not in ("a", "td"):
             return
         attrs_d = dict(attrs)
         classes = (attrs_d.get("class") or "").split()
         raw_href = attrs_d.get("href") or ""
 
-        if "result__a" in classes:
+        if "result__a" in classes or "result-link" in classes:
             self._pending_url = _extract_real_url(raw_href)
             self._pending_title = ""
             self._in_result_a = True
             self._in_snippet = False
 
-        elif "result__snippet" in classes:
+        elif "result__snippet" in classes or "result-snippet" in classes:
+            self._pending_snippet = ""
+            self._in_snippet = True
+            self._in_result_a = False
+        
+        # In lite version, snippet is in a td class='result-snippet', not an <a> tag
+        if tag == "td" and "result-snippet" in classes:
             self._pending_snippet = ""
             self._in_snippet = True
             self._in_result_a = False
 
     def handle_endtag(self, tag: str) -> None:
-        if tag != "a":
-            return
-        if self._in_result_a:
+        if tag == "a" and self._in_result_a:
             self._in_result_a = False
             if self._pending_url and self._pending_title.strip():
                 self.results.append({
@@ -118,7 +122,7 @@ class _DDGHTMLParser(HTMLParser):
                     "title": self._pending_title.strip(),
                     "snippet": "",
                 })
-        elif self._in_snippet:
+        elif tag in ("a", "td") and self._in_snippet:
             self._in_snippet = False
             if self.results:
                 self.results[-1]["snippet"] = self._pending_snippet.strip()
@@ -249,7 +253,7 @@ def _format_results(query: str, results: list[dict[str, str]], max_results: int)
         title = r.get("title") or "(untitled)"
         url = r.get("url") or ""
         snippet = r.get("snippet") or ""
-        lines.append(f"{i}. {title}\n   URL: {url}\n   {snippet}")
+        lines.append(f"Title: {title}\nURL: {url}\nSnippet: {snippet}\n")
 
     return "\n".join(lines)
 
@@ -292,3 +296,30 @@ async def web_search(
             results = html_results + extra
 
     return _format_results(query, results, max_results)
+
+
+async def fetch_url(url: str, timeout: int = 15, **kwargs: Any) -> str:
+    """Fetch raw URL content (JSON/XML/text/HTML) and return clean text as a string."""
+    clean_url = (url or "").strip()
+    if not clean_url:
+        return "[fetch_url] No URL provided."
+    try:
+        headers = {"User-Agent": _USER_AGENT}
+        async with httpx.AsyncClient(**_HTTPX_KWARGS) as client:
+            r = await client.get(clean_url, timeout=timeout, headers=headers)
+            if r.status_code >= 400:
+                return f"[fetch_url] HTTP {r.status_code} error fetching {clean_url}"
+            body = r.text
+            if len(body.encode("utf-8")) > 512 * 1024:
+                return f"[fetch_url] Response too large (> 512KB)."
+            # Strip html tags if it looks like HTML
+            if "<html" in body.lower() or "<body" in body.lower():
+                cleaned = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", body, flags=re.DOTALL | re.IGNORECASE)
+                cleaned = html.unescape(_TAG_RE.sub(" ", cleaned))
+                cleaned = re.sub(r"[ \t]+", " ", cleaned)
+                cleaned = re.sub(r"\n\s*\n\s*\n+", "\n\n", cleaned).strip()
+                return cleaned or body
+            return body
+    except Exception as e:
+        logger.warning("fetch_url failed for %r: %s", clean_url, e)
+        return f"[fetch_url] Error fetching {clean_url}: {e}"

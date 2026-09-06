@@ -1,384 +1,490 @@
-# Makima v7.1 Default Configuration
-# All values can be overridden by environment variables prefixed MAKIMA_
-
-# ─── LLM Backends ────────────────────────────────────────────────────────────
 llm:
-  # Backend priority order for task routing
-  # fast_chat → groq, research → gemini, code → claude, offline → ollama
+  tls_verify: false
+  active_provider: gemini
+  only_alibaba: false
   backends:
-    groq:
-      enabled: true
-      api_key_env: "MAKIMA_GROQ_KEY"
-      model: "llama-3.3-70b-versatile"
-      context_limit: 8192
-      tasks: []
-      rate_limit_tpm: 30000
-      rate_limit_rpm: 30
-      circuit_breaker:
-        max_failures: 3
-        cooldown_s: 60
-
-    github:
-      enabled: false
-      api_key: ""
-      api_key_env: "MAKIMA_GITHUB_KEY"
-      model: "gpt-4o"
-      host: "https://models.inference.ai.azure.com"
-      context_limit: 128000
-      tasks: ["general", "creative", "code", "debugging", "refactoring", "research", "system_control", "automation", "fast_chat", "intent_classification"]
-      rate_limit_tpm: 1000000
-      rate_limit_rpm: 1000
-      circuit_breaker:
-        max_failures: 3
-        cooldown_s: 60
-    
-    qwen:
-      enabled: true
-      api_key: "sk-ws-H.DMMMYEP.FRBT.MEUCIQDoeKuHfDlNigPtyjlvuUZZQN3SuFXyUYFtD8TOCZbzcwIgUlm1J496qPv0DaNKjtlUMs0ey3_Ml2uHu2gviB9fJaM"
-      model: "qwen3.5-omni-plus"
-      host: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-      context_limit: 128000
-      tasks: ["general", "creative", "code", "debugging", "refactoring", "research", "system_control", "automation", "fast_chat", "intent_classification"]
-      rate_limit_tpm: 500000
-      rate_limit_rpm: 5000
-      circuit_breaker:
-        max_failures: 10
-        cooldown_s: 10
-
-    qwen36_flash:
-      enabled: true
-      api_key: "sk-ws-H.DMMMYEP.FRBT.MEUCIQDoeKuHfDlNigPtyjlvuUZZQN3SuFXyUYFtD8TOCZbzcwIgUlm1J496qPv0DaNKjtlUMs0ey3_Ml2uHu2gviB9fJaM"
-      model: "qwen3.6-flash-2026-04-16"
-      host: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-      context_limit: 128000
-      tasks: ["general", "creative", "code", "debugging", "refactoring", "research", "system_control", "automation", "fast_chat", "intent_classification"]
-      rate_limit_tpm: 500000
-      rate_limit_rpm: 5000
-      circuit_breaker:
-        max_failures: 10
-        cooldown_s: 10
-
-    qwen35_flash:
-      enabled: true
-      api_key: "sk-ws-H.DMMMYEP.FRBT.MEUCIQDoeKuHfDlNigPtyjlvuUZZQN3SuFXyUYFtD8TOCZbzcwIgUlm1J496qPv0DaNKjtlUMs0ey3_Ml2uHu2gviB9fJaM"
-      model: "qwen3.5-omni-plus-2026-03-15"
-      host: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-      context_limit: 128000
-      tasks: ["general", "creative", "code", "debugging", "refactoring", "research", "system_control", "automation", "fast_chat", "intent_classification"]
-      rate_limit_tpm: 500000
-      rate_limit_rpm: 5000
-      circuit_breaker:
-        max_failures: 10
-        cooldown_s: 10
-
-    qwen_plus:
-      enabled: true
-      api_key: "sk-ws-H.DMMMYEP.FRBT.MEUCIQDoeKuHfDlNigPtyjlvuUZZQN3SuFXyUYFtD8TOCZbzcwIgUlm1J496qPv0DaNKjtlUMs0ey3_Ml2uHu2gviB9fJaM"
-      model: "qwen-plus"
-      host: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-      host: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-      context_limit: 128000
-      tasks: ["general", "creative", "code", "debugging", "refactoring", "research", "system_control", "automation", "fast_chat", "intent_classification"]
-      rate_limit_tpm: 500000
-      rate_limit_rpm: 5000
-      circuit_breaker:
-        max_failures: 10
-        cooldown_s: 10
-    
-    huggingface:
-      enabled: true
-      api_key_env: "HF_TOKEN"
-      model: "NousResearch/Hermes-3-Llama-3.1-8B:featherless-ai"
-      host: "https://router.huggingface.co/v1"
-      context_limit: 128000
-      tasks: ["automation", "system_control", "browser", "code", "debugging", "refactoring", "research", "analysis", "data_analysis", "media"]
-      rate_limit_tpm: 1000000
-      rate_limit_rpm: 1000
-      circuit_breaker:
-        max_failures: 3
-        cooldown_s: 60
-
     gemini:
       enabled: true
-      api_key_env: "MAKIMA_GEMINI_KEY"
-      model: "gemini-2.5-pro"
+      api_key_env: GEMINI_API_KEY
+      model: gemini-3-flash-preview
+      latency_tier: fast
       context_limit: 1000000
-      tasks: ["research", "analysis", "vision", "daily_briefing"]
-      rate_limit_tpm: 30000
-      rate_limit_rpm: 60
+      tasks:
+      - fast_chat
+      - general
+      - intent_classification
+      - routing
+      - system_control
+      - media
+      - automation
+      - trivial
+      - code
+      - debugging
+      - refactoring
+      - research
+      - analysis
+      - creative
+      - synthesis
+      rate_limit_tpm: 5000000
+      rate_limit_rpm: 5000
       circuit_breaker:
-        max_failures: 3
-        cooldown_s: 60
-    
-    # NOTE (2026-07-18): backend key stays "claude" for minimal code churn
-    # (ai_handler.py branches on this name), but it no longer calls Claude —
-    # pg's OpenRouter key is used with free-tier open models instead of a
-    # paid one. General/default model below; ai_handler.py additionally
-    # swaps to a coding-specialized free model automatically for
-    # code/debugging/refactoring tasks (see _OPENROUTER_FREE_CODE_MODEL).
-    # Free-tier OpenRouter limits (~20 req/min, ~50-200 req/day depending on
-    # account credit) are much lower than a paid plan — rate_limit_rpm below
-    # reflects that; there's no daily-cap enforcement in RateLimitManager
-    # yet, so a very active day could still hit a 429 (handled gracefully:
-    # falls back to the next backend in the routing list).
-    claude:
-      enabled: true
-      api_key: ""
-      api_key_env: "MAKIMA_OPENROUTER_KEY"
-      model: "nvidia/nemotron-3-super-120b-a12b:free"
-      context_limit: 262000
-      tasks: ["general", "creative", "code", "debugging", "refactoring", "research", "system_control", "automation"]
-      rate_limit_tpm: 40000
-      rate_limit_rpm: 15
-      circuit_breaker:
-        max_failures: 3
-        cooldown_s: 60
-    
-    gpt4o:
-      enabled: true
-      api_key_env: "MAKIMA_OPENAI_KEY"
-      model: "gpt-4o"
+        max_failures: 5
+        cooldown_s: 15
+    deepseek_v32:
+      enabled: false
+      api_key_env: DASHSCOPE_API_KEY
+      model: deepseek-v3.2
+      latency_tier: fast
+      host: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
       context_limit: 128000
-      tasks: ["general", "creative"]
-      rate_limit_tpm: 30000
+      tasks:
+      - fast_chat
+      - general
+      - intent_classification
+      - routing
+      - system_control
+      - media
+      - automation
+      - trivial
+      - code
+      - debugging
+      - refactoring
+      - research
+      - analysis
+      - creative
+      - synthesis
+      rate_limit_tpm: 5000000
+      rate_limit_rpm: 5000
+      circuit_breaker:
+        max_failures: 10
+        cooldown_s: 10
+    qwen_flash:
+      enabled: true
+      api_key_env: DASHSCOPE_API_KEY
+      model: qwen3.8-flash
+      latency_tier: fast
+      host: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+      context_limit: 128000
+      tasks:
+      - fast_chat
+      - intent_classification
+      - routing
+      - system_control
+      - media
+      - automation
+      - trivial
+      - general
+      - code
+      - debugging
+      - refactoring
+      - research
+      - analysis
+      - creative
+      rate_limit_tpm: 5000000
+      rate_limit_rpm: 5000
+      circuit_breaker:
+        max_failures: 10
+        cooldown_s: 10
+    qwen:
+      enabled: true
+      api_key_env: DASHSCOPE_API_KEY
+      model: qwen3.8-27b
+      latency_tier: fast
+      host: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+      context_limit: 128000
+      tasks:
+      - general
+      - creative
+      - code
+      - debugging
+      - refactoring
+      - research
+      - system_control
+      - automation
+      - fast_chat
+      - intent_classification
+      - trivial
+      rate_limit_tpm: 5000000
+      rate_limit_rpm: 5000
+      circuit_breaker:
+        max_failures: 10
+        cooldown_s: 10
+    qwen35_plus_0420:
+      enabled: false
+      api_key_env: DASHSCOPE_API_KEY
+      model: qwen3.5-plus-2026-04-20
+      latency_tier: smart
+      host: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+      context_limit: 128000
+      tasks:
+      - general
+      - creative
+      - code
+      - debugging
+      - refactoring
+      - research
+      - synthesis
+      rate_limit_tpm: 5000000
+      rate_limit_rpm: 5000
+      circuit_breaker:
+        max_failures: 10
+        cooldown_s: 10
+    groq:
+      enabled: true
+      api_key_env: GROQ_API_KEY
+      model: qwen/qwen3.8-27b
+      latency_tier: fast
+      host: https://api.groq.com/openai/v1
+      context_limit: 128000
+      tasks:
+      - fast_chat
+      - general
+      - intent_classification
+      - routing
+      - system_control
+      - media
+      - automation
+      - trivial
+      - code
+      - research
+      - analysis
+      - synthesis
+      rate_limit_tpm: 500000
+      rate_limit_rpm: 5000
+      circuit_breaker:
+        max_failures: 5
+        cooldown_s: 10
+    gemini:
+      enabled: true
+      api_key_env: GEMINI_API_KEY
+      model: gemini-2.5-flash
+      latency_tier: fast
+      context_limit: 1000000
+      tasks:
+      - fast_chat
+      - general
+      - intent_classification
+      - routing
+      - system_control
+      - media
+      - automation
+      - trivial
+      - code
+      - research
+      - analysis
+      - synthesis
+    groq_qwen:
+      enabled: false
+      api_key_env: MAKIMA_GROQ_KEY
+      model: llama-3.3-70b-versatile
+      latency_tier: fast
+      host: https://api.groq.com/openai/v1
+      context_limit: 128000
+      tasks:
+      - fast_chat
+      rate_limit_tpm: 500000
+      rate_limit_rpm: 5000
+      circuit_breaker:
+        max_failures: 10
+        cooldown_s: 10
+    groq_fast:
+      enabled: false
+      api_key_env: MAKIMA_GROQ_KEY
+      model: llama3-8b-8192
+      host: https://api.groq.com/openai/v1
+      context_limit: 128000
+      tasks:
+      - fast_chat
+      - code
+      - general
+      - research
+      - analysis
+      - creative
+      rate_limit_tpm: 500000
+      rate_limit_rpm: 5000
+      circuit_breaker:
+        max_failures: 10
+        cooldown_s: 10
+    openrouter:
+      enabled: false
+      api_key_env: OPENROUTER_API_KEY
+      model: meta-llama/llama-3.3-70b-instruct:free
+      host: https://openrouter.ai/api/v1
+      context_limit: 128000
+      tasks:
+      - general
+      - creative
+      - code
+      - debugging
+      - refactoring
+      - research
+      - analysis
+      - synthesis
+      - system_control
+      - automation
+      - fast_chat
+      - intent_classification
+      - trivial
+      rate_limit_tpm: 2000000
+      rate_limit_rpm: 2000
+      circuit_breaker:
+        max_failures: 5
+        cooldown_s: 30
+    claude:
+      enabled: false
+      api_key: ''
+      api_key_env: MAKIMA_OPENROUTER_KEY
+      model: qwen/qwen-plus
+      host: https://openrouter.ai/api/v1
+      context_limit: 128000
+      tasks:
+      - general
+      - creative
+      - code
+      - debugging
+      - refactoring
+      - research
+      - analysis
+      - synthesis
+      - system_control
+      - automation
+      - fast_chat
+      - intent_classification
+      - trivial
+      rate_limit_tpm: 100000
       rate_limit_rpm: 60
       circuit_breaker:
-        max_failures: 3
-        cooldown_s: 60
-    
+        max_failures: 5
+        cooldown_s: 30
     cerebras:
       enabled: false
-      api_key_env: "MAKIMA_CEREBRAS_KEY"
-      model: "llama3.1-70b"
+      api_key_env: MAKIMA_CEREBRAS_KEY
+      model: llama3.1-70b
       context_limit: 131072
-      tasks: ["fast_chat"]
+      tasks:
+      - fast_chat
       rate_limit_tpm: 60000
       rate_limit_rpm: 30
       circuit_breaker:
         max_failures: 3
         cooldown_s: 60
-    
     ollama:
-      enabled: true
-      host: "http://127.0.0.1:11434"
-      model: "llama3.2"
+      enabled: false
+      host: http://127.0.0.1:11434
+      model: llama3.2
       context_limit: 8192
-      tasks: ["offline", "privacy_mode"]
+      tasks:
+      - offline
+      - privacy_mode
       circuit_breaker:
         max_failures: 5
         cooldown_s: 30
-
-# ─── Context Budget ──────────────────────────────────────────────────────────
+    nemotron_free:
+      enabled: false
+      api_key_env: MAKIMA_OPENROUTER_KEY
+      model: nvidia/nemotron-3.5-lightning:free
+      latency_tier: fast
+      host: https://openrouter.ai/api/v1
+      context_limit: 128000
+      tasks:
+      - media
+      - general
+      - creative
+      - automation
+      rate_limit_tpm: 500000
+      rate_limit_rpm: 500
+      circuit_breaker:
+        max_failures: 5
+        cooldown_s: 15
 context_budget:
-  response_headroom_pct: 20    # reserve 20% of context for response
+  response_headroom_pct: 20
   splits:
-    history: 0.40
+    history: 0.4
     memory: 0.25
     graph: 0.15
-    screen: 0.10
-    system: 0.10
-  max_attached_file_tokens: 4000  # per file from multimodal_handler
-
-# ─── Cost Tracking ───────────────────────────────────────────────────────────
+    screen: 0.1
+    system: 0.1
+  max_attached_file_tokens: 4000
 cost:
-  budget_usd: 10.0             # monthly budget; 0 = unlimited
-  warn_pct: 80                 # warn at 80% of budget
-  block_pct: 100               # block cloud LLMs at 100% (Ollama still works)
-
-# ─── Memory ──────────────────────────────────────────────────────────────────
+  budget_usd: 10.0
+  warn_pct: 80
+  block_pct: 100
 memory:
-  sqlite_path: "~/.makima/conversations.db"
-  flush_interval_s: 3          # buffered write interval
-  search_k: 10                 # default number of search results
+  sqlite_path: ~/.makima/conversations.db
+  flush_interval_s: 3
+  search_k: 10
   entity_extraction:
-    min_confidence: 0.7        # below this → stored with low_confidence flag
-    thread_timeout_s: 60       # kill extraction thread after 60s
+    min_confidence: 0.7
+    thread_timeout_s: 60
   dedup:
-    cosine_threshold: 0.92     # above this → potential duplicate
-    short_text_threshold: 0.89 # lower threshold for texts < 20 tokens
+    cosine_threshold: 0.92
+    short_text_threshold: 0.89
   forget:
-    cascade_confirm: true      # ask user before cascading tombstone
-
-# ─── Native Services (gRPC) ─────────────────────────────────────────────────
+    cascade_confirm: true
 native_services:
-  audio:
-    grpc_addr: "127.0.0.1:50051"
-    binary: "native/audio/build/audio_service"
-    health_timeout_s: 2
-  whisper:
-    grpc_addr: "127.0.0.1:50052"
-    binary: "native/whisper/build/whisper_service"
-    health_timeout_s: 2
   embed:
-    grpc_addr: "127.0.0.1:50053"
-    binary: "native/embed/build/embed_service"
+    grpc_addr: 127.0.0.1:50053
+    binary: native/embed/build/embed_service
     health_timeout_s: 2
   screen:
-    grpc_addr: "127.0.0.1:50054"
-    binary: "native/screen/build/screen_service"
+    grpc_addr: 127.0.0.1:50054
+    binary: native/screen/build/screen_service
     health_timeout_s: 2
   notify:
-    grpc_addr: "127.0.0.1:50055"
-    binary: "native/notify/build/notify_service"
+    grpc_addr: 127.0.0.1:50055
+    binary: native/notify/build/notify_service
     health_timeout_s: 2
   clipboard:
-    grpc_addr: "127.0.0.1:50056"
-    binary: "native/clipboard/build/clipboard_service"
+    grpc_addr: 127.0.0.1:50056
+    binary: native/clipboard/build/clipboard_service
     health_timeout_s: 2
-
-# ─── Watchdog ────────────────────────────────────────────────────────────────
 watchdog:
   interval_s: 5
   max_restarts: 5
   backoff_base_s: 2
   backoff_max_s: 60
-  stagger_restart_gap_s: 2     # gap between restarting multiple crashed services
-
-# ─── Disk Guard ──────────────────────────────────────────────────────────────
+  stagger_restart_gap_s: 2
+ghost_watchdog:
+  enabled: true
+  cron_interval_s: 300
+  alert_cooldown_s: 300
+  cron_endpoints:
+  - name: Brain Health
+    url: http://127.0.0.1:8080/health
+    method: GET
+    timeout_s: 10
+    expected_status: 200
+    alert_on_failure: true
+  webhook:
+    enabled: true
+    secret: ''
+    max_payload_size: 65536
 disk:
-  monitor_path: "~/.makima/"
+  monitor_path: ~/.makima/
   poll_interval_s: 60
   warn_pct: 80
   critical_pct: 90
   emergency_pct: 95
-  recovery_pct: 88             # re-enable writes when space drops below this
-  hnsw_growth_warn_mb_day: 10  # notify if HNSW growing > 10MB/day
-
-# ─── Checkpoint ──────────────────────────────────────────────────────────────
+  recovery_pct: 88
+  hnsw_growth_warn_mb_day: 10
 checkpoint:
   interval_s: 15
-  path: "~/.makima/checkpoint.cbor"
-
-# ─── Voice & Speech ──────────────────────────────────────────────────────────
+  path: ~/.makima/checkpoint.cbor
 voice:
   wake_word_enabled: true
-  hotword_engine: "openwakeword"  # openwakeword | porcupine | fixed
-  hotword_word: "hey makima"
+  hotword_engine: openwakeword
+  hotword_word: hey makima
   hotword_threshold: 0.5
-  hotword_model_path: "~/.makima/hotword/"
-  ptt_key: "ctrl+shift+space"
-  ptt_min_hold_ms: 300         # < 300ms = accidental tap, discard
-  ptt_max_hold_s: 30           # > 30s = stuck key, auto-release
-  tts_engine: "kokoro"          # kokoro | edge-tts | pyttsx3
-  tts_voice: "en-US-AriaNeural" # used by edge-tts
-  kokoro:
-    model_dir: "models/kokoro"   # relative to repo root; auto-created on first use
-    model_file: "kokoro-v1.0.int8.onnx"   # ~88 MB; int8 quantized (recommended)
-    voices_file: "voices-v1.0.bin"        # ~28 MB
-    voice: "af_heart"            # default Kokoro voice (af_heart, af_sarah, am_adam, etc.)
-    speed: 1.0                   # speech rate multiplier
-    # espeak-ng is OPTIONAL — only needed for unusual OOD word pronunciation.
-    # English synthesis works without it; pronunciation may degrade on rare words.
-  stt_hallucination_blocklist:
-    - "Thank you."
-    - "Thanks for watching."
-    - "Thank you for watching."
-    - "..."
+  hotword_model_path: ~/.makima/hotword/
+  ptt_key: ctrl+shift+space
+  ptt_min_hold_ms: 300
+  ptt_max_hold_s: 30
+  voice_engine: gemini_live
+  gemini_live:
+    model: gemini-2.5-flash-native-audio-latest
+    voice_name: Aoede
   diarization:
     enabled: false
-    enrollment_path: "~/.makima/voice_enroll.npy"
-  stt:
-    confidence_threshold: 0.7      # auto-route above this
-    low_confidence_threshold: 0.3  # ask to repeat below this
-    confirm_timeout_s: 10          # auto-confirm after 10s if confidence > 0.5
-    language: "hi"                 # ISO 639-1 hint for Whisper (Hindi/Hinglish)
-    beam_size: 5                   # Whisper beam search width
-    initial_prompt: >-
-      YouTube, Spotify, WhatsApp, Telegram, Discord, Chrome,
-      Notepad, gaana chalao, band karo, kholo, dikhao, bhejo,
-      aawaz, volume, brightness, hey makima
-    vocabulary_path: "~/.makima/stt_vocabulary.yaml"
-
-# ─── Screen Reader ───────────────────────────────────────────────────────────
+    enrollment_path: ~/.makima/voice_enroll.npy
 screen:
-  frame_delta_threshold_pct: 2.0  # skip vision if < 2% change
+  frame_delta_threshold_pct: 2.0
   max_width: 1280
   max_height: 720
-  vision_backend: "gemini"        # gemini | claude
-  ocr_fallback: true              # use Tesseract if vision API fails
-
-# ─── Clipboard ───────────────────────────────────────────────────────────────
+  vision_backend: gemini
+  ocr_fallback: true
 clipboard:
   enabled: true
   max_chars: 4000
-  ws_events: false                # opt-in: emit clipboard_changed WS events
-
-# ─── Notifications ───────────────────────────────────────────────────────────
+  ws_events: false
 notifications:
-  outbound: true                  # send Windows toasts
-  inbound: false                  # read notification center (privacy-sensitive)
-
-# ─── Messaging ────────────────────────────────────────────────────────────────
-# NOTE (2026-07-29): this section didn't exist at all before — MessagingHub
-# reads config.get("messaging", {}) so it ran with zero adapters other than
-# whatsapp (which needs no key here) on any install that hadn't manually
-# added these via the Integrations UI. Documenting the actual keys it reads.
+  outbound: true
+  inbound: false
 messaging:
-  telegram_bot_token: ""          # env: MAKIMA_TELEGRAM_BOT_TOKEN (set via Integrations UI)
-  discord_bot_token: ""           # env: MAKIMA_DISCORD_BOT_TOKEN (set via Integrations UI)
+  telegram_bot_token: ''
+  discord_bot_token: ''
   email:
-    smtp_host: "smtp.gmail.com"
+    smtp_host: smtp.gmail.com
     smtp_port: 587
-    imap_host: "imap.gmail.com"
-    username: ""
-    password: ""                  # use an app password, not your real password
+    imap_host: imap.gmail.com
+    username: ''
+    password: ''
   whatsapp:
-    enabled: true                 # browser-based (shares the managed Chromium
-                                   # profile) — no token needed, just a QR scan
-                                   # on first use. Set false to disable entirely.
-
-# ─── Calendar ────────────────────────────────────────────────────────────────
+    enabled: true
 calendar:
-  backend: "none"                 # none | google | outlook | ics
-  google_token_path: "~/.makima/gcal_token.json"
-  outlook_token_path: "~/.makima/outlook_token.json"
-  ics_path: ""
-
-# ─── Ollama ──────────────────────────────────────────────────────────────────
+  backend: none
+  google_token_path: ~/.makima/gcal_token.json
+  outlook_token_path: ~/.makima/outlook_token.json
+  ics_path: ''
 ollama:
-  require: false                  # if true, build gate fails without Ollama
-  host: "http://127.0.0.1:11434"
-  default_model: "llama3.2"
+  require: false
+  host: http://127.0.0.1:11434
+  default_model: llama3.2
   max_restart_attempts: 3
-
-# ─── Privacy Mode ────────────────────────────────────────────────────────────
 privacy:
-  mode: false                     # global privacy toggle
-  # When true: no cloud LLMs, no screen capture, no notification reading,
-  # no clipboard events, Ollama-only for inference
-
-# ─── Agent Guardrails ────────────────────────────────────────────────────────
+  mode: false
 agents:
+  models:
+    system_agent: deepseek_v32
+    browser_agent: deepseek_v32
+    code_agent: deepseek_v32
+    research_agent: deepseek_v32
+    media_agent: deepseek_v32
+    document_agent: deepseek_v32
+    data_analyst_agent: deepseek_v32
+    messaging_agent: deepseek_v32
+    automation_agent: deepseek_v32
+    security_agent: deepseek_v32
+    devops_agent: deepseek_v32
+    creative_agent: deepseek_v32
+    voice_agent: deepseek_v32
+    memory_agent: deepseek_v32
   background_limits:
-    max_wall_time_s: 300          # 5 minutes
+    max_wall_time_s: 300
     max_tokens: 50000
     max_tool_calls: 20
   interactive_limits:
-    max_wall_time_s: 600          # 10 minutes
+    max_wall_time_s: 600
     max_tokens: 100000
     max_tool_calls: 50
   commander:
-    max_subtasks_warn: 10         # warn user if decomposition > 10 subtasks
-    max_call_depth: 3             # prevent recursive self-calls
-
-# ─── Offline Queue ───────────────────────────────────────────────────────────
+    max_subtasks_warn: 10
+    max_call_depth: 3
 offline_queue:
   max_messages: 50
-  stale_screen_context_s: 30     # screen context older than this → None on replay
-
-# ─── Export / Import ─────────────────────────────────────────────────────────
+  stale_screen_context_s: 30
 export:
-  backup_path: "~/Documents/makima_backups/"
-  encrypt: false                  # AES-256 encryption (user provides password)
-
-# ─── Proactive Suppression ───────────────────────────────────────────────────
+  backup_path: ~/Documents/makima_backups/
+  encrypt: false
 proactive:
   fullscreen_check: true
-  idle_min_s: 30                  # suppress if user interacted < 30s ago
-  max_queued: 5                   # max suppressed proactive messages in queue
-
-# ─── Server ──────────────────────────────────────────────────────────────────
+  idle_min_s: 30
+  max_queued: 5
+media:
+  connectors:
+    youtube:
+      type: native_browser_app
+      handler: _play_youtube
+      domain_markers:
+      - youtube.com
+      - youtu.be
+      aliases:
+      - youtube
+      - yt
+      - youtube pe
+      - yt pe
+      - youtube par
+      is_default: true
+    spotify:
+      type: native_browser_app
+      handler: _play_spotify
+      domain_markers:
+      - spotify.com
+      aliases:
+      - spotify
+      - spotify pe
+      - spotify par
 server:
   rest_port: 8080
   ws_port: 8765
-  host: "127.0.0.1"
+  host: 127.0.0.1
+mcp_servers: []

@@ -51,6 +51,8 @@ import threading
 from pathlib import Path
 
 DASHSCOPE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
+TOKENROUTER_URL = "https://api.tokenrouter.com/v1/chat/completions"
+TOKENROUTER_KEY = os.getenv("TOKENROUTER_API_KEY", "sk-vMQYfvHqLnMVSzef3Za0TiQQriAB1UkjXUpgHdxBDeXP9EP7")
 SESSION_DIR = Path.home() / ".makima" / "sessions"
 
 CODEBASE_ANALYSIS_BRIEF = """
@@ -182,16 +184,10 @@ You have access to local skill manuals under `.agents/skills/`. Before performin
 """ + CODEBASE_ANALYSIS_BRIEF + MASTER_WORKFLOW_BRIEF + RIGOROUS_CODE_DEVELOPMENT_BRIEF + PROBLEM_REASONING_BRIEF + CODEBASE_GAP_ANALYSIS_BRIEF
 
 MODELS_FALLBACK_LIST = [
-    "qwen3.7-flash-2026-07-15",
-    "qwen3.6-plus-2026-04-02",
-    "qwen3.7-plus-2026-05-26",
+    "deepseek-v4-pro",
     "qwen3.7-max-preview",
-    "qwen3.7-max-2026-05-20",
-    "kimi-k2.7-code",
-    "qwen-coder-plus",
-    "qwen-plus",
-    "qwen-max",
-    "qwen3-coder-plus",
+    "qwen3.7-plus",
+    "qwen3.7-flash",
 ]
 
 # If set via --model flag, only this model is tried (no fallback list).
@@ -399,11 +395,7 @@ class Agent:
 
         # Helper function to extract robust commands
         def find_commands(tag: str) -> list[str]:
-            cmds = []
-            # Match double brackets non-greedy (e.g. <<TAG: ...>>)
-            cmds.extend(re.findall(rf"<<{tag}:\s*(.+?)>>", full_content, re.DOTALL))
-            # Match single brackets non-greedy (e.g. <TAG: ...>) and not nested in double
-            cmds.extend(re.findall(rf"(?<!<)<{tag}:\s*(.+?)>(?!>)", full_content, re.DOTALL))
+            cmds = re.findall(rf"<+{tag}:\s*(.+?)>+", full_content, re.DOTALL)
             return [c.strip() for c in cmds if c.strip()]
 
         for path in find_commands("READ_FILE"):
@@ -420,7 +412,7 @@ class Agent:
 
         # PATCH_FILE: surgical find+replace (multi-line body extracted between tag and next tag)
         patch_matches = re.findall(
-            r"<<PATCH_FILE:\s*([^\n>]+)>>\s*\n(.*?)(?=<<[A-Z_]+:|```[a-z]*:|$)",
+            r"<+PATCH_FILE:\s*([^\n>]+)>+\s*\n(.*?)(?=<+[A-Z_]+:|```[a-z]*:|$)",
             full_content,
             re.DOTALL,
         )
@@ -449,6 +441,29 @@ class Agent:
             if cmd_clean and cmd_clean not in tool_results:
                 tool_results += self._tool_run_cmd(cmd_clean)
 
+        # Catch <parameter=command> command </parameter>
+        param_cmds = re.findall(r"<parameter(?:=|\s+name=)[\"']?command[\"']?>(.*?)</parameter>", full_content, re.DOTALL)
+        for cmd in param_cmds:
+            cmd_clean = cmd.strip()
+            if cmd_clean and cmd_clean not in tool_results:
+                tool_results += self._tool_run_cmd(cmd_clean)
+
+        # Flexible Kimi K3 tool call extractor
+        call_blocks = re.findall(r'call tool="([^"]+)"(.*?)(?=<\|close\|>|call tool=|</tool>|$)', full_content, re.DOTALL)
+        for tspec, body in call_blocks:
+            tspec_clean = tspec.split(":")[0].strip().upper()
+            # Extract path or target from body
+            arg_match = re.search(r'(?:path|file|pattern|command|key="[^"]+")\s*[:=]?\s*["\']?([^"\':\n<]+)', body, re.IGNORECASE)
+            val = arg_match.group(1).strip() if arg_match else "."
+            if "LIST" in tspec_clean or "DIR" in tspec_clean:
+                tool_results += self._tool_list_dir(val)
+            elif "READ" in tspec_clean:
+                tool_results += self._tool_read_file(val)
+            elif "GREP" in tspec_clean:
+                tool_results += self._tool_grep(val)
+            elif "RUN" in tspec_clean or "CMD" in tspec_clean:
+                tool_results += self._tool_run_cmd(val)
+
         code_matches = re.findall(
             r"```(?:python)?:([a-zA-Z0-9_\-\./\\]+\.\w+)\s*\n(.*?)\n```", full_content, re.DOTALL
         )
@@ -459,7 +474,7 @@ class Agent:
 
     # ---------- main loop ----------
 
-    def run_task(self, task_prompt: str, max_turns: int = 20):
+    def run_task(self, task_prompt: str, max_turns: int = 60):
         log(self.name, "=" * 56)
         log(self.name, "TASK EXECUTION")
         log(self.name, f"TASK: {task_prompt}")
@@ -490,8 +505,12 @@ class Agent:
 
             tool_results = self._run_all_tools(full_content)
             if not tool_results:
-                log(self.name, "[INFO] No tools invoked this turn. Ending loop.")
-                break
+                if any(tag in full_content for tag in ["<invoke", "<tool_call", "<function_call", "PATCH_FILE", "RUN_CMD", "READ_FILE", "LIST_DIR", "GREP"]):
+                    log(self.name, "[INFO] Caught hallucinated XML tool call. Sending format reminder.")
+                    tool_results = "\n--- SYSTEM ERROR: Unrecognized tool format. You MUST use <<RUN_CMD: command>>, <<READ_FILE: path>>, <<PATCH_FILE: file>>\\n...patch... or ```python:file.py``` syntax. To browse the web, use <<RUN_CMD: curl -s URL>>. Do NOT use <invoke> tags. ---\n"
+                else:
+                    log(self.name, "[INFO] No tools invoked this turn. Ending loop.")
+                    break
 
             self.messages.append({"role": "user", "content": f"Tool Execution Results:\n{tool_results}"})
             self.save_session()
@@ -505,17 +524,29 @@ class Agent:
             full_content = ""
             full_reasoning = ""
             try:
-                payload = {
-                    "model": model,
-                    "messages": self.messages,
-                    "stream": True,
-                    "enable_thinking": True,
-                }
+                if "moonshotai" in model or "kimi" in model or "glm" in model:
+                    target_url = TOKENROUTER_URL
+                    target_key = TOKENROUTER_KEY
+                    payload = {
+                        "model": model,
+                        "messages": self.messages,
+                        "stream": True,
+                    }
+                else:
+                    target_url = DASHSCOPE_URL
+                    target_key = self.api_key
+                    payload = {
+                        "model": model,
+                        "messages": self.messages,
+                        "stream": True,
+                        "enable_thinking": True,
+                    }
+
                 req = urllib.request.Request(
-                    DASHSCOPE_URL,
+                    target_url,
                     data=json.dumps(payload).encode("utf-8"),
                     headers={
-                        "Authorization": f"Bearer {self.api_key}",
+                        "Authorization": f"Bearer {target_key}",
                         "Content-Type": "application/json",
                         "Accept": "text/event-stream",
                     },
@@ -523,7 +554,7 @@ class Agent:
                 )
                 in_thinking = False
                 in_content = False
-                with urllib.request.urlopen(req, timeout=120) as resp:
+                with urllib.request.urlopen(req, timeout=None) as resp:
                     for line in resp:
                         line_str = line.decode("utf-8").strip()
                         if not line_str or line_str == "data: [DONE]":
@@ -568,20 +599,7 @@ def load_env():
                 os.environ[key.strip()] = val.strip()
 
 def get_api_key() -> str:
-    load_env()
-    api_key = os.getenv(
-        "DASHSCOPE_API_KEY",
-        "sk-ws-H.XEXYYX.2ebM.MEUCIHvVzZqu27dFAuj2YzCAulR0Vckqmt9RYgi4iE5w4AiVAiEAsAqKZT6q5pXNGylMZ8Rtgg6CQ_KfxtvI5rf22zC9ZyQ"
-    )
-    if not api_key:
-        print(
-            "[FATAL] DASHSCOPE_API_KEY is not set.\n"
-            "        export DASHSCOPE_API_KEY=\"sk-...\"\n"
-            "        Never hardcode API keys in source files.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    return api_key
+    return os.getenv("DASHSCOPE_API_KEY") or "sk-ws-H.DMLDDML.N9Aa.MEQCIFFPpc9khMoVeAAwV82OZBf7JQNl3TgVN28sd8ethgI_AiB94k4JdQ0clKwJODNIVSqj2_8CpxFq1XwqA6SzmEmelg"
 
 
 def list_agents():

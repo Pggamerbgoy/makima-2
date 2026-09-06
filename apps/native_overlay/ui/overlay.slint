@@ -1,0 +1,155 @@
+import { Button, LineEdit, VerticalBox } from "std-widgets.slint";
+
+export component MainWindow inherits Window {
+    title: "Makima";
+    width: compact ? 430px : 430px;
+    height: compact ? 68px : 520px;
+    always-on-top: pinned;
+    background: transparent;
+
+    in-out property<bool> compact: true;
+    in-out property<bool> connected: false;
+    in-out property<bool> pinned: true;
+    in-out property<bool> voice-active: false;
+    in-out property<string> status: "Connecting to Makima...";
+    in-out property<string> history: "";
+    in-out property<string> preview: "";
+    in-out property<string> input-text: "";
+    in-out property<string> confirmation: "";
+
+    callback send-message(string);
+    callback toggle-compact();
+    callback toggle-pin();
+    callback open-chat();
+    callback start-voice();
+    callback stop-voice();
+    callback approve-action();
+    callback reject-action();
+    callback hide-overlay();
+
+    if compact : Rectangle {
+        border-radius: 20px;
+        background: #171322;
+        border-width: 1px;
+        border-color: connected ? #8b5cf6 : #4b5563;
+
+        HorizontalLayout {
+            padding: 9px;
+            spacing: 8px;
+            Text { text: "M"; color: #c4b5fd; font-size: 20px; font-weight: 700; }
+            Rectangle {
+                width: 8px; height: 8px; border-radius: 4px;
+                background: voice-active ? #ef4444 : (connected ? #55d68a : #6b7280);
+            }
+            Text {
+                text: preview == "" ? status : preview;
+                color: #e4e4e7;
+                font-size: 12px;
+                width: 130px;
+                overflow: elide;
+            }
+            LineEdit {
+                text <=> input-text;
+                placeholder-text: "Reply to Makima...";
+                horizontal-stretch: 1;
+                accepted => { send-message(input-text); input-text = ""; }
+            }
+            Button { text: ">"; clicked => { send-message(input-text); input-text = ""; } }
+            Button { text: "^"; clicked => { toggle-compact(); } }
+        }
+    }
+
+    if !compact : Rectangle {
+        border-radius: 18px;
+        background: #11101a;
+        border-width: 1px;
+        border-color: #3a3152;
+
+        VerticalBox {
+            padding: 14px;
+            spacing: 10px;
+
+            HorizontalLayout {
+                height: 30px;
+                spacing: 8px;
+                Text { text: "M"; color: #c4b5fd; font-size: 21px; font-weight: 700; }
+                Text { text: "Makima"; color: #f8fafc; font-size: 16px; font-weight: 600; horizontal-stretch: 1; }
+                Rectangle {
+                    width: 8px; height: 8px; border-radius: 4px;
+                    background: voice-active ? #ef4444 : (connected ? #55d68a : #f59e0b);
+                }
+                Button { text: pinned ? "P" : "p"; clicked => { toggle-pin(); } }
+                Button { text: "-"; clicked => { toggle-compact(); } }
+                Button { text: "X"; clicked => { hide-overlay(); } }
+            }
+
+            Text { text: status; color: #a1a1aa; font-size: 11px; horizontal-stretch: 1; }
+
+            Rectangle {
+                height: 1px;
+                background: #2b2638;
+            }
+
+            Text {
+                text: history;
+                color: #e4e4e7;
+                font-size: 13px;
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                vertical-alignment: TextVerticalAlignment.bottom;
+                wrap: word-wrap;
+                overflow: elide;
+            }
+
+            if confirmation != "" : Rectangle {
+                border-radius: 10px;
+                background: #3a241d;
+                border-width: 1px;
+                border-color: #c08457;
+                HorizontalLayout {
+                    padding: 8px;
+                    Text { text: confirmation; color: #fed7aa; font-size: 11px; horizontal-stretch: 1; wrap: word-wrap; }
+                    Button { text: "Allow"; clicked => { approve-action(); } }
+                    Button { text: "Deny"; clicked => { reject-action(); } }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 7px;
+                LineEdit {
+                    text <=> input-text;
+                    placeholder-text: "Ask Makima...";
+                    horizontal-stretch: 1;
+                    accepted => { send-message(input-text); input-text = ""; }
+                }
+                Button { text: ">"; clicked => { send-message(input-text); input-text = ""; }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 7px;
+                Button { text: voice-active ? "Stop voice" : "Start voice"; clicked => { if voice-active { stop-voice(); } else { start-voice(); } } }
+                Button { text: "Open chat"; clicked => { open-chat(); } }
+            }
+        }
+    }
+}
+
+export component TrayIcon inherits SystemTrayIcon {
+    tooltip: "Makima";
+    Menu {
+        MenuItem { title: "Show Makima"; activated => { show-overlay(); } }
+        MenuItem { title: "Open chat in Chrome"; activated => { open-chat(); } }
+        MenuSeparator { }
+        MenuItem { title: "Start voice"; activated => { start-voice(); } }
+        MenuItem { title: "Stop voice"; activated => { stop-voice(); } }
+        MenuSeparator { }
+        MenuItem { title: "Quit overlay"; activated => { quit-overlay(); } }
+    }
+
+    callback show-overlay();
+    callback open-chat();
+    callback start-voice();
+    callback stop-voice();
+    callback quit-overlay();
+}

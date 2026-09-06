@@ -158,21 +158,98 @@ async def get_portfolio_summary(assets: List[Dict[str, Union[str, float, int]]])
         logger.exception("Failed to generate portfolio summary")
         return {"status": "error", "message": f"Portfolio calculation failed: {str(e)}"}
 
-async def register_finance_tools(registry: Any) -> None:
-    """Registers the elite finance toolset into the Makima OS v7.2 tool registry."""
+def register_finance_tools(registry: Any) -> None:
+    """Registers the elite finance toolset into the Makima OS tool registry."""
     try:
         tools = [
-            {"name": "track_expense", "func": track_expense, "description": "Records a financial expense. Args: amount (float), category (str), description (str), currency (str)."},
-            {"name": "analyze_budget", "func": analyze_budget, "description": "Analyzes monthly spending against a target budget. Args: month (int), year (int), target_budget (float)."},
-            {"name": "parse_receipt_ocr", "func": parse_receipt_ocr, "description": "Parses raw OCR receipt text to extract merchant, date, total, and tax. Args: receipt_text (str)."},
-            {"name": "get_portfolio_summary", "func": get_portfolio_summary, "description": "Calculates portfolio valuation, allocation weights, and HHI risk. Args: assets (list of dicts)."}
+            {
+                "name": "track_expense",
+                "func": track_expense,
+                "description": "Call this tool EXCLUSIVELY to record a financial expense when the user provides an amount and category. Args: amount (float), category (str), description (str), currency (str).",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "amount": {"type": "number", "description": "Expense monetary amount (must be positive)"},
+                        "category": {"type": "string", "description": "Expense category (e.g. food, travel, software, utilities)"},
+                        "description": {"type": "string", "description": "Item description or memo"},
+                        "currency": {"type": "string", "description": "Three-letter currency code (e.g. USD, EUR)", "default": "USD"},
+                    },
+                    "required": ["amount", "category", "description"],
+                },
+                "category": "finance",
+            },
+            {
+                "name": "analyze_budget",
+                "func": analyze_budget,
+                "description": "Call this tool EXCLUSIVELY when asked to analyze monthly spending against a target budget. Args: month (int), year (int), target_budget (float).",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "month": {"type": "integer", "description": "Month number (1-12)"},
+                        "year": {"type": "integer", "description": "Four-digit year (e.g. 2026)"},
+                        "target_budget": {"type": "number", "description": "Total target spending budget amount"},
+                    },
+                    "required": ["month", "year", "target_budget"],
+                },
+                "category": "finance",
+            },
+            {
+                "name": "parse_receipt_ocr",
+                "func": parse_receipt_ocr,
+                "description": "Call this tool EXCLUSIVELY to parse raw OCR text from a receipt and extract merchant, date, total, and tax. Args: receipt_text (str).",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "receipt_text": {"type": "string", "description": "Raw extracted OCR text from a physical or digital receipt"},
+                    },
+                    "required": ["receipt_text"],
+                },
+                "category": "finance",
+            },
+            {
+                "name": "get_portfolio_summary",
+                "func": get_portfolio_summary,
+                "description": "Call this tool EXCLUSIVELY to calculate portfolio valuation, asset allocation weights, and Herfindahl-Hirschman Index (HHI) risk. Args: assets (list of dicts).",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "assets": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "ticker": {"type": "string", "description": "Asset ticker or symbol (e.g. AAPL, BTC)"},
+                                    "shares": {"type": "number", "description": "Number of units/shares held"},
+                                    "price": {"type": "number", "description": "Current price per unit"},
+                                },
+                                "required": ["ticker", "shares", "price"],
+                            },
+                            "description": "List of asset positions with ticker, shares, and current price",
+                        },
+                    },
+                    "required": ["assets"],
+                },
+                "category": "finance",
+            },
         ]
 
         for tool in tools:
             if hasattr(registry, "register"):
-                registry.register(name=tool["name"], func=tool["func"], description=tool["description"])
+                registry.register(
+                    name=tool["name"],
+                    func=tool["func"],
+                    description=tool["description"],
+                    schema=tool["schema"],
+                    category=tool["category"],
+                )
             elif hasattr(registry, "add_tool"):
-                registry.add_tool(tool["name"], tool["func"], tool["description"])
+                registry.add_tool(
+                    name=tool["name"],
+                    func=tool["func"],
+                    description=tool["description"],
+                    schema=tool["schema"],
+                    category=tool["category"],
+                )
             else:
                 registry[tool["name"]] = tool["func"]
 

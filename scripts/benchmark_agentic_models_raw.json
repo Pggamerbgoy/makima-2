@@ -1,0 +1,101 @@
+{
+  "qwen_27b": {
+    "model": "qwen3.6-27b",
+    "backend": "qwen",
+    "tasks_evaluated": 3,
+    "tasks_passed": 3,
+    "pass_rate_pct": 100.0,
+    "avg_latency_ms": 26267.343299999993,
+    "task_breakdown": [
+      {
+        "task_id": 1,
+        "task_name": "Diagnostic & Corrective Window Management",
+        "passed": true,
+        "turns": 3,
+        "executed_tools": [
+          "kill_process",
+          "get_process_list",
+          "manage_window",
+          "manage_window",
+          "get_process_list"
+        ],
+        "constraints_violated": false,
+        "latency_ms": 42063.45990000045
+      },
+      {
+        "task_id": 2,
+        "task_name": "App Launch with Self-Healing Recovery",
+        "passed": true,
+        "turns": 2,
+        "executed_tools": [
+          "launch_app",
+          "search_installed_apps",
+          "launch_app"
+        ],
+        "constraints_violated": false,
+        "latency_ms": 18379.587499999616
+      },
+      {
+        "task_id": 3,
+        "task_name": "Media & System Priority Workflow",
+        "passed": true,
+        "turns": 2,
+        "executed_tools": [
+          "play_media",
+          "set_volume"
+        ],
+        "constraints_violated": false,
+        "latency_ms": 18358.98249999991
+      }
+    ]
+  },
+  "nemotron": {
+    "model": "nvidia/llama-3.1-nemotron-70b-instruct:free",
+    "backend": "claude",
+    "tasks_evaluated": 3,
+    "tasks_passed": 3,
+    "pass_rate_pct": 100.0,
+    "avg_latency_ms": 18493.745466666343,
+    "task_breakdown": [
+      {
+        "task_id": 1,
+        "task_name": "Diagnostic & Corrective Window Management",
+        "passed": true,
+        "turns": 2,
+        "executed_tools": [
+          "manage_window",
+          "get_process_list"
+        ],
+        "constraints_violated": false,
+        "latency_ms": 18145.995299999413
+      },
+      {
+        "task_id": 2,
+        "task_name": "App Launch with Self-Healing Recovery",
+        "passed": true,
+        "turns": 3,
+        "executed_tools": [
+          "launch_app",
+          "search_installed_apps",
+          "launch_app",
+          "read_file",
+          "launch_app"
+        ],
+        "constraints_violated": false,
+        "latency_ms": 19053.91569999938
+      },
+      {
+        "task_id": 3,
+        "task_name": "Media & System Priority Workflow",
+        "passed": true,
+        "turns": 2,
+        "executed_tools": [
+          "play_media",
+          "set_volume"
+        ],
+        "constraints_violated": false,
+        "latency_ms": 18281.32540000024
+      }
+    ]
+  }
+}

@@ -17,7 +17,9 @@ import base64
 import logging
 import os
 import sys
+import time
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 logger = logging.getLogger("makima.browser_controller")
 
@@ -83,7 +85,11 @@ class BrowserController:
         self._cdp_page_is_new = False  # True if we created the CDP page ourselves
 
         self._page_timeout_ms = self.config.get("page_timeout_ms", 30_000)
-        self._headless = self.config.get("headless", False)
+        self._playwright_available: Optional[bool] = None
+        # NOTE: headless is ALWAYS False for Makima desktop assistant — the browser
+        # must be visible to the user. This is hardcoded at all launch sites below
+        # and is NOT configurable. Removing the config-readable flag prevents any
+        # accidental headless=True configuration from breaking desktop UX.
 
     @property
     def _page(self):
@@ -91,7 +97,7 @@ class BrowserController:
         return self._pages.get("default") or self._pages.get("browser")
 
     async def get_page(self, tab: str = "default"):
-        """Get or create a named Playwright Page tab (e.g. 'media', 'browser')."""
+        """Get or create a named Playwright Page tab with active tab pruning & RAM optimization."""
         page = self._pages.get(tab)
         if page and not page.is_closed():
             try:
@@ -100,24 +106,8 @@ class BrowserController:
                 pass
             self._ensure_window_visible()
             return page
-        # If the requested page is closed, check if browser is still healthy
-        # If all pages are closed, the browser might be in a bad state — recover it
-        if page and page.is_closed():
-            self._pages.pop(tab, None)
-            all_closed = all(p.is_closed() for p in self._pages.values()) if self._pages else True
-            if all_closed and self._browser:
-                logger.info("All pages closed, recovering browser...")
-                try:
-                    if hasattr(self._browser, "is_connected") and not self._browser.is_connected():
-                        await self._browser.disconnect()
-                        self._browser = None
-                        self._cdp_attached = False
-                except Exception:
-                    self._browser = None
-                    self._cdp_attached = False
 
         if not await self._ensure_ready():
-            # Browser recovery failed
             logger.warning("get_page: _ensure_ready failed, attempting browser recovery...")
             await self._recover_browser()
             if not await self._ensure_ready():
@@ -130,10 +120,43 @@ class BrowserController:
             except Exception:
                 if getattr(self._browser, "contexts", None):
                     context = self._browser.contexts[0]
-        if context:
-            new_p = await context.new_page()
-        else:
+        if not context:
             return None
+
+        # ── RAM & TAB OPTIMIZATION: Clean up leftover blank tabs and reuse unassigned pages ──
+        existing_pages = [p for p in getattr(context, "pages", []) if not p.is_closed()]
+        if len(existing_pages) > 4:
+            for p in existing_pages:
+                if len([pg for pg in getattr(context, "pages", []) if not pg.is_closed()]) <= 3:
+                    break
+                if p not in self._pages.values():
+                    try:
+                        await p.close()
+                    except Exception:
+                        pass
+            existing_pages = [p for p in getattr(context, "pages", []) if not p.is_closed()]
+
+        blank_unassigned = [p for p in existing_pages if p not in self._pages.values() and p.url in ("about:blank", "", None)]
+        other_unassigned = [p for p in existing_pages if p not in self._pages.values() and p.url not in ("about:blank", "", None)]
+
+        if blank_unassigned:
+            new_p = blank_unassigned[0]
+            # Close any extra duplicate blank tabs
+            for extra_blank in blank_unassigned[1:]:
+                try:
+                    await extra_blank.close()
+                except Exception:
+                    pass
+        elif other_unassigned:
+            new_p = other_unassigned[0]
+        else:
+            new_p = await context.new_page()
+            for p in existing_pages:
+                if p not in self._pages.values() and p.url in ("about:blank", "", None):
+                    try:
+                        await p.close()
+                    except Exception:
+                        pass
 
         new_p.set_default_timeout(self._page_timeout_ms)
         self._pages[tab] = new_p
@@ -196,29 +219,33 @@ class BrowserController:
     async def start(self, preferred_browser: str | None = None, try_cdp: bool = True) -> bool:
         """Start Playwright and launch a managed Chromium browser."""
         try:
-            # First priority: Attach to user's existing open Chrome/Brave/Edge window if CDP port 9222 is active
-            if try_cdp:
+            # 1. Socket check: Only attach CDP if port 9222 is actively listening
+            import socket
+            port_alive = False
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(0.5)
+                    port_alive = s.connect_ex(("127.0.0.1", 9222)) == 0
+            except Exception:
+                port_alive = False
+
+            if try_cdp and port_alive:
                 try:
                     if await self.attach_cdp(9222):
                         logger.info("BrowserController: Attached to existing open browser window via CDP (9222)")
                         return True
                 except Exception as e_cdp:
-                    logger.debug(f"CDP attach attempt failed, falling back to managed browser: {e_cdp}")
+                    logger.debug(f"CDP attach attempt failed: {e_cdp}")
 
             from playwright.async_api import async_playwright
             if not self._playwright:
                 self._playwright = await async_playwright().start()
-            user_data_dir = os.path.expanduser("~/.makima/browser_profile")
-            os.makedirs(user_data_dir, exist_ok=True)
-            # Clean up old lock files if they exist to prevent singleton errors
-            for lock_name in ["SingletonLock", "lockfile"]:
-                lock_path = os.path.join(user_data_dir, lock_name)
-                if os.path.exists(lock_path):
-                    try:
-                        os.remove(lock_path)
-                    except Exception:
-                        pass
 
+            # 2. Launch with persistent user profile so logins and cookies are retained across sessions
+            from pathlib import Path
+            profile_path = Path.home() / ".makima" / "browser_profile"
+            profile_path.mkdir(parents=True, exist_ok=True)
+            managed_profile_dir = str(profile_path)
             exec_path, channel = self._find_browser_executable(preferred_browser)
 
             try:
@@ -226,11 +253,17 @@ class BrowserController:
                     "headless": False,
                     "viewport": None,
                     "args": [
+                        "--remote-debugging-port=9222",
                         "--disable-blink-features=AutomationControlled",
                         "--disable-infobars",
                         "--start-maximized",
                         "--no-sandbox",
                         "--disable-dev-shm-usage",
+                        "--disable-background-timer-throttling",
+                        "--disable-backgrounding-occluded-windows",
+                        "--disable-renderer-backgrounding",
+                        "--disable-background-media-suspend",
+                        "--autoplay-policy=no-user-gesture-required",
                     ],
                 }
                 if exec_path:
@@ -241,16 +274,14 @@ class BrowserController:
                     logger.info(f"BrowserController: launching browser channel '{channel}'")
 
                 self._browser = await self._playwright.chromium.launch_persistent_context(
-                    user_data_dir,
+                    managed_profile_dir,
                     **launch_kwargs
                 )
             except Exception as e_chrome:
-                logger.info(f"Could not launch channel='chrome' with persistent profile ({e_chrome}), trying standard chromium with temp profile...")
-                import tempfile
-                temp_profile_dir = tempfile.mkdtemp(prefix="makima_browser_")
+                logger.info(f"Could not launch channel='chrome' with persistent profile ({e_chrome}), trying standard chromium with persistent profile...")
                 try:
                     self._browser = await self._playwright.chromium.launch_persistent_context(
-                        temp_profile_dir,
+                        managed_profile_dir,
                         headless=False,
                         viewport=None,
                         args=[
@@ -259,6 +290,11 @@ class BrowserController:
                             "--start-maximized",
                             "--no-sandbox",
                             "--disable-dev-shm-usage",
+                            "--disable-background-timer-throttling",
+                            "--disable-backgrounding-occluded-windows",
+                            "--disable-renderer-backgrounding",
+                            "--disable-background-media-suspend",
+                            "--autoplay-policy=no-user-gesture-required",
                         ],
                     )
                 except Exception as e_temp:
@@ -275,6 +311,7 @@ class BrowserController:
             self._ensure_window_visible()
             return True
         except ImportError:
+            self._playwright_available = False
             logger.error("playwright not installed. Run: pip install playwright && playwright install")
             return False
         except Exception as e:
@@ -320,7 +357,7 @@ class BrowserController:
             logger.info(f"BrowserController: CDP attached on port {port}")
             return True
         except Exception as e:
-            logger.warning(f"CDP attach failed: {e}. Falling back to managed mode.")
+            logger.info("No active CDP browser found on port %d (%s). Tip: Launch Brave/Chrome with '--remote-debugging-port=%d' to attach directly to your existing session.", port, e, port)
             self._cdp_attached = False
             return await self.start(try_cdp=False)
 
@@ -354,6 +391,8 @@ class BrowserController:
 
     async def _recover_browser(self) -> None:
         """Recovers the browser by starting a new instance if the current one is closed."""
+        if self._playwright_available is False:
+            return
         if self._browser and not self._browser.is_connected():
             logger.info("Browser has been closed, recovering...")
             await self._browser.disconnect()
@@ -383,11 +422,17 @@ class BrowserController:
             return "Error: Browser not available."
 
         # Domain validation
-        if expected_domain and expected_domain.lower() not in url.lower():
-            return (
-                f"⚠️ URL domain mismatch: '{url}' doesn't match expected '{expected_domain}'. "
-                f"Navigation cancelled for safety."
-            )
+        if expected_domain:
+            parsed_host = (urlparse(url).hostname or "").lower().rstrip(".")
+            expected_host = expected_domain.lower().strip().rstrip(".")
+            if not parsed_host or not (
+                parsed_host == expected_host
+                or parsed_host.endswith("." + expected_host)
+            ):
+                return (
+                    f"⚠️ URL domain mismatch: '{url}' doesn't match expected '{expected_domain}'. "
+                    "Navigation cancelled for safety."
+                )
 
         # Skip the reload if this tab is already on the right site. Every
         # action (pause/resume/next/volume, not just play) calls this via
@@ -396,8 +441,14 @@ class BrowserController:
         # before every click, even just to hit "pause". This was the single
         # biggest source of latency in the media flow.
         current_url = page.url or ""
+        current_host = (urlparse(current_url).hostname or "").lower().rstrip(".")
+        expected_host = expected_domain.lower().strip().rstrip(".")
+        current_domain_matches = bool(
+            expected_host
+            and (current_host == expected_host or current_host.endswith("." + expected_host))
+        )
         if (expected_domain and current_url != "about:blank"
-                and expected_domain.lower() in current_url.lower()
+                and current_domain_matches
                 and (url.strip().rstrip('/') == current_url.strip().rstrip('/') or current_url.startswith(url))):
             self._ensure_window_visible()
             return f"Already on {expected_domain} [tab={tab}] — skipped reload."
@@ -451,9 +502,9 @@ class BrowserController:
             return ""
         try:
             target_sel = selector if selector else "body"
-            return await page.inner_text(target_sel)
-        except Exception:
-            return ""
+            return await page.inner_text(target_sel, timeout=3000)
+        except Exception as e:
+            return f"Element '{selector}' text not found or timed out: {e}"
 
     async def distill_dom(self, selector: str = None, tab: str = "default", max_chars: int = 4000, **kwargs) -> str:
         """
@@ -470,22 +521,21 @@ class BrowserController:
             # for dynamic pages and doesn't require bs4 dependency
             js_clean = """
             (() => {
+                const docTitle = document.title || '';
                 const root = document.querySelector('""" + (selector or "body") + """') || document.body;
-                const clone = root.cloneNode(true);
                 const removeSelectors = ['script', 'style', 'noscript', 'svg', 'iframe', 'header', 'footer', 'nav', 'link', 'meta'];
-                removeSelectors.forEach(sel => clone.querySelectorAll(sel).forEach(el => el.remove()));
-                // Remove hidden elements
-                clone.querySelectorAll('*').forEach(el => {
-                    const style = window.getComputedStyle(el);
-                    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
-                        el.remove();
-                    }
+                const links = Array.from(root.querySelectorAll('a[href]')).map(a => `[LINK: ${(a.innerText || a.textContent || '').trim().slice(0,80)}] -> ${a.href}`).join('\\n');
+                const buttons = Array.from(root.querySelectorAll('button, input[type=submit], [role=button]')).map(b => `[BUTTON: ${(b.innerText || b.textContent || '').trim().slice(0,80)}]`).join('\\n');
+                const clone = root.cloneNode(true);
+                ['h1', 'h2', 'h3', 'h4'].forEach(tag => {
+                    clone.querySelectorAll(tag).forEach(el => {
+                        const prefix = tag === 'h1' ? '# H1: ' : tag === 'h2' ? '## H2: ' : '### H3: ';
+                        el.textContent = prefix + (el.textContent || '').trim();
+                    });
                 });
-                // Get interactive elements with their text
-                const links = Array.from(clone.querySelectorAll('a[href]')).map(a => `[LINK: ${a.innerText.trim().slice(0,80)}] -> ${a.href}`).join('\\n');
-                const buttons = Array.from(clone.querySelectorAll('button, input[type=submit], [role=button]')).map(b => `[BUTTON: ${b.innerText.trim().slice(0,80)}]`).join('\\n');
-                const text = clone.innerText || clone.textContent || '';
-                return '--- Links ---\\n' + links + '\\n--- Buttons ---\\n' + buttons + '\\n--- Content ---\\n' + text;
+                removeSelectors.forEach(sel => clone.querySelectorAll(sel).forEach(el => el.remove()));
+                const text = (clone.innerText && clone.innerText.trim()) ? clone.innerText : (clone.textContent || '');
+                return 'Title: ' + docTitle + '\\n--- Links ---\\n' + links + '\\n--- Buttons ---\\n' + buttons + '\\n--- Content ---\\n' + text;
             })()
             """
             text = await page.evaluate(js_clean)
@@ -591,6 +641,33 @@ class BrowserController:
         # look identical and undiagnosable without re-running by hand).
         reason = f" ({type(last_error).__name__}: {last_error})" if last_error else ""
         return f"Could not find element to click: {selector or text}{reason}"
+
+    async def click(self, selector: str = "", text: str = "", tab: str = "default", **kwargs) -> str:
+        """Alias for tool compatibility."""
+        return await self.click_element(selector=selector, text=text, tab=tab, **kwargs)
+
+    async def fill(self, selector: str, text: str = "", value: str = "", tab: str = "default", **kwargs) -> str:
+        """Alias for tool compatibility."""
+        return await self.fill_input(selector=selector, value=text or value, tab=tab, **kwargs)
+
+    async def run_js(self, script: str = "", tab: str = "default", **kwargs) -> str:
+        """Run custom JavaScript snippet in browser with IIFE wrapper to fix top-level return SyntaxErrors."""
+        page = await self.get_page(tab)
+        if not page:
+            return "Error: Browser not available."
+        js_code = (script or "").strip()
+        if not js_code:
+            return "Error: No JavaScript code provided."
+        
+        if "return " in js_code and not (js_code.startswith("(") or js_code.startswith("function")):
+            js_code = f"(() => {{ {js_code} }})()"
+            
+        try:
+            res = await page.evaluate(js_code)
+            return str(res) if res is not None else "JavaScript executed cleanly (returned None)."
+        except Exception as e:
+            logger.warning(f"JS eval failed: {e}")
+            return f"JS Execution Failed: {e}"
 
     async def fill_input(self, selector: str, value: str, tab: str = "default", **kwargs) -> str:
         """Fill an input field on specified tab."""
@@ -865,8 +942,8 @@ class BrowserController:
             try:
                 req = route.request
                 url = (req.url or "").lower()
-                rtype = (req.resource_type or "").lower()
-                if rtype == "media" or any(d in url for d in self._DEFAULT_AD_BLOCKLIST):
+                # Ad and tracker blocking
+                if any(d in url for d in self._DEFAULT_AD_BLOCKLIST):
                     await route.abort()
                     return
             except Exception:
@@ -935,17 +1012,6 @@ class BrowserController:
         except Exception as e:
             return f"Close tab failed: {e}"
 
-    async def run_js(self, script: str, tab: str = "default") -> Any:
-        """Execute JavaScript in the page context of specified tab."""
-        page = await self.get_page(tab)
-        if not page:
-            return None
-        try:
-            return await page.evaluate(script)
-        except Exception as e:
-            logger.error(f"JS execution failed: {e}")
-            return None
-
     async def set_range_value(self, selector: str, value: float, tab: str = "default") -> str:
         """Set an <input type="range"> value on specified tab and fire input/change events."""
         page = await self.get_page(tab)
@@ -967,6 +1033,176 @@ class BrowserController:
         except Exception as e:
             logger.error(f"Set range failed: {e}")
             return f"Set range failed: {e}"
+
+    # ------------------------------------------------------------------
+    # Parallel Multi-Tab Scraping & Fan-Out Search
+    # ------------------------------------------------------------------
+
+    async def parallel_scrape(
+        self,
+        urls: list[str] | str,
+        max_concurrency: int = 4,
+        timeout_ms: int = 15_000,
+    ) -> str:
+        """
+        Scrapes multiple URLs concurrently using isolated browser tabs via asyncio.gather.
+        Ideal for multi-product comparison, multi-article reading, or batch research.
+        """
+        if isinstance(urls, str):
+            import re
+            parsed_urls = re.findall(r'https?://[^\s,;"\'<>]+', urls)
+            if not parsed_urls:
+                parsed_urls = [u.strip() for u in urls.split(",") if u.strip().startswith("http")]
+            urls = parsed_urls
+
+        if not urls:
+            return "No valid URLs provided for parallel scrape."
+
+        # Cap batch size to 6 to prevent memory exhaustion
+        target_urls = [u for u in urls if isinstance(u, str) and u.startswith("http")][:6]
+        if not target_urls:
+            return "No valid http/https URLs found."
+
+        sem = asyncio.Semaphore(max(1, min(max_concurrency, 4)))
+
+        async def _scrape_single(idx: int, target_url: str) -> dict[str, Any]:
+            tab_id = f"par_tab_{idx}_{int(time.monotonic() * 1000) % 10000}"
+            async with sem:
+                try:
+                    p = await self.get_page(tab_id)
+                    if not p:
+                        return {"url": target_url, "title": "Error", "content": "Could not allocate browser tab", "status": "fail"}
+                    
+                    try:
+                        await p.goto(target_url, timeout=timeout_ms, wait_until="domcontentloaded")
+                    except Exception as goto_err:
+                        logger.debug("goto '%s' warning: %s", target_url, goto_err)
+
+                    # Extract page title and distilled content
+                    title = await p.title() or target_url
+                    
+                    # Distill DOM / extract readable text
+                    text_content = await p.evaluate(
+                        "() => {"
+                        "  const clone = document.body.cloneNode(true);"
+                        "  clone.querySelectorAll('script, style, svg, nav, footer, noscript, iframe').forEach(e => e.remove());"
+                        "  return clone.innerText.replace(/\\s+/g, ' ').trim().slice(0, 2000);"
+                        "}"
+                    )
+                    
+                    return {
+                        "url": target_url,
+                        "title": title.strip()[:100],
+                        "content": text_content.strip(),
+                        "status": "ok",
+                    }
+                except Exception as e:
+                    return {
+                        "url": target_url,
+                        "title": "Failed to scrape",
+                        "content": f"[Error: {e}]",
+                        "status": "error",
+                    }
+                finally:
+                    try:
+                        await self.close_tab(tab_id)
+                    except Exception:
+                        pass
+
+        tasks = [_scrape_single(i, u) for i, u in enumerate(target_urls)]
+        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        formatted_outputs = []
+        for idx, res in enumerate(raw_results, 1):
+            if isinstance(res, dict):
+                formatted_outputs.append(
+                    f"### [{idx}] {res.get('title', 'Page')}\n"
+                    f"- **URL**: {res.get('url')}\n"
+                    f"- **Status**: {res.get('status')}\n"
+                    f"- **Content**:\n{res.get('content', '')[:1200]}\n"
+                )
+            elif isinstance(res, Exception):
+                formatted_outputs.append(f"### [{idx}] Error: {res}\n")
+
+        return (
+            f"⚡ **Parallel Scrape Results ({len(target_urls)} pages extracted concurrently)**:\n\n"
+            + "\n---\n\n".join(formatted_outputs)
+        )
+
+    async def parallel_search(
+        self,
+        query: str = "",
+        search_query: str = "",
+        max_results: int = 3,
+        tab: str = "default",
+        **kwargs: Any,
+    ) -> str:
+        """
+        Executes a web search and immediately fans out to scrape the top organic result pages
+        concurrently in parallel browser tabs, returning full live content from all top pages.
+        """
+        effective_query = (query or search_query or kwargs.get("q") or kwargs.get("search") or "").strip()
+        if not effective_query:
+            return "Search query cannot be empty."
+
+        import urllib.parse
+        search_url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote_plus(effective_query)}"
+        
+        page = await self.get_page(tab)
+        if not page:
+            return "Error: Browser not available."
+
+        try:
+            await page.goto(search_url, timeout=12_000, wait_until="domcontentloaded")
+            
+            # Extract organic result URLs from DuckDuckGo HTML
+            extracted_links = await page.evaluate(
+                "() => {"
+                "  const links = [];"
+                "  const anchors = document.querySelectorAll('a.result__url, a.result__snippet, .result__title a');"
+                "  for (const a of anchors) {"
+                "    let href = a.href || '';"
+                "    if (href.includes('uddg=')) {"
+                "      try {"
+                "        const match = href.match(/uddg=([^&]+)/);"
+                "        if (match) href = decodeURIComponent(match[1]);"
+                "      } catch (e) {}"
+                "    }"
+                "    if (href.startsWith('http') && !href.includes('duckduckgo.com') && !links.includes(href)) {"
+                "      links.push(href);"
+                "    }"
+                "  }"
+                "  return links.slice(0, 6);"
+                "}"
+            )
+        except Exception as e:
+            return f"Search navigation failed: {e}"
+
+        target_urls = [u for u in extracted_links if isinstance(u, str) and u.startswith("http")][:max_results]
+        if not target_urls:
+            try:
+                from duckduckgo_search import DDGS
+                with DDGS() as ddgs:
+                    for r in ddgs.text(query, max_results=max_results):
+                        href = r.get("href") or r.get("link")
+                        if href and href.startswith("http"):
+                            target_urls.append(href)
+            except Exception:
+                pass
+
+        if not target_urls:
+            return f"No organic search result links could be extracted for query: '{query}'."
+
+        # Fan out concurrently across isolated tabs
+        scrape_summary = await self.parallel_scrape(urls=target_urls, max_concurrency=len(target_urls))
+        return (
+            f"🔍 **Parallel Fan-Out Search for '{query}'**\n"
+            f"Extracted top {len(target_urls)} organic links and scraped in parallel:\n\n"
+            f"{scrape_summary}"
+        )
+
+    # Alias for set_range_value
+    set_range = set_range_value
 
     # ------------------------------------------------------------------
     # CAPTCHA Detection
@@ -1078,6 +1314,8 @@ class BrowserController:
                 await self._check_captcha(tab=tab)
                 return f"Vision click at ({click_x}, {click_y}) [normalized from ({x_val}, {y_val})] for '{target_description}'"
             return f"Vision could not locate: {target_description}"
+        except RuntimeError:
+            raise
         except Exception as e:
             return f"Vision click failed: {e}"
 
@@ -1118,7 +1356,7 @@ class BrowserController:
                     buf = ctypes.create_unicode_buffer(length + 1)
                     GetWindowTextW(hwnd, buf, length + 1)
                     title = buf.value.lower()
-                    if any(k in title for k in ["chrome", "chromium", "spotify", "youtube"]):
+                    if any(k in title for k in ["chrome", "chromium"]):
                         try:
                             if IsIconic(hwnd):
                                 ShowWindow(hwnd, SW_RESTORE)
@@ -1140,12 +1378,13 @@ class BrowserController:
 
     async def _ensure_ready(self) -> bool:
         """Ensure browser is started, attempting lazy start if needed."""
-        if self._browser and (
-            (hasattr(self._browser, "is_connected") and self._browser.is_connected()) or
-            (hasattr(self._browser, "browser") and self._browser.browser and self._browser.browser.is_connected()) or
-            (hasattr(self._browser, "pages"))
-        ):
-            return True
+        if self._playwright_available is False:
+            return False
+        if self._browser:
+            if hasattr(self._browser, "is_connected") and self._browser.is_connected():
+                return True
+            if hasattr(self._browser, "browser") and self._browser.browser and self._browser.browser.is_connected():
+                return True
         # Smart Reuse: First attempt to attach to an existing Chrome browser via CDP
         if self.config.get("use_cdp", True):
             try:

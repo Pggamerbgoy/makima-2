@@ -207,3 +207,23 @@ The moment you receive approval to proceed with an already-discussed plan
 trigger to output a fresh [SKILL CHECK] header before the very next tool
 call — not after it, not "because we just discussed it." Approval is the
 trigger, not an exemption.
+
+## MANDATORY: Code-First Manual Reading & Inspection Protocol (Deep Logic OVER Automated Tests)
+
+> **CORE MANDATE**: Har file aur module ko line-by-line khud read karke inspect karo, hidden errors, bugs aur improvements dhoondo. Inspect karte waqt **callee module ke saath-saath jaha-jaha calls hoti hain (un sabhi caller files aur blocks of code ko)** bhi line-by-line verify karna mandatory hai. Unit test pass hone par bharosa karke "sab clean hai" bolna strictly banned hai.
+
+1. **Strict Hierarchy**: Whenever inspecting, checking, auditing, or verifying ANY module, feature, or subsystem, **Manual Line-by-Line Code Reading & Adversarial Trace is MANDATORY and takes absolute priority over running automated tests.**
+2. **Ban on "Passing Tests = Correct" Assumption**: An automated unit test passing (exit code 0) only proves that the specific happy-path assertions in the test script executed without error. It is explicitly BANNED to conclude that a module is bug-free simply because a test suite or subagent reported "PASS".
+3. **Mandatory 5-Point Adversarial Code Inspection**: Before declaring any module or subsystem verified, you must manually read the source code and trace these 5 runtime edge-case categories:
+   - **Boundary & String Logic**: Look for hardcoded length thresholds (`len < 50`), slicing empty lists (`[][0]`, `splitlines()[0]` on whitespace), and missing `strip()`.
+   - **Type & Attribute Access**: Check whether code assumes raw `dict` access (`tool_call.get(...)`) on objects that might be Pydantic models or SDK instances (`getattr(obj, ...)`).
+   - **Resource & Connection Lifecycle**: Verify that `aiohttp.ClientSession()`, `httpx.AsyncClient()`, or database connections are NOT being repeatedly instantiated inside hot loops, and ensure persistent pooling.
+   - **Concurrency & Asyncio GC**: Verify that every `asyncio.create_task()` holds a strong reference in a tracked set (`_background_tasks`) so Python event-loop garbage collector does not destroy it mid-execution. Verify task cancellation does NOT cancel caller/server loops.
+   - **API Schema Payloads**: Ensure empty lists/arrays (`tools=[]`) are not explicitly sent to strict cloud APIs that reject empty collections with 400 Bad Request.
+4. **Mandatory Caller & Call-Site Cross-Inspection (Callee + All Callers Mandate)**:
+   - Jab bhi kisi module, function, class, ya tool ko inspect/patch kiya jaye, **sirf uss file ko dekh kar rukna STRICTLY BANNED hai**.
+   - Codebase me jaha-jaha uss module/function/tool ko call kiya jata hai (**har ek caller file aur block of code**), usko bhi line-by-line open karke inspect karna mandatory hai.
+   - Specifically cross-verify karo:
+     - **Signature & Parameters**: Kya caller sahi arguments aur keyword parameters (`params`, `kwargs`, `context`, `timeout_s`) pass kar raha hai?
+     - **Return Type & Extraction**: Kya caller expected return type (`dict`, `str`, `dataclass`, `ExecutionResult`, `SagaRollbackReport`) ko sahi attribute/key ke sath access kar raha hai?
+     - **Silent Regression Guard**: Kya signature change ya parameter rename se kisi existing caller me silent `TypeError`, `KeyError`, `NameError`, ya `AttributeError` toh create nahi hua?

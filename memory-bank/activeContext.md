@@ -1,21 +1,29 @@
-# Active Context — Makima v7.1
+# Active Context — Makima v9.1
 
 ## Current Focus
-- System-wide module verification and architectural review complete across all 7 core brain modules.
-- Durable decision log recorded in `memory-bank/decisionLog.md`.
+- Autonomous deep codebase hardening, invariant verification, and cross-agent tool ecosystem synchronization.
+- Manual line-by-line inspection prioritizing code architecture and runtime resilience over automated test suites.
 
 ## Recent Accomplishments
-1. **Live API Key Verification**: Tested `MAKIMA_GROQ_KEY` from `.env` against Groq's `llama-3.3-70b-versatile` model endpoint.
-2. **Intent & Subsystem Audit**:
-   - `CommandRouter`: Trivial short-circuits, Hinglish heuristics, priority queueing.
-   - `BrowserAgent` & `BrowserController`: Tool set, privacy mode, context snapshot pruning.
-   - `MediaAgent`: Intent heuristics, query extraction, volume slider injection safety.
-   - `CommanderAgent`: Subtask decomposition, recursion depth guards (`_call_depth > 3`), parallel group batching.
-   - `SpeechOrchestrator`: High/Medium/Low confidence routing gates, audio ducking during TTS.
-   - `AutomationAgent`: JSON tool parsing and web delegation.
-   - `MemoryAgent`: Two-pass vector query recall and tombstone forget operations.
-3. **Qwen Agent Skill Integration**: Connected `master-workflow`, `rigorous-code-development`, `problem-reasoning`, and `codebase-gap-analysis` skills directly into `scripts/qwen_agent.py` system prompt so Qwen sessions utilize repository-defined engineering protocols.
+1. **DAG Engine Subtask Execution & Routing Hardening**:
+   - Fixed `from_decomposition_result` in `dag_engine.py` to extract `agent_name`, `required_tools`, `required_capabilities`, and `parameters` from `SubtaskNode` objects.
+   - Piped `_previous_results` into downstream dispatches so dependent nodes receive upstream outputs.
+   - Implemented fast-circuit-breaker for failed dependencies and added retry backoff.
+2. **Comprehensive Agent Resilience & Null-Safety**:
+   - `ResearchAgent`: Fixed `None` value leakage in snippet parsing (`_parse_search_results`) and guarded `_calculate_keyword_relevance`.
+   - `CodeAgent`: Extended markdown code block extraction regex to support multi-character language tags, whitespace/tabs, and CRLF line endings.
+   - `CreativeAgent`: Added cache bounds/eviction cap (256 items) and harmonized `execute` signature.
+   - `AutomationAgent`: Added safe type casting for `delay_seconds` in `_handle_set_reminder` and guarded `WorkflowEngine._run` step parameters.
+   - `MemoryAgent`: Upgraded `_execute_memory_forget` to use `invalidate_matching` across all cached variations.
+   - `DevOpsAgent`: Standardized `_tool_docker_inspect` output formatting and fallbacks.
+   - `MediaAgent`: Added null safety for `query` and candidate `title` parameters in similarity matching.
+   - `BrowserAgent`: Implemented `_tool_browser_parallel_scrape` and `_tool_browser_parallel_search` tool methods.
+   - `SecurityAgent`: Added integer normalization (1-65535) for port scanning arguments, supporting string/int collections.
+   - `DataAnalystAgent`: Added dual support for standard JSON array formats and NDJSON for Polars/Pandas.
+   - `MessagingAgent`: Passed agent context to `draft_batch` for direct tool access in broadcast workflows.
+3. **Multi-Agent Runtime & Protocol Integrity**:
+   - All 17 agent and subsystem files verified with `python -m py_compile` (exit code 0).
+   - Zero test files created or executed in accordance with user constraints.
 
 ## Next Steps
-- Implement recommended fixes for Gemini Vision coordinate scaling normalization in `BrowserController`.
-- Update CAPTCHA exception handling in `BrowserAgent` to halt execution immediately upon detection.
+- Autonomously maintain system invariants and monitor cross-subsystem dispatch contracts.

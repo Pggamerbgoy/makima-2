@@ -1,0 +1,444 @@
+[
+  {
+    "case_id": "CC-01",
+    "prompt": "Close Notepad and play jazz on Spotify.",
+    "category": "System + Media",
+    "status": "PASS",
+    "routed_intent": "multi_step",
+    "expected_intents": [
+      "system_control",
+      "media"
+    ],
+    "subtasks_expected": 2,
+    "subtasks_completed": 2,
+    "dropped_subtasks": 0,
+    "failure_location": "None",
+    "latency_ms": 7419.747114181519
+  },
+  {
+    "case_id": "CC-02",
+    "prompt": "Open Spotify and open VS Code.",
+    "category": "System + System (Parallel)",
+    "status": "PASS",
+    "routed_intent": "multi_step",
+    "expected_intents": [
+      "system_control",
+      "system_control"
+    ],
+    "subtasks_expected": 2,
+    "subtasks_completed": 2,
+    "dropped_subtasks": 0,
+    "failure_location": "None",
+    "latency_ms": 8024.462461471558
+  },
+  {
+    "case_id": "CC-03",
+    "prompt": "Minimize Chrome, open VS Code, and launch Terminal.",
+    "category": "System + System + System (3-Step)",
+    "status": "PASS",
+    "routed_intent": "multi_step",
+    "expected_intents": [
+      "system_control",
+      "system_control",
+      "system_control"
+    ],
+    "subtasks_expected": 3,
+    "subtasks_completed": 3,
+    "dropped_subtasks": 0,
+    "failure_location": "None",
+    "latency_ms": 11823.742389678955
+  },
+  {
+    "case_id": "CC-04",
+    "prompt": "Search for latest Qwen 3.5 models and save the summary to qwen_models.txt.",
+    "category": "Research + Code/File (Dependent)",
+    "status": "PASS",
+    "routed_intent": "multi_step",
+    "expected_intents": [
+      "research",
+      "code"
+    ],
+    "subtasks_expected": 2,
+    "subtasks_completed": 2,
+    "dropped_subtasks": 0,
+    "failure_location": "None",
+    "latency_ms": 8017.894506454468
+  },
+  {
+    "case_id": "CC-05",
+    "prompt": "Create a backup folder in Documents and move photo.png into it.",
+    "category": "System + Filesystem (Dependent)",
+    "status": "PASS",
+    "routed_intent": "multi_step",
+    "expected_intents": [
+      "system_control",
+      "system_control"
+    ],
+    "subtasks_expected": 2,
+    "subtasks_completed": 2,
+    "dropped_subtasks": 0,
+    "failure_location": "None",
+    "latency_ms": 8009.063005447388
+  },
+  {
+    "case_id": "CC-06",
+    "prompt": "Navigate to github.com and summarize the trending repos into a word document.",
+    "category": "Browser + Document (Dependent)",
+    "status": "PASS",
+    "routed_intent": "multi_step",
+    "expected_intents": [
+      "browser",
+      "document"
+    ],
+    "subtasks_expected": 2,
+    "subtasks_completed": 2,
+    "dropped_subtasks": 0,
+    "failure_location": "None",
+    "latency_ms": 8011.965751647949
+  },
+  {
+    "case_id": "CC-07",
+    "prompt": "Mute the volume and minimize Spotify.",
+    "category": "Media + System",
+    "status": "PASS",
+    "routed_intent": "multi_step",
+    "expected_intents": [
+      "media",
+      "system_control"
+    ],
+    "subtasks_expected": 2,
+    "subtasks_completed": 2,
+    "dropped_subtasks": 0,
+    "failure_location": "None",
+    "latency_ms": 8017.684698104858
+  },
+  {
+    "case_id": "CC-08",
+    "prompt": "Don't close VS Code, just minimize it and open Chrome.",
+    "category": "Negation + System + System",
+    "status": "PASS",
+    "routed_intent": "multi_step",
+    "expected_intents": [
+      "system_control",
+      "system_control"
+    ],
+    "subtasks_expected": 2,
+    "subtasks_completed": 2,
+    "dropped_subtasks": 0,
+    "failure_location": "None",
+    "latency_ms": 8019.145488739014
+  },
+  {
+    "case_id": "CC-09",
+    "prompt": "Set a reminder for 5 PM to call John and clean my desktop.",
+    "category": "Automation + System",
+    "status": "PASS",
+    "routed_intent": "multi_step",
+    "expected_intents": [
+      "automation",
+      "system_control"
+    ],
+    "subtasks_expected": 2,
+    "subtasks_completed": 2,
+    "dropped_subtasks": 0,
+    "failure_location": "None",
+    "latency_ms": 8023.268222808838
+  },
+  {
+    "case_id": "CC-10",
+    "prompt": "Find the Python code for quicksort, save it to sort.py, and open it in Notepad.",
+    "category": "Research + Code + System (3-Step Dependent)",
+    "status": "PASS",
+    "routed_intent": "multi_step",
+    "expected_intents": [
+      "research",
+      "code",
+      "system_control"
+    ],
+    "subtasks_expected": 3,
+    "subtasks_completed": 3,
+    "dropped_subtasks": 0,
+    "failure_location": "None",
+    "latency_ms": 12021.222829818726
+  },
+  {
+    "case_id": "CC-11",
+    "prompt": "Pause the music and set a 20 minute focus timer.",
+    "category": "Media + Automation",
+    "status": "PASS",
+    "routed_intent": "multi_step",
+    "expected_intents": [
+      "media",
+      "automation"
+    ],
+    "subtasks_expected": 2,
+    "subtasks_completed": 2,
+    "dropped_subtasks": 0,
+    "failure_location": "None",
+    "latency_ms": 7521.390676498413
+  },
+  {
+    "case_id": "CC-12",
+    "prompt": "Open YouTube in browser and then bring VS Code to the front.",
+    "category": "Browser + System",
+    "status": "PASS",
+    "routed_intent": "multi_step",
+    "expected_intents": [
+      "browser",
+      "system_control"
+    ],
+    "subtasks_expected": 2,
+    "subtasks_completed": 2,
+    "dropped_subtasks": 0,
+    "failure_location": "None",
+    "latency_ms": 8009.099006652832
+  },
+  {
+    "case_id": "CC-13",
+    "prompt": "Take a screenshot and draft a WhatsApp message to Alex with it.",
+    "category": "System + Messaging (Shared Entity)",
+    "status": "PASS",
+    "routed_intent": "multi_step",
+    "expected_intents": [
+      "system_control",
+      "messaging"
+    ],
+    "subtasks_expected": 2,
+    "subtasks_completed": 2,
+    "dropped_subtasks": 0,
+    "failure_location": "None",
+    "latency_ms": 8018.263578414917
+  },
+  {
+    "case_id": "CC-14",
+    "prompt": "Delete temp_log.txt and restart Explorer.",
+    "category": "Filesystem + System",
+    "status": "PASS",
+    "routed_intent": "multi_step",
+    "expected_intents": [
+      "system_control",
+      "system_control"
+    ],
+    "subtasks_expected": 2,
+    "subtasks_completed": 2,
+    "dropped_subtasks": 0,
+    "failure_location": "None",
+    "latency_ms": 8011.02614402771
+  },
+  {
+    "case_id": "CC-15",
+    "prompt": "Audit app.py for hardcoded API keys and write the security report to audit.md.",
+    "category": "Security + Code (Dependent)",
+    "status": "PASS",
+    "routed_intent": "multi_step",
+    "expected_intents": [
+      "security",
+      "code"
+    ],
+    "subtasks_expected": 2,
+    "subtasks_completed": 2,
+    "dropped_subtasks": 0,
+    "failure_location": "None",
+    "latency_ms": 8028.704404830933
+  },
+  {
+    "case_id": "CC-16",
+    "prompt": "Pehle Chrome minimize karo phir lo-fi gaana bajao.",
+    "category": "System + Media (Hinglish)",
+    "status": "PASS",
+    "routed_intent": "multi_step",
+    "expected_intents": [
+      "system_control",
+      "media"
+    ],
+    "subtasks_expected": 2,
+    "subtasks_completed": 2,
+    "dropped_subtasks": 0,
+    "failure_location": "None",
+    "latency_ms": 8025.548458099365
+  },
+  {
+    "case_id": "CC-17",
+    "prompt": "Analyze sales.csv to calculate total revenue and create a summary Excel spreadsheet.",
+    "category": "Data Analyst + Document (Dependent)",
+    "status": "PASS",
+    "routed_intent": "multi_step",
+    "expected_intents": [
+      "data_analyst",
+      "document"
+    ],
+    "subtasks_expected": 2,
+    "subtasks_completed": 2,
+    "dropped_subtasks": 0,
+    "failure_location": "None",
+    "latency_ms": 8008.951663970947
+  },
+  {
+    "case_id": "CC-18",
+    "prompt": "Launch Calculator and maximize it.",
+    "category": "System + System (Anaphora)",
+    "status": "PASS",
+    "routed_intent": "multi_step",
+    "expected_intents": [
+      "system_control",
+      "system_control"
+    ],
+    "subtasks_expected": 2,
+    "subtasks_completed": 2,
+    "dropped_subtasks": 0,
+    "failure_location": "None",
+    "latency_ms": 8017.591238021851
+  },
+  {
+    "case_id": "CC-19",
+    "prompt": "Search for latest AI news and open the top article in Chrome.",
+    "category": "Research + Browser",
+    "status": "PASS",
+    "routed_intent": "multi_step",
+    "expected_intents": [
+      "research",
+      "browser"
+    ],
+    "subtasks_expected": 2,
+    "subtasks_completed": 2,
+    "dropped_subtasks": 0,
+    "failure_location": "None",
+    "latency_ms": 8004.408359527588
+  },
+  {
+    "case_id": "CC-20",
+    "prompt": "Close Discord, mute volume, and shutdown computer after 10 minutes.",
+    "category": "System + Media + Automation (3-Step)",
+    "status": "PASS",
+    "routed_intent": "multi_step",
+    "expected_intents": [
+      "system_control",
+      "media",
+      "automation"
+    ],
+    "subtasks_expected": 3,
+    "subtasks_completed": 3,
+    "dropped_subtasks": 0,
+    "failure_location": "None",
+    "latency_ms": 12042.915344238281
+  },
+  {
+    "case_id": "M1B-01",
+    "prompt": "Search for Python 3.12 release notes, summarize into notes.txt, and open notes.txt in VS Code.",
+    "category": "3-Step Sequential Linear (Research -> File -> System)",
+    "status": "FAIL",
+    "routed_intent": "multi_step",
+    "expected_intents": [
+      "research",
+      "code",
+      "system_control"
+    ],
+    "subtasks_expected": 3,
+    "subtasks_completed": 2,
+    "dropped_subtasks": 1,
+    "failure_location": "B. Decomposition (Sub-intent count mismatch)",
+    "latency_ms": 8023.735284805298
+  },
+  {
+    "case_id": "M1B-02",
+    "prompt": "Close Chrome, then open Spotify and launch VS Code in parallel.",
+    "category": "3-Step Mixed Fork Dependency (System -> {Media, System})",
+    "status": "PASS",
+    "routed_intent": "multi_step",
+    "expected_intents": [
+      "system_control",
+      "media",
+      "system_control"
+    ],
+    "subtasks_expected": 3,
+    "subtasks_completed": 3,
+    "dropped_subtasks": 0,
+    "failure_location": "None",
+    "latency_ms": 12011.885404586792
+  },
+  {
+    "case_id": "M1B-03",
+    "prompt": "Open Calculator, open Notepad, and open Terminal.",
+    "category": "3-Step Pure Parallel Branch (Independent)",
+    "status": "PASS",
+    "routed_intent": "multi_step",
+    "expected_intents": [
+      "system_control",
+      "system_control",
+      "system_control"
+    ],
+    "subtasks_expected": 3,
+    "subtasks_completed": 3,
+    "dropped_subtasks": 0,
+    "failure_location": "None",
+    "latency_ms": 12032.484531402588
+  },
+  {
+    "case_id": "M1B-04",
+    "prompt": "Search for latest AI news, write summary to news.md, audit news.md for errors, and draft email to team.",
+    "category": "4-Step Deep Pipeline (Research -> File -> Security -> Messaging)",
+    "status": "PASS",
+    "routed_intent": "multi_step",
+    "expected_intents": [
+      "research",
+      "code",
+      "security",
+      "messaging"
+    ],
+    "subtasks_expected": 4,
+    "subtasks_completed": 4,
+    "dropped_subtasks": 0,
+    "failure_location": "None",
+    "latency_ms": 16035.270929336548
+  },
+  {
+    "case_id": "M1B-05",
+    "prompt": "Read data.csv, analyze the statistics, and plot revenue chart to chart.png.",
+    "category": "3-Step Data Pipeline (File -> Data Analyst -> Document)",
+    "status": "PASS",
+    "routed_intent": "multi_step",
+    "expected_intents": [
+      "system_control",
+      "data_analyst",
+      "document"
+    ],
+    "subtasks_expected": 3,
+    "subtasks_completed": 3,
+    "dropped_subtasks": 0,
+    "failure_location": "None",
+    "latency_ms": 12028.711080551147
+  },
+  {
+    "case_id": "M1B-06",
+    "prompt": "Open Chrome and launch VS Code, but don't close existing Spotify window.",
+    "category": "2-Step with Later Negation Constraint",
+    "status": "PASS",
+    "routed_intent": "multi_step",
+    "expected_intents": [
+      "system_control",
+      "system_control"
+    ],
+    "subtasks_expected": 2,
+    "subtasks_completed": 2,
+    "dropped_subtasks": 0,
+    "failure_location": "None",
+    "latency_ms": 8025.559425354004
+  },
+  {
+    "case_id": "M1B-07",
+    "prompt": "Take a screenshot, save it to screen.png, and move screen.png to Desktop folder.",
+    "category": "3-Step Shared Entity Propagation (System -> File -> System)",
+    "status": "PASS",
+    "routed_intent": "multi_step",
+    "expected_intents": [
+      "system_control",
+      "system_control",
+      "system_control"
+    ],
+    "subtasks_expected": 3,
+    "subtasks_completed": 3,
+    "dropped_subtasks": 0,
+    "failure_location": "None",
+    "latency_ms": 12027.671813964844
+  }
+]

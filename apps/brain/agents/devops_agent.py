@@ -12,9 +12,8 @@ import os
 import platform
 import re
 import shlex
-import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, List, Optional, Tuple
 
 # --- Graceful Dependency Imports (Zero-Crash Resilience) ---
 try:
@@ -25,7 +24,6 @@ except ImportError:
 
 try:
     from kubernetes import client as k8s_client, config as k8s_config
-    from kubernetes.client.exceptions import ApiException
     K8S_SDK_AVAILABLE = True
 except ImportError:
     K8S_SDK_AVAILABLE = False
@@ -42,7 +40,7 @@ try:
 except ImportError:
     PSUTIL_AVAILABLE = False
 
-from .base_agent import BaseAgent
+from .base_agent import BaseAgent, TOOL_DISCIPLINE_BLOCK
 
 logger = logging.getLogger("makima.agents.devops")
 
@@ -64,41 +62,31 @@ class DevOpsAgent(BaseAgent):
     AGENT_NAME = "devops"
     DESCRIPTION = "Elite DevOps, SRE, and Infrastructure Management Engine"
     CAPABILITIES = ["docker_management", "cicd_automation", "deployment_diagnostics", "environment_config"]
-    AGENT_TOOLS = ["docker_ps", "docker_logs", "docker_restart", "check_ci_status"]
+    AGENT_TOOLS = [
+        "docker_ps", "docker_logs", "docker_inspect", "docker_start", "docker_stop", "docker_restart",
+        "git_status", "git_diff", "check_ci_status", "system_metrics", "network_check",
+        "k8s_get_pods", "k8s_get_logs", "k8s_describe",
+    ]
     TAGS = ["devops", "docker", "deploy", "ci", "logs"]
 
-    SYSTEM_PROMPT = """You are Makima's Elite DevOps & Infrastructure Agent.
-You are an enterprise-grade SRE and DevOps engineer managing local/remote infrastructure, Docker containers, 
-Kubernetes clusters, CI/CD pipelines, and system observability.
+    SYSTEM_PROMPT = """You are Makima's Elite DevOps, SRE, and Infrastructure Management Engine.
+You manage infrastructure, Docker containers, Kubernetes clusters, CI/CD pipelines, Git repositories, and system observability.
 
-━━━ Available Tools ━━━
-1. docker_ps() -> Lists running Docker containers.
-2. docker_logs(container_id: str, tail: int = 100) -> Fetches recent logs for a container.
-3. docker_inspect(container_id: str) -> Inspects container configuration and state.
-4. k8s_get_pods(namespace: str = "default") -> Lists pods in a Kubernetes namespace.
-5. k8s_get_logs(pod_name: str, namespace: str = "default", tail: int = 100) -> Fetches pod logs.
-6. k8s_describe(resource_type: str, name: str, namespace: str = "default") -> Describes a K8s resource.
-7. check_ci_status(owner: str, repo: str, branch: str = "main") -> Checks GitHub Actions pipeline status.
-8. system_metrics() -> Retrieves CPU, Memory, and Disk usage metrics.
-9. network_check(target: str, method: str = "ping") -> Checks network connectivity (ping/curl).
+AVAILABLE TOOLS:
+- Docker: docker_ps(), docker_logs(container_id, tail=100), docker_inspect(container_id), docker_start(container_id), docker_stop(container_id), docker_restart(container_id)
+- Kubernetes: k8s_get_pods(namespace="default"), k8s_get_logs(pod_name, namespace="default", tail=100), k8s_describe(resource_type, name, namespace="default")
+- CI/CD & Git: check_ci_status(owner, repo, branch="main"), git_status(repo_path="."), git_diff(repo_path=".")
+- Observability: system_metrics(), network_check(target, method="ping")
 
-━━━ Operational Rules ━━━
-1. SAFETY FIRST: Never execute destructive commands (rm, kill, delete, drop) without explicit user confirmation.
-2. OBSERVABILITY: When diagnosing issues, always gather metrics and logs before hypothesizing.
-3. EFFICIENCY: Use the most direct tool for the job. Don't fetch 10,000 lines of logs; use `tail`.
-4. RESPONSE FORMAT: You must respond with EXACTLY ONE valid JSON object per turn. No markdown formatting outside the JSON.
-
-━━━ JSON Schema ━━━
-{
-  "thought": "Your step-by-step reasoning and analysis.",
-  "tool": "tool_name" | null,
-  "params": { "arg1": "value1" },
-  "reply": "Final message to the user (only if tool is null)."
-}
-"""
+OPERATIONAL RULES:
+1. Safety First: Never perform destructive infrastructure operations without explicit user confirmation.
+2. Observability & Precision: Inspect real container logs, system metrics, and pod states before drawing diagnostic conclusions.
+3. Structured Thinking: Always perform concise diagnostic reasoning in <thinking>...</thinking> before selecting tools or synthesizing status.
+4. Response Format: Provide actionable, structured status updates with exact error codes, logs, and remediation recommendations.""" + "\n" + TOOL_DISCIPLINE_BLOCK
 
     _TOOLS = frozenset({
-        "docker_ps", "docker_logs", "docker_inspect",
+        "docker_ps", "docker_logs", "docker_inspect", "docker_start", "docker_stop", "docker_restart",
+        "git_status", "git_diff",
         "k8s_get_pods", "k8s_get_logs", "k8s_describe",
         "check_ci_status", "system_metrics", "network_check"
     })
@@ -108,81 +96,88 @@ Kubernetes clusters, CI/CD pipelines, and system observability.
     # ──────────────────────────────────────────────────────────────────────────
 
     async def execute(self, task_id: str, message: str, context: dict[str, Any], entities: dict[str, Any]) -> str:
-        """Main execution loop following the BaseAgent contract."""
+        """Main execution loop following the BaseAgent contract with unified ReAct execution."""
         self._reset_state()
-        messages = self._build_messages(message, context)
-        
-        max_iterations = 7
-        for iteration in range(max_iterations):
-            raw = await self._llm_call(messages, task="devops", require_json=True, temperature=0.1)
-            parsed = self.ai_handler.try_parse_json(raw)
+
+        # ── P1 Bridge 4B: Consume structured AgentTask parameters directly ────
+        agent_task = getattr(self, "_current_agent_task", None) or (context.get("agent_task") if isinstance(context, dict) else None)
+        if agent_task and hasattr(agent_task, "operation") and agent_task.operation:
+            op = str(agent_task.operation or "").lower().strip()
+            params = dict(agent_task.parameters or {})
             
-            if not parsed:
-                messages.append({"role": "assistant", "content": raw})
-                messages.append({"role": "user", "content": "[SYSTEM] Invalid JSON format. Please provide a valid JSON object."})
-                continue
+            tool_name = None
+            if any(k in op for k in ("docker_ps", "list_containers", "docker_list")):
+                tool_name = "docker_ps"
+            elif any(k in op for k in ("docker_logs", "container_logs")):
+                tool_name = "docker_logs"
+            elif any(k in op for k in ("docker_start", "start_container")):
+                tool_name = "docker_start"
+            elif any(k in op for k in ("docker_stop", "stop_container")):
+                tool_name = "docker_stop"
+            elif any(k in op for k in ("git_status", "repo_status")):
+                tool_name = "git_status"
+            elif any(k in op for k in ("git_diff", "diff")):
+                tool_name = "git_diff"
+            elif any(k in op for k in ("ci", "check_ci", "workflow")):
+                tool_name = "check_ci_status"
 
-            thought = parsed.get("thought", "")
-            tool = parsed.get("tool")
-            params = parsed.get("params", {})
-            reply = parsed.get("reply")
+            if tool_name and tool_name in self._TOOLS:
+                logger.info("[devops] P1-4B: Direct execution of tool '%s'", tool_name)
+                try:
+                    res = await self._use_tool(tool_name, **params)
+                    res_str = str(res) if not isinstance(res, (dict, list)) else json.dumps(res, indent=2)
+                    self._partial_result = res_str
+                    return res_str
+                except Exception as ex:
+                    logger.warning("[devops] Direct tool '%s' failed, falling back to ReAct: %s", tool_name, ex)
 
-            if thought:
-                logger.info(f"[DevOpsAgent Thought] {thought}")
-
-            if not tool:
-                return reply or "DevOps task complete."
-                
-            if tool not in self._TOOLS:
-                messages.append({"role": "assistant", "content": raw})
-                messages.append({"role": "user", "content": f"[ERROR] Unknown tool '{tool}'. Available: {list(self._TOOLS)}"})
-                continue
-
-            logger.info(f"[DevOpsAgent] Executing tool: {tool} | params: {params}")
-            res = await self._use_tool(tool, **params)
-            
-            # Truncate massive outputs to prevent context window overflow
-            if len(res) > 8000:
-                res = res[:8000] + "\n... [TRUNCATED DUE TO LENGTH] ..."
-                
-            messages.append({"role": "assistant", "content": raw})
-            messages.append({"role": "user", "content": f"[TOOL RESULT: {tool}]\n{res}"})
-
-        return "Max DevOps reasoning steps reached. Please refine the request."
+        # ── OpenAI Agents SDK Runner Execution ────────────────────────────────
+        try:
+            final_out = await self.run_sdk_execution(
+                task_id=task_id,
+                message=message,
+                context=context,
+                max_turns=7,
+                task_type="devops",
+                input_guardrails=[],
+                output_guardrails=[],
+            )
+            self._partial_result = final_out
+            return final_out
+        except Exception as sdk_exc:
+            logger.error("[devops] SDK error: %s", sdk_exc)
+            return f"Task complete nahi hua: {str(sdk_exc)}"
 
     # ──────────────────────────────────────────────────────────────────────────
     # Tool Dispatcher & Helpers
     # ──────────────────────────────────────────────────────────────────────────
 
-    async def _use_tool(self, tool_name: str, **kwargs: Any) -> str:
-        """Dispatches tool execution to the appropriate handler with error isolation."""
-        handler = getattr(self, f"_tool_{tool_name}", None)
-        if not handler:
-            return json.dumps({"error": f"Tool handler for '{tool_name}' not found."})
-        
-        try:
-            sig = inspect.signature(handler)
-            valid_kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
-            result = await handler(**valid_kwargs)
-            return result if isinstance(result, str) else json.dumps(result, default=str)
-        except Exception as e:
-            logger.error(f"Error executing tool {tool_name}: {e}", exc_info=True)
-            return json.dumps({"error": f"Execution failed: {str(e)}"})
+    def __init__(self, ai_handler: Any = None, memory: Any = None, tool_registry: Any = None, ws_broadcast: Any = None, orchestrator: Any = None, guardrails: Any = None, **kwargs: Any) -> None:
+        super().__init__(ai_handler, memory, tool_registry, ws_broadcast, orchestrator, guardrails, **kwargs)
+        def _safe_wrapper(fn):
+            async def _wrapped(**kw):
+                return await self._safe_call_tool(fn, **kw)
+            return _wrapped
+
+        self._TOOL_MAP = {
+            tool: _safe_wrapper(getattr(self, f"_tool_{tool}"))
+            for tool in self._TOOLS
+        }
+
+    async def _safe_call_tool(self, handler: Any, **kwargs: Any) -> str:
+        sig = inspect.signature(handler)
+        valid_kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
+        result = await handler(**valid_kwargs)
+        return result if isinstance(result, str) else json.dumps(result, default=str)
 
     async def _run_shell_command(self, cmd: List[str], timeout: int = 30) -> Tuple[str, str, int]:
         """Executes a shell command asynchronously with timeout and error handling."""
         try:
-            use_shell = any(c in cmd for c in ["|", ">", "<", "&&"])
-            
-            if use_shell:
-                shell_cmd = " ".join(cmd)
-                proc = await asyncio.create_subprocess_shell(
-                    shell_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-                )
-            else:
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-                )
+            # Prevent shell injection by never using shell=True
+            clean_cmd = [str(c) for c in cmd if str(c) not in ("|", ">", "<", "&&")]
+            proc = await asyncio.create_subprocess_exec(
+                *clean_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
             
             try:
                 stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -231,7 +226,48 @@ Kubernetes clusters, CI/CD pipelines, and system observability.
         out, err, code = await self._run_shell_command(cmd)
         if code != 0:
             return json.dumps({"error": err or "Failed to inspect container"})
-        return out
+        return out.strip() or json.dumps({})
+
+    async def _tool_docker_start(self, container_id: str) -> str:
+        if not container_id:
+            return json.dumps({"error": "container_id is required"})
+        cmd = ["docker", "start", container_id]
+        out, err, code = await self._run_shell_command(cmd)
+        if code != 0:
+            return json.dumps({"error": err or f"Failed to start container {container_id}"})
+        return json.dumps({"status": "started", "container_id": container_id, "output": out.strip()})
+
+    async def _tool_docker_stop(self, container_id: str) -> str:
+        if not container_id:
+            return json.dumps({"error": "container_id is required"})
+        cmd = ["docker", "stop", container_id]
+        out, err, code = await self._run_shell_command(cmd)
+        if code != 0:
+            return json.dumps({"error": err or f"Failed to stop container {container_id}"})
+        return json.dumps({"status": "stopped", "container_id": container_id, "output": out.strip()})
+
+    async def _tool_docker_restart(self, container_id: str) -> str:
+        if not container_id:
+            return json.dumps({"error": "container_id is required"})
+        cmd = ["docker", "restart", container_id]
+        out, err, code = await self._run_shell_command(cmd)
+        if code != 0:
+            return json.dumps({"error": err or f"Failed to restart container {container_id}"})
+        return json.dumps({"status": "restarted", "container_id": container_id, "output": out.strip()})
+
+    async def _tool_git_status(self, repo_path: str = ".") -> str:
+        cmd = ["git", "-C", repo_path, "status", "--short"]
+        out, err, code = await self._run_shell_command(cmd)
+        if code != 0:
+            return json.dumps({"error": err or "Failed to get git status"})
+        return out.strip() or "Working tree clean"
+
+    async def _tool_git_diff(self, repo_path: str = ".") -> str:
+        cmd = ["git", "-C", repo_path, "diff"]
+        out, err, code = await self._run_shell_command(cmd)
+        if code != 0:
+            return json.dumps({"error": err or "Failed to get git diff"})
+        return out.strip() or "No changes detected"
 
     # ──────────────────────────────────────────────────────────────────────────
     # Kubernetes Tools
@@ -293,8 +329,9 @@ Kubernetes clusters, CI/CD pipelines, and system observability.
             headers["Authorization"] = f"token {token}"
             
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, timeout=10) as resp:
+            timeout_obj = aiohttp.ClientTimeout(total=10.0)
+            async with aiohttp.ClientSession(timeout=timeout_obj) as session:
+                async with session.get(url, headers=headers) as resp:
                     if resp.status != 200:
                         return json.dumps({"error": f"GitHub API returned status {resp.status}"})
                     data = await resp.json()
@@ -309,9 +346,10 @@ Kubernetes clusters, CI/CD pipelines, and system observability.
     async def _tool_system_metrics(self) -> str:
         if PSUTIL_AVAILABLE:
             try:
-                cpu = psutil.cpu_percent(interval=1)
+                cpu = await asyncio.to_thread(psutil.cpu_percent, interval=None)
                 mem = psutil.virtual_memory()
-                disk = psutil.disk_usage('/')
+                root_path = "C:\\" if platform.system() == "Windows" else "/"
+                disk = psutil.disk_usage(root_path)
                 return json.dumps({
                     "cpu_percent": cpu,
                     "memory_total_mb": round(mem.total / (1024**2), 2),
@@ -326,7 +364,7 @@ Kubernetes clusters, CI/CD pipelines, and system observability.
         
         metrics = {}
         if platform.system() == "Linux":
-            out, _, _ = await self._run_shell_command(["top", "-bn1", "|", "grep", "Cpu(s)"])
+            out, _, _ = await self._run_shell_command(["top", "-bn1"])
             metrics["cpu_raw"] = out.strip()
             out, _, _ = await self._run_shell_command(["free", "-m"])
             metrics["memory_raw"] = out.strip()

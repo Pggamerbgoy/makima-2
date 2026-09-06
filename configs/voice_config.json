@@ -28,7 +28,7 @@
     "percentile": 90
   },
   "tts": {
-    "engine": "edge_tts",
+    "engine": "gemini_live",
     "priority_urgent": 0,
     "priority_normal": 5,
     "queue_maxsize": 20,
@@ -40,15 +40,12 @@
     "auto_confirm_timeout_s": 10,
     "auto_confirm_min_confidence": 0.5
   },
-  "whisper_grpc": {
-    "host": "127.0.0.1",
-    "port": 50052,
-    "beam_size": 5,
-    "timeout_s": 10.0
+  "wake_daemon": {
+    "enabled": true,
+    "model": "hey_makima",
+    "threshold": 0.6,
+    "refractory_s": 2.0,
+    "device_index": null
   },
-  "diarization": {
-    "energy_change_threshold": 0.4,
-    "min_pause_s": 1.5,
-    "rolling_window": 20
-  }
+  "gemini_model": "gemini-3.1-flash-live-preview"
 }

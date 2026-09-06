@@ -11,6 +11,7 @@
 - [x] **Memory Agent & Knowledge Graph (`memory_agent.py`)**: Verified (Pass)
 
 ## Identified Architecture Improvements
+- [x] Self-learning loop wired: LearningCoordinator/LearningEngine connected to BaseAgent tool failures, AgentOrchestrator turn context/failure signals, and main.py user-turn capture.
 - [x] Multi-tab page isolation between `MediaAgent` (`tab="media"`) and `BrowserAgent` (`tab="browser"`) implemented in `BrowserController`.
 - [x] Audio contamination ducking check added to `SpeechOrchestrator` (`_media_playing` / `_tts_playing`).
 - [x] SQLite thread/task locking eliminated in `EternalMemory` (`timeout=30.0` & `PRAGMA busy_timeout=30000;`).

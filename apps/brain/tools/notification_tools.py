@@ -123,24 +123,92 @@ async def broadcast_workflow_status(workflow_id: str, status: str, details: str)
         return {"status": "error", "detail": str(e)}
 
 # --- Registration ---
-async def register_notification_tools(registry: Any) -> None:
+def register_notification_tools(registry: Any) -> None:
     try:
-        registry.register(
-            name="send_alert", func=send_alert,
-            description="Sends a prioritized alert to a specific channel/target, automatically respecting active DND rules."
-        )
-        registry.register(
-            name="create_dnd_rule", func=create_dnd_rule,
-            description="Creates or updates a Do Not Disturb rule. Define timeframes (HH:MM UTC) and bypass priorities."
-        )
-        registry.register(
-            name="filter_notifications", func=filter_notifications,
-            description="Queries the notification store. Filter by minimum priority level (1-5) and unread status."
-        )
-        registry.register(
-            name="broadcast_workflow_status", func=broadcast_workflow_status,
-            description="Updates the central state and broadcasts the current status and details of a specific workflow."
-        )
+        tools = [
+            {
+                "name": "send_alert",
+                "func": send_alert,
+                "description": "Call this tool EXCLUSIVELY to send a prioritized alert to a specific channel/target, automatically respecting active DND rules.",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "message": {"type": "string", "description": "Alert notification message content"},
+                        "priority": {"type": "integer", "description": "Priority level: 1=Low, 2=Normal, 3=High, 4=Urgent, 5=Critical", "minimum": 1, "maximum": 5},
+                        "channel": {"type": "string", "description": "Routing channel (e.g. slack, email, sms, webhook, system)"},
+                        "target": {"type": "string", "description": "Recipient identifier (e.g. user_id, channel_id, or endpoint URL)"},
+                    },
+                    "required": ["message", "priority", "channel", "target"],
+                },
+                "category": "notification",
+            },
+            {
+                "name": "create_dnd_rule",
+                "func": create_dnd_rule,
+                "description": "Call this tool EXCLUSIVELY to create or update a Do Not Disturb rule. Define timeframes (HH:MM UTC) and bypass priorities.",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Unique identifier or name for the DND rule"},
+                        "start_time": {"type": "string", "description": "Start time in HH:MM format (UTC)"},
+                        "end_time": {"type": "string", "description": "End time in HH:MM format (UTC)"},
+                        "allowed_priorities": {"type": "array", "items": {"type": "integer"}, "description": "Priorities that bypass DND (default [4, 5])"},
+                    },
+                    "required": ["name", "start_time", "end_time", "allowed_priorities"],
+                },
+                "category": "notification",
+            },
+            {
+                "name": "filter_notifications",
+                "func": filter_notifications,
+                "description": "Call this tool EXCLUSIVELY to query the notification store. Filter by minimum priority level (1-5) and unread status.",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "min_priority": {"type": "integer", "description": "Minimum priority filter (1-5)", "default": 1},
+                        "unread_only": {"type": "boolean", "description": "Whether to return only unread alerts", "default": False},
+                    },
+                    "required": [],
+                },
+                "category": "notification",
+            },
+            {
+                "name": "broadcast_workflow_status",
+                "func": broadcast_workflow_status,
+                "description": "Call this tool EXCLUSIVELY to update the central state and broadcast the current status and details of a specific workflow.",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "workflow_id": {"type": "string", "description": "Identifier of the workflow"},
+                        "status": {"type": "string", "description": "Status state (e.g. running, paused, completed, failed)"},
+                        "details": {"type": "string", "description": "Diagnostic details or progress summary"},
+                    },
+                    "required": ["workflow_id", "status", "details"],
+                },
+                "category": "notification",
+            },
+        ]
+
+        for tool in tools:
+            if hasattr(registry, "register"):
+                registry.register(
+                    name=tool["name"],
+                    func=tool["func"],
+                    description=tool["description"],
+                    schema=tool["schema"],
+                    category=tool["category"],
+                )
+            elif hasattr(registry, "add_tool"):
+                registry.add_tool(
+                    name=tool["name"],
+                    func=tool["func"],
+                    description=tool["description"],
+                    schema=tool["schema"],
+                    category=tool["category"],
+                )
+            else:
+                registry[tool["name"]] = tool["func"]
+
         logger.info("Smart Workflow Notifier & Alert Toolset registered successfully.")
     except Exception as e:
         logger.error(f"Critical failure during tool registration: {e}")

@@ -14,71 +14,25 @@ import re
 import socket
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional
 
-from .base_agent import BaseAgent
+from .base_agent import BaseAgent, TOOL_DISCIPLINE_BLOCK
 
 logger = logging.getLogger("makima.agents.security")
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Constants & Configuration
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-DANGEROUS_AST_CALLS = {
-    "eval", "exec", "compile", "globals", "locals", "vars",
-    "getattr", "setattr", "delattr", "input", "open"
-}
-
-DANGEROUS_MODULES = {
-    "pickle", "cPickle", "shelve", "marshal", "subprocess", "os", "sys",
-    "pty", "socket", "ctypes", "multiprocessing"
-}
-
-# STUB: In-memory vulnerability database for demo/offline use.
-# Production should integrate NVD, PyPI Advisory, or GitHub Advisories.
-VULNERABILITY_DB: Dict[str, Dict[str, str]] = {
-    # --- Python web frameworks & libraries ---
-    "requests": {"<2.31.0": "CVE-2023-32681 (Proxy-Authorization header leak)"},
-    "urllib3": {"<2.0.6": "CVE-2023-43804 (Cookie header leak)"},
-    "cryptography": {"<41.0.3": "CVE-2023-38325 (NULL pointer dereference)"},
-    "django": {"<4.2.4": "CVE-2023-36053 (ReDoS in EmailValidator)"},
-    "flask": {"<2.3.2": "CVE-2023-30861 (Cookie session bypass)"},
-    "celery": {"<5.3.4": "CVE-2023-32758 (RCE via serialized payloads)"},
-    "redis": {"<4.6.0": "CVE-2023-28856 (Connection race condition)"},
-    "boto3": {"<1.28.0": "CVE-2023-30855 (Credential leakage in errors)"},
-    "numpy": {"<1.22.0": "CVE-2021-41496 (Buffer overflow in array processing)"},
-    "pandas": {"<2.0.0": "CVE-2023-37941 (SQL injection via to_sql)"},
-    "setuptools": {"<65.5.1": "CVE-2022-40897 (ReDoS in package_url)"},
-    "pillow": {"<10.0.1": "CVE-2023-44271 (DoS via infinite loop)"},
-    "pyyaml": {"<6.0.1": "CVE-2020-14343 (Arbitrary code execution via yaml.load)"},
-    "sqlalchemy": {"<2.0.19": "CVE-2023-30533 (SQL injection via order_by)"},
-    "paramiko": {"<3.4.0": "CVE-2023-48795 (SSHv2 Terrapin attack)"},
-    "aiohttp": {"<3.9.0": "CVE-2023-37276 (SSL cert validation bypass)"},
-    "httpx": {"<0.24.1": "CVE-2023-29863 (POST redirect leaks Authorization)"},
-    "starlette": {"<0.27.0": "CVE-2023-5078 (Path traversal in StaticFiles)"},
-    "fastapi": {"<0.103.1": "CVE-2024-24762 (CORS origin bypass)"},
-    "certifi": {"<2023.7.22": "CVE-2023-37920 (Removal of e-Tugra root cert)"},
-    # --- JavaScript ecosystem (for package.json audits) ---
-    "lodash": {"<4.17.21": "CVE-2021-23337 (Command Injection)"},
-    "axios": {"<1.6.0": "CVE-2023-45857 (CSRF token exposure)"},
-    "express": {"<4.18.2": "CVE-2022-24999 (qs prototype pollution)"},
-}
-
-SECRET_PATTERNS = [
-    (r"AKIA[0-9A-Z]{16}", "AWS Access Key ID"),
-    (r"(?i)(aws_secret_access_key|aws_secret_key)\s*[:=]\s*['\"]?([A-Za-z0-9/+=]{40})['\"]?", "AWS Secret Key"),
-    (r"ghp_[A-Za-z0-9]{36}", "GitHub Personal Access Token"),
-    (r"github_pat_[A-Za-z0-9_]{82}", "GitHub Fine-Grained PAT"),
-    (r"sk_live_[A-Za-z0-9]{24,}", "Stripe Live Secret Key"),
-    (r"sk_test_[A-Za-z0-9]{24,}", "Stripe Test Secret Key"),
-    (r"-----BEGIN (?:RSA |EC |DSA )?PRIVATE KEY-----", "Private Key Block"),
-    (r"xox[baprs]-[A-Za-z0-9\-]+", "Slack Token"),
-]
-
-LOCAL_PREFIXES = ("127.", "192.168.", "10.", "172.16.", "172.17.", "172.18.", 
-                  "172.19.", "172.20.", "172.21.", "172.22.", "172.23.", "172.24.", 
-                  "172.25.", "172.26.", "172.27.", "172.28.", "172.29.", "172.30.", 
-                  "172.31.", "localhost", "::1", "0.0.0.0")
+from ..tools.security_tools import (
+    _version_tuple,
+    _version_matches,
+    DANGEROUS_AST_CALLS,
+    DANGEROUS_MODULES,
+    VULNERABILITY_DB,
+    SECRET_PATTERNS,
+    LOCAL_PREFIXES,
+    calculate_shannon_entropy,
+    parse_requirements,
+    parse_package_json,
+)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # AST Security Auditor
@@ -135,51 +89,8 @@ class SecurityASTVisitor(ast.NodeVisitor):
                               f"Importing from sensitive module: `{node.module}`.")
         self.generic_visit(node)
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Helper Functions
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def calculate_shannon_entropy(data: str) -> float:
-    """Calculates the Shannon entropy of a string to detect high-entropy secrets."""
-    if not data:
-        return 0.0
-    entropy = 0.0
-    counts = Counter(data)
-    length = len(data)
-    for count in counts.values():
-        probability = count / length
-        if probability > 0:
-            entropy -= probability * math.log2(probability)
-    return entropy
 
-def parse_requirements(file_path: Path) -> Dict[str, str]:
-    """Parses a Python requirements.txt file into a dict of {package: version}."""
-    deps = {}
-    try:
-        content = file_path.read_text(encoding="utf-8")
-        for line in content.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or line.startswith("-"):
-                continue
-            match = re.match(r"^([a-zA-Z0-9_.-]+)\s*(?:==|>=|<=|~=|!=)\s*([0-9a-zA-Z.*-]+)", line)
-            if match:
-                deps[match.group(1).lower()] = match.group(2)
-    except Exception as e:
-        logger.warning(f"Failed to parse requirements.txt: {e}")
-    return deps
-
-def parse_package_json(file_path: Path) -> Dict[str, str]:
-    """Parses a Node.js package.json file into a dict of {package: version}."""
-    deps = {}
-    try:
-        data = json.loads(file_path.read_text(encoding="utf-8"))
-        for section in ("dependencies", "devDependencies"):
-            for pkg, ver in data.get(section, {}).items():
-                clean_ver = re.sub(r"^[^0-9]*", "", str(ver))
-                deps[pkg.lower()] = clean_ver
-    except Exception as e:
-        logger.warning(f"Failed to parse package.json: {e}")
-    return deps
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Elite Security Agent
@@ -189,30 +100,23 @@ class SecurityAgent(BaseAgent):
     AGENT_NAME = "security"
     DESCRIPTION = "Enterprise security auditing, AST analysis, dependency CVE checks, secret detection, and port scanning."
     CAPABILITIES = ["vulnerability_scanning", "secret_leak_detection", "sql_injection_audit", "dependency_audit", "input_sanitization"]
-    AGENT_TOOLS = ["scan_code", "check_dependencies", "audit_secrets"]
+    AGENT_TOOLS = ["scan_ports", "audit_dependencies", "detect_secrets", "audit_ast", "analyze_threat_model"]
     TAGS = ["security", "audit", "secrets", "injection", "vulnerability"]
 
     SYSTEM_PROMPT = """You are Makima's Elite Security & Vulnerability Agent.
-You perform deep, non-destructive security audits, threat modeling, and code analysis.
+You perform deep, non-destructive security audits, threat modeling, dependency CVE checks, static AST code analysis, and secret leak detection.
 
-━━━ Available Tools ━━━
-1. scan_ports(target: str, ports: list[int], timeout: float)
-   Scans TCP ports on a target IP/hostname. (Requires confirmation for external IPs).
-2. audit_dependencies(file_path: str)
-   Parses requirements.txt or package.json and checks for known CVEs.
-3. detect_secrets(directory: str)
-   Scans a directory recursively for hardcoded secrets using regex and entropy analysis.
-4. audit_ast(file_path: str)
-   Performs Python AST analysis to find dangerous calls, insecure deserialization, and imports.
-5. analyze_threat_model(code_snippet: str, language: str)
-   Analyzes a code snippet for OWASP Top 10 vulnerabilities (SQLi, XSS, RCE, etc.).
+AVAILABLE TOOLS:
+- Port Scanning: scan_ports(target="127.0.0.1", ports=[...], timeout=2.0) [Non-destructive port inspection]
+- Dependency Audit: audit_dependencies(file_path) [checks known CVEs against requirements.txt or package.json]
+- Secret Detection: detect_secrets(directory=".") [Shannon entropy & pattern scan for leaked API keys, tokens, private keys]
+- Static AST Audit: audit_ast(file_path) [detects dangerous calls (eval, exec), unsafe deserialization, SQL injection]
+- Threat Modeling: analyze_threat_model(code_snippet, language="python") [OWASP Top 10 threat modeling & architecture review]
 
-━━━ Rules ━━━
-1. NEVER perform destructive actions, exploitation, or DDoS.
-2. Always confirm before scanning external/public IPs.
-3. Provide actionable, prioritized remediation steps for every finding.
-4. Respond with EXACTLY ONE valid JSON object per turn.
-"""
+RULES & SAFETY:
+1. Non-Destructive: NEVER perform active exploitation, DDoS, brute-forcing, or destructive payloads.
+2. Structured Thinking: Always perform step-by-step security reasoning in <thinking>...</thinking> before selecting audit tools or synthesizing reports.
+3. Severity Ranking: Deliver actionable, severity-ranked findings (CRITICAL, HIGH, MEDIUM, LOW) with concrete remediation code diffs.""" + "\n" + TOOL_DISCIPLINE_BLOCK
 
     _TOOLS = frozenset({
         "scan_ports", "audit_dependencies", "detect_secrets", 
@@ -232,82 +136,90 @@ You perform deep, non-destructive security audits, threat modeling, and code ana
         super().__init__(ai_handler, memory, tool_registry, ws_broadcast, orchestrator, guardrails)
         self._port_semaphore = asyncio.Semaphore(50)  # Limit concurrent port scans
         self._file_semaphore = asyncio.Semaphore(20)  # Limit concurrent file reads
+        self._TOOL_MAP = {
+            "scan_ports": self._tool_scan_ports,
+            "audit_dependencies": self._tool_audit_dependencies,
+            "detect_secrets": self._tool_detect_secrets,
+            "audit_ast": self._tool_audit_ast,
+            "analyze_threat_model": self._tool_analyze_threat_model,
+        }
+
+    async def _tool_scan_ports(self, target: str = "127.0.0.1", ports: list = None, timeout: float = 2.0, _user_approved_external: bool = False, **kwargs: Any) -> dict[str, Any]:
+        return await self._scan_ports(target=target, ports=ports or [], timeout=timeout, _user_approved_external=_user_approved_external)
+
+    async def _tool_audit_dependencies(self, file_path: str = "", **kwargs: Any) -> dict[str, Any]:
+        return await self._audit_dependencies(file_path=file_path)
+
+    async def _tool_detect_secrets(self, directory: str = ".", target_path: Optional[str] = None, path: Optional[str] = None, file_path: Optional[str] = None, **kwargs: Any) -> dict[str, Any]:
+        target = target_path or file_path or path or directory
+        return await self._detect_secrets(directory=target)
+
+    async def _tool_audit_ast(self, file_path: str = "", **kwargs: Any) -> dict[str, Any]:
+        return await self._audit_ast(file_path=file_path)
+
+    async def _tool_analyze_threat_model(self, code_snippet: str = "", language: str = "python", **kwargs: Any) -> dict[str, Any]:
+        return await self._analyze_threat_model(code_snippet=code_snippet, language=language)
 
     async def execute(self, task_id: str, message: str, context: dict[str, Any], entities: dict[str, Any]) -> str:
-        """Main execution loop adhering to the BaseAgent contract."""
+        """Main execution loop adhering to the BaseAgent contract with unified ReAct execution."""
         self._reset_state()
-        messages = self._build_messages(message, context)
-        
-        for step in range(6):  # Max 6 reasoning steps for deep analysis
-            try:
-                raw = await self._llm_call(messages, task="security", require_json=True, temperature=0.1)
-                parsed = self.ai_handler.try_parse_json(raw)
-                
-                if not parsed:
-                    messages.append({"role": "assistant", "content": raw})
-                    messages.append({"role": "user", "content": "[SYSTEM] Invalid JSON format. Respond with valid JSON."})
-                    continue
 
-                tool = parsed.get("tool")
-                if not tool:
-                    return parsed.get("reply", "Security audit complete. No further actions required.")
-                
-                if tool not in self._TOOLS:
-                    messages.append({"role": "assistant", "content": raw})
-                    messages.append({"role": "user", "content": f"[ERROR] Unknown tool '{tool}'. Available: {list(self._TOOLS)}"})
-                    continue
+        # ── P1 Bridge 4B: Consume structured AgentTask parameters directly ────
+        agent_task = getattr(self, "_current_agent_task", None) or (context.get("agent_task") if isinstance(context, dict) else None)
+        if agent_task and hasattr(agent_task, "operation") and agent_task.operation:
+            op = str(agent_task.operation or "").lower().strip()
+            params = dict(agent_task.parameters or {})
+            
+            tool_name = None
+            if any(k in op for k in ("scan_port", "port_scan", "scan")):
+                tool_name = "scan_ports"
+            elif any(k in op for k in ("audit_dep", "dependency", "dependencies")):
+                tool_name = "audit_dependencies"
+            elif any(k in op for k in ("secret", "leak", "check_secret", "detect_secret")):
+                tool_name = "detect_secrets"
+            elif any(k in op for k in ("ast", "audit_ast", "static")):
+                tool_name = "audit_ast"
+            elif any(k in op for k in ("threat", "threat_model")):
+                tool_name = "analyze_threat_model"
 
-                params = parsed.get("params", {})
-                
-                # Enforce confirmation for external port scans
-                if tool == "scan_ports" and not self._is_local_target(params.get("target", "")):
-                    confirmed = await self._confirm_action(
-                        task_id, "security_scan", 
-                        f"Scan external target: {params.get('target')}?", "high"
-                    )
-                    if not confirmed:
-                        return json.dumps({"status": "cancelled", "reason": "External port scan denied by user."})
+            if tool_name and tool_name in self._TOOLS:
+                logger.info("[security] P1-4B: Direct execution of tool '%s'", tool_name)
+                try:
+                    res = await self._use_tool(tool_name, context=context, **params)
+                    res_str = str(res) if not isinstance(res, (dict, list)) else json.dumps(res, indent=2)
+                    self._partial_result = res_str
+                    return res_str
+                except Exception as ex:
+                    logger.warning("[security] Direct tool '%s' failed, falling back to ReAct: %s", tool_name, ex)
 
-                # Execute the selected tool
-                result = await self._route_tool(tool, params)
-                
-                messages.append({"role": "assistant", "content": raw})
-                messages.append({"role": "user", "content": f"[TOOL RESULT: {tool}]\n{json.dumps(result, default=str)}"})
-
-            except Exception as e:
-                logger.exception(f"SecurityAgent execution error at step {step}: {e}")
-                messages.append({"role": "user", "content": f"[SYSTEM ERROR] {str(e)}. Recover and continue."})
-
-        return json.dumps({"status": "max_steps_reached", "message": "Maximum security audit reasoning steps reached."})
-
-    async def _route_tool(self, tool: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Routes tool calls to their respective async implementations with zero-crash resilience."""
+        # ── OpenAI Agents SDK Runner Execution ────────────────────────────────
         try:
-            if tool == "scan_ports":
-                return await self._scan_ports(params.get("target", ""), params.get("ports", []), params.get("timeout", 2.0))
-            elif tool == "audit_dependencies":
-                return await self._audit_dependencies(params.get("file_path", ""))
-            elif tool == "detect_secrets":
-                return await self._detect_secrets(params.get("directory", "."))
-            elif tool == "audit_ast":
-                return await self._audit_ast(params.get("file_path", ""))
-            elif tool == "analyze_threat_model":
-                return await self._analyze_threat_model(params.get("code_snippet", ""), params.get("language", "python"))
-            return {"error": f"Tool {tool} not implemented."}
-        except Exception as e:
-            logger.error(f"Tool execution failed for {tool}: {e}")
-            return {"error": f"Execution failed: {str(e)}"}
+            final_out = await self.run_sdk_execution(
+                task_id=task_id,
+                message=message,
+                context=context,
+                max_turns=6,
+                task_type="security",
+                input_guardrails=[],
+                output_guardrails=[],
+            )
+            self._partial_result = final_out
+            return final_out
+        except Exception as sdk_exc:
+            logger.error("[security] SDK error: %s", sdk_exc)
+            return f"Task complete nahi hua: {str(sdk_exc)}"
 
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # Tool Implementations
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    async def _scan_ports(self, target: str, ports: List[int], timeout: float) -> Dict[str, Any]:
+    async def _scan_ports(self, target: str, ports: List[int], timeout: float,
+                          _user_approved_external: bool = False) -> Dict[str, Any]:
         """Asynchronously scans TCP ports on a target."""
-        # Re-validation guard: reject non-local targets at the method level.
-        if not self._is_local_target(target):
+        # Re-validation guard: reject non-local targets unless user explicitly approved.
+        if not _user_approved_external and not self._is_local_target(target):
             logger.warning(f"Port scan blocked for non-local target: {target}")
-            return {"error": "Port scanning restricted to local/internal targets only."}
+            return {"error": "Port scanning restricted to local/internal targets only. User confirmation required for external targets."}
         if not target or not ports:
             return {"error": "Target and ports are required."}
         
@@ -327,7 +239,16 @@ You perform deep, non-destructive security audits, threat modeling, and code ana
                 except (asyncio.TimeoutError, ConnectionRefusedError, socket.gaierror, OSError):
                     closed_ports.append(port)
 
-        tasks = [scan_single(p) for p in ports if isinstance(p, int)]
+        clean_ports: list[int] = []
+        for p in (ports or []):
+            try:
+                p_int = int(p)
+                if 1 <= p_int <= 65535:
+                    clean_ports.append(p_int)
+            except (ValueError, TypeError):
+                continue
+
+        tasks = [scan_single(p) for p in clean_ports]
         await asyncio.gather(*tasks, return_exceptions=True)
 
         return {
@@ -355,9 +276,7 @@ You perform deep, non-destructive security audits, threat modeling, and code ana
         for pkg, ver in deps.items():
             if pkg in VULNERABILITY_DB:
                 for vuln_ver, cve in VULNERABILITY_DB[pkg].items():
-                    # Simplified version check (assumes exact match or prefix for simulation)
-                    clean_vuln = vuln_ver.lstrip("<>=!~")
-                    if ver.startswith(clean_vuln) or ver < clean_vuln:
+                    if _version_matches(ver, vuln_ver):
                         vulnerabilities.append({
                             "package": pkg,
                             "installed_version": ver,
@@ -373,10 +292,10 @@ You perform deep, non-destructive security audits, threat modeling, and code ana
         }
 
     async def _detect_secrets(self, directory: str) -> Dict[str, Any]:
-        """Scans a directory for hardcoded secrets using regex and entropy."""
-        dir_path = Path(directory)
-        if not dir_path.exists() or not dir_path.is_dir():
-            return {"error": f"Directory not found: {directory}"}
+        """Scans a file or directory for hardcoded secrets using regex and entropy."""
+        target_p = Path(directory)
+        if not target_p.exists():
+            return {"error": f"Target not found: {directory}"}
 
         findings = []
         ignore_dirs = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build"}
@@ -414,22 +333,26 @@ You perform deep, non-destructive security audits, threat modeling, and code ana
                     logger.debug(f"Could not read {file_path}: {e}")
 
         tasks = []
-        for f in dir_path.rglob("*"):
-            if f.is_file() and f.suffix.lower() not in ignore_exts:
-                if not any(part in ignore_dirs for part in f.parts):
-                    tasks.append(scan_file(f))
-            
-            if len(tasks) > 500:  # Cap to prevent memory exhaustion on massive repos
-                logger.warning(
-                    f"Secret scan truncated in {directory!r}: reached 500-file cap. "
-                    "Results are partial and may miss secrets in remaining files."
-                )
-                break
+        if target_p.is_file():
+            tasks.append(scan_file(target_p))
+        else:
+            for f in target_p.rglob("*"):
+                if f.is_file() and f.suffix.lower() not in ignore_exts:
+                    if not any(part in ignore_dirs for part in f.parts):
+                        tasks.append(scan_file(f))
+                
+                if len(tasks) > 500:  # Cap to prevent memory exhaustion on massive repos
+                    logger.warning(
+                        f"Secret scan truncated in {directory!r}: reached 500-file cap. "
+                        "Results are partial and may miss secrets in remaining files."
+                    )
+                    break
 
         await asyncio.gather(*tasks, return_exceptions=True)
 
         return {
             "directory": directory,
+            "target": str(target_p),
             "secrets_found": len(findings),
             "details": findings[:50]  # Limit output size
         }

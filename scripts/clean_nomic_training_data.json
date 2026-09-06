@@ -1,0 +1,3272 @@
+[
+  {
+    "id": 1,
+    "user_utterance": "Open Notepad.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 2,
+    "user_utterance": "Launch Calculator.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 3,
+    "user_utterance": "Start Visual Studio Code.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 4,
+    "user_utterance": "Open File Explorer.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 5,
+    "user_utterance": "Launch Task Manager.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 6,
+    "user_utterance": "Open Control Panel.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 7,
+    "user_utterance": "Open Outlook.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 8,
+    "user_utterance": "Open Teams.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 9,
+    "user_utterance": "Open Excel.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 10,
+    "user_utterance": "Open Word.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 11,
+    "user_utterance": "Open Photoshop.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 12,
+    "user_utterance": "Open Discord.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 13,
+    "user_utterance": "Open Telegram desktop app.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 14,
+    "user_utterance": "Open Spotify desktop client.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 15,
+    "user_utterance": "Close Chrome.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 16,
+    "user_utterance": "Close Notepad.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 17,
+    "user_utterance": "Close VSCode.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 18,
+    "user_utterance": "Close Outlook.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 19,
+    "user_utterance": "Close Discord.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 20,
+    "user_utterance": "Close Teams.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 21,
+    "user_utterance": "Close Zoom.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 22,
+    "user_utterance": "Close Photoshop.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 23,
+    "user_utterance": "Kill Chrome.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 24,
+    "user_utterance": "Kill Excel.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 25,
+    "user_utterance": "Kill the python process.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 26,
+    "user_utterance": "Kill taskkill.exe process.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 27,
+    "user_utterance": "Terminate notepad process.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 28,
+    "user_utterance": "Minimize Chrome.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 29,
+    "user_utterance": "Minimize VSCode.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 30,
+    "user_utterance": "Minimize Discord.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 31,
+    "user_utterance": "Minimize Outlook.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 32,
+    "user_utterance": "Minimize Word.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 33,
+    "user_utterance": "Minimize Excel.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 34,
+    "user_utterance": "Minimize Photoshop.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 35,
+    "user_utterance": "Minimize OneNote.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 36,
+    "user_utterance": "Minimize Zoom.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 37,
+    "user_utterance": "Minimize all windows on screen.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 38,
+    "user_utterance": "Maximize Chrome.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 39,
+    "user_utterance": "Maximize VSCode.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 40,
+    "user_utterance": "Maximize Word.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 41,
+    "user_utterance": "Maximize Teams.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 42,
+    "user_utterance": "Maximize Discord.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 43,
+    "user_utterance": "Maximize Notion.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 44,
+    "user_utterance": "Restore Chrome window.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 45,
+    "user_utterance": "Restore Discord window.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 46,
+    "user_utterance": "Restore Windows Explorer.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 47,
+    "user_utterance": "Restore Notion window.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 48,
+    "user_utterance": "Bring VSCode to the front.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 49,
+    "user_utterance": "Bring Slack to the front.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 50,
+    "user_utterance": "Bring OneNote to the front.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 51,
+    "user_utterance": "Bring Notion to the front.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 52,
+    "user_utterance": "Bring Teams to the front.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 53,
+    "user_utterance": "Bring Telegram to the front.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 54,
+    "user_utterance": "Put OneNote in the background.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 55,
+    "user_utterance": "Put Firefox in the background.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 56,
+    "user_utterance": "Put Discord in the background.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 57,
+    "user_utterance": "Put Photoshop in the background.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 58,
+    "user_utterance": "Put Outlook in the background.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 59,
+    "user_utterance": "Show me all running processes.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 60,
+    "user_utterance": "List all open windows.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 61,
+    "user_utterance": "Check how much RAM is free.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 62,
+    "user_utterance": "How much CPU is Chrome using?",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 63,
+    "user_utterance": "Check my disk space.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 64,
+    "user_utterance": "What's using all my memory right now?",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 65,
+    "user_utterance": "Check system hardware stats.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 66,
+    "user_utterance": "Organize my desktop icons.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 67,
+    "user_utterance": "Make my desktop clean.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 68,
+    "user_utterance": "Move file from downloads to documents.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 69,
+    "user_utterance": "Rename this folder on desktop.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 70,
+    "user_utterance": "Turn off Wi-Fi.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 71,
+    "user_utterance": "Turn on airplane mode.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 72,
+    "user_utterance": "Restart my laptop.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 73,
+    "user_utterance": "Shut down the computer.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 74,
+    "user_utterance": "Format C drive.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 75,
+    "user_utterance": "Format partition.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 76,
+    "user_utterance": "Format hard disk drive.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 77,
+    "user_utterance": "Kill system process with PID 4.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 78,
+    "user_utterance": "Kill process with PID 4.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 79,
+    "user_utterance": "Kill process PID 1234.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 80,
+    "user_utterance": "Notepad band kar do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 81,
+    "user_utterance": "Calculator band kar do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 82,
+    "user_utterance": "Open Git, not GitHub.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 83,
+    "user_utterance": "Launch Git GUI, not GitHub website.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 84,
+    "user_utterance": "Spotify band karo YouTube nahi.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 85,
+    "user_utterance": "Chrome band karo Spotify nahi.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 86,
+    "user_utterance": "Don't launch Outlook yet.",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 87,
+    "user_utterance": "Don't restart the system.",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 88,
+    "user_utterance": "Don't kill any process right now.",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 89,
+    "user_utterance": "Don't delete anything on my desktop.",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 90,
+    "user_utterance": "Computer band mat karna.",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 91,
+    "user_utterance": "Gaana mat chalao.",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 92,
+    "user_utterance": "Is process ko kill mat karna.",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 93,
+    "user_utterance": "Minimize Slack, but don't close it.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 94,
+    "user_utterance": "Minimize Discord, but don't close it.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 95,
+    "user_utterance": "Minimize Outlook, but don't close it.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 96,
+    "user_utterance": "Minimize Photoshop, but don't close it.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 97,
+    "user_utterance": "Minimize Word, but don't close it.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 98,
+    "user_utterance": "Minimize Windows Explorer, but don't close it.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 99,
+    "user_utterance": "Close Discord, not Slack.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 100,
+    "user_utterance": "Close Zoom, not OneNote.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 101,
+    "user_utterance": "Close Windows Explorer, not Photoshop.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 102,
+    "user_utterance": "Close Teams, not Outlook.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 103,
+    "user_utterance": "Close OneNote, not Chrome.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 104,
+    "user_utterance": "Close Notion, not Word.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 105,
+    "user_utterance": "Don't launch Chrome right now.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 106,
+    "user_utterance": "Don't launch Teams right now.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 107,
+    "user_utterance": "Don't launch Word right now.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 108,
+    "user_utterance": "Don't launch Photoshop right now.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 109,
+    "user_utterance": "Don't launch OneNote right now.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 110,
+    "user_utterance": "Don't launch Firefox right now.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 111,
+    "user_utterance": "Don't launch Outlook yet.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 112,
+    "user_utterance": "Don't close Windows Explorer.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 113,
+    "user_utterance": "Don't close Outlook.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 114,
+    "user_utterance": "Don't close Firefox.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 115,
+    "user_utterance": "Don't close Excel.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 116,
+    "user_utterance": "Don't close OneNote.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 117,
+    "user_utterance": "Don't close Word.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 118,
+    "user_utterance": "Don't close Notion.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 119,
+    "user_utterance": "Don't close Teams.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 120,
+    "user_utterance": "Don't touch Word.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 121,
+    "user_utterance": "Don't touch Notion.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 122,
+    "user_utterance": "Don't touch Firefox.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 123,
+    "user_utterance": "Don't touch Excel.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 124,
+    "user_utterance": "Don't touch Telegram.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 125,
+    "user_utterance": "Don't touch Windows Explorer.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 126,
+    "user_utterance": "Don't touch VSCode.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 127,
+    "user_utterance": "Don't touch Teams.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 128,
+    "user_utterance": "Don't touch Photoshop.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 129,
+    "user_utterance": "Don't touch Slack.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 130,
+    "user_utterance": "Don't minimize Telegram yet.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 131,
+    "user_utterance": "Don't minimize Notion yet.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 132,
+    "user_utterance": "Don't minimize Slack yet.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 133,
+    "user_utterance": "Don't minimize Chrome yet.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 134,
+    "user_utterance": "Don't restart my laptop right now.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 135,
+    "user_utterance": "Notepad kholo.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 136,
+    "user_utterance": "Calculator chalu karo.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 137,
+    "user_utterance": "Chrome band karo.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 138,
+    "user_utterance": "Firefox band kar do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 139,
+    "user_utterance": "Word band kar do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 140,
+    "user_utterance": "Outlook band kar do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 141,
+    "user_utterance": "OneNote band kar do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 142,
+    "user_utterance": "Zoom band kar do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 143,
+    "user_utterance": "VSCode kholo.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 144,
+    "user_utterance": "Excel kholo.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 145,
+    "user_utterance": "Teams kholo.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 146,
+    "user_utterance": "Telegram kholo.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 147,
+    "user_utterance": "Photoshop kholo.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 148,
+    "user_utterance": "Zoom kholo.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 149,
+    "user_utterance": "Slack kholo.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 150,
+    "user_utterance": "Windows Explorer kholo.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 151,
+    "user_utterance": "Bhai Outlook khol de jaldi.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 152,
+    "user_utterance": "Saare heavy apps ki list dikhao.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 153,
+    "user_utterance": "RAM kitni free hai check karo.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 154,
+    "user_utterance": "Mera CPU kitna load le raha hai?",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 155,
+    "user_utterance": "Laptop ko restart kar do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 156,
+    "user_utterance": "Windows update ka status check karo.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 157,
+    "user_utterance": "Desktop saaf kar do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 158,
+    "user_utterance": "Telegram ki window hata do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 159,
+    "user_utterance": "Photoshop ki window hata do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 160,
+    "user_utterance": "VSCode ki window hata do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 161,
+    "user_utterance": "Slack ki window hata do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 162,
+    "user_utterance": "Excel ki window hata do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 163,
+    "user_utterance": "Discord ki window hata do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 164,
+    "user_utterance": "Word ki window hata do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 165,
+    "user_utterance": "Chrome ki window hata do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 166,
+    "user_utterance": "Zoom ki window hata do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 167,
+    "user_utterance": "OneNote ki window hata do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 168,
+    "user_utterance": "Yeh window hata do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 169,
+    "user_utterance": "Isko band kar do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 170,
+    "user_utterance": "VSCode ko saamne lao.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 171,
+    "user_utterance": "Slack ko saamne lao.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 172,
+    "user_utterance": "Windows Explorer ko saamne lao.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 173,
+    "user_utterance": "Discord ko saamne lao.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 174,
+    "user_utterance": "Excel ko saamne lao.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 175,
+    "user_utterance": "Firefox ko saamne lao.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 176,
+    "user_utterance": "Notion ko saamne lao.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 177,
+    "user_utterance": "Word ko saamne lao.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 178,
+    "user_utterance": "Photoshop ko saamne lao.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 179,
+    "user_utterance": "Saamne lao is window ko.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 180,
+    "user_utterance": "Front me lao isse.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 181,
+    "user_utterance": "Saamne lao.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 182,
+    "user_utterance": "Chhota karo is window ko.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 183,
+    "user_utterance": "Yeh window chhota kar do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 184,
+    "user_utterance": "Zoom ko chhota kar do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 185,
+    "user_utterance": "Word ko chhota kar do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 186,
+    "user_utterance": "VSCode ko chhota kar do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 187,
+    "user_utterance": "Excel ko chhota kar do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 188,
+    "user_utterance": "Telegram ko chhota kar do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 189,
+    "user_utterance": "Teams ko chhota kar do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 190,
+    "user_utterance": "Photoshop ko chhota kar do.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 191,
+    "user_utterance": "Discord minimize karo, Slack mat chhedna.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 192,
+    "user_utterance": "Outlook minimize karo, Excel mat chhedna.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 193,
+    "user_utterance": "Telegram minimize karo, Firefox mat chhedna.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 194,
+    "user_utterance": "Chrome minimize karo, Telegram mat chhedna.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 195,
+    "user_utterance": "Slack minimize karo, Windows Explorer mat chhedna.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 196,
+    "user_utterance": "Teams minimize karo, Outlook mat chhedna.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 197,
+    "user_utterance": "Excel minimize karo, Notion mat chhedna.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 198,
+    "user_utterance": "OneNote minimize karo, Chrome mat chhedna.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 199,
+    "user_utterance": "Windows Explorer minimize karo, Photoshop mat chhedna.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 200,
+    "user_utterance": "Chrome ko minimize kar do but band mat karna.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 201,
+    "user_utterance": "VSCode ko mat chhedna.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 202,
+    "user_utterance": "Telegram ko mat chhedna.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 203,
+    "user_utterance": "Windows Explorer ko mat chhedna.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 204,
+    "user_utterance": "Word ko mat chhedna.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 205,
+    "user_utterance": "Chrome ko mat chhedna.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 206,
+    "user_utterance": "Excel ko mat chhedna.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 207,
+    "user_utterance": "Notion ko mat chhedna.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 208,
+    "user_utterance": "Firefox ko mat chhedna.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 209,
+    "user_utterance": "Slack ko mat chhedna.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 210,
+    "user_utterance": "Teams ko mat chhedna.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 211,
+    "user_utterance": "Zoom ko mat chhedna.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 212,
+    "user_utterance": "Outlook ko mat chhedna.",
+    "target_domain": "system_control"
+  },
+  {
+    "id": 213,
+    "user_utterance": "Hello Makima.",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 214,
+    "user_utterance": "Hey how are you doing?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 215,
+    "user_utterance": "Good morning!",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 216,
+    "user_utterance": "Good evening.",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 217,
+    "user_utterance": "Tell me a joke.",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 218,
+    "user_utterance": "Who created you?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 219,
+    "user_utterance": "Who is Makima?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 220,
+    "user_utterance": "What do you think about artificial intelligence?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 221,
+    "user_utterance": "Do you have feelings?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 222,
+    "user_utterance": "What's your favorite thing to do?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 223,
+    "user_utterance": "Do you ever get bored?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 224,
+    "user_utterance": "How was your day?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 225,
+    "user_utterance": "Tell me something interesting about science.",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 226,
+    "user_utterance": "I am feeling happy today.",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 227,
+    "user_utterance": "Namaste kaise ho?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 228,
+    "user_utterance": "Kya haal chaal hai?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 229,
+    "user_utterance": "Kaise ho aap?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 230,
+    "user_utterance": "Batao na kya chal raha hai?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 231,
+    "user_utterance": "Theek hai, shukriya.",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 232,
+    "user_utterance": "Why is Chrome slow?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 233,
+    "user_utterance": "Chrome is taking too much RAM.",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 234,
+    "user_utterance": "Why is Chrome using so much memory?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 235,
+    "user_utterance": "Why does my laptop fan get so loud?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 236,
+    "user_utterance": "My computer is overheating.",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 237,
+    "user_utterance": "What does taskkill do in Windows?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 238,
+    "user_utterance": "What does 'kill process' mean?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 239,
+    "user_utterance": "How do I minimize windows in Windows 11?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 240,
+    "user_utterance": "How do computers even work?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 241,
+    "user_utterance": "What is the difference between RAM and storage?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 242,
+    "user_utterance": "Is Windows Defender safe?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 243,
+    "user_utterance": "What is quantum computing?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 244,
+    "user_utterance": "Can you control my PC?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 245,
+    "user_utterance": "What is a good web browser to use?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 246,
+    "user_utterance": "How does Google search work under the hood?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 247,
+    "user_utterance": "Do you like Spotify?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 248,
+    "user_utterance": "What is your favorite Spotify playlist?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 249,
+    "user_utterance": "Do you listen to music?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 250,
+    "user_utterance": "What do you think about music genres?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 251,
+    "user_utterance": "Play with me.",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 252,
+    "user_utterance": "Can we play chess together?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 253,
+    "user_utterance": "Let's play a roleplay game.",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 254,
+    "user_utterance": "Sing me a song.",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 255,
+    "user_utterance": "What is Python programming language?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 256,
+    "user_utterance": "How do I learn Python?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 257,
+    "user_utterance": "Python is hard to learn for beginners.",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 258,
+    "user_utterance": "What are AI models?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 259,
+    "user_utterance": "What is a reminder in productivity?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 260,
+    "user_utterance": "What is a vulnerability in cyber security?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 261,
+    "user_utterance": "What is video compression?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 262,
+    "user_utterance": "Explain how the internet works.",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 263,
+    "user_utterance": "How do neural networks work?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 264,
+    "user_utterance": "Do you have a good memory in general?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 265,
+    "user_utterance": "I forgot my keys today.",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 266,
+    "user_utterance": "Spotify keeps pausing on my phone.",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 267,
+    "user_utterance": "GitHub is down today.",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 268,
+    "user_utterance": "Is Notion better than OneNote?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 269,
+    "user_utterance": "Telegram is very popular in Europe.",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 270,
+    "user_utterance": "Don't close anything right now, just answering questions.",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 271,
+    "user_utterance": "Chrome kyun slow ho gaya hai?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 272,
+    "user_utterance": "Chrome kyu hang ho raha hai?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 273,
+    "user_utterance": "Windows me screenshot kaise lete hain?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 274,
+    "user_utterance": "Tumhe Spotify pasand hai kya?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 275,
+    "user_utterance": "Tum bore ho jaate ho kya?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 276,
+    "user_utterance": "Docker kya hota hai explain karo.",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 277,
+    "user_utterance": "Python seekhna kitna mushkil hai?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 278,
+    "user_utterance": "Audio quality kaise improve hoti hai?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 279,
+    "user_utterance": "Desktop wallpaper kaunsa lagana chahiye?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 280,
+    "user_utterance": "Chess me knight kaise chalta hai?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 281,
+    "user_utterance": "Cricket me DRS kya hota hai?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 282,
+    "user_utterance": "Video game khelne ke fayde kya hain?",
+    "target_domain": "fast_chat"
+  },
+  {
+    "id": 283,
+    "user_utterance": "Go to https://example.com.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 284,
+    "user_utterance": "Open github.com and check trending repos.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 285,
+    "user_utterance": "Navigate to amazon and search for headphones.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 286,
+    "user_utterance": "Go to hackernews and give me the top stories.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 287,
+    "user_utterance": "Open youtube.com in browser.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 288,
+    "user_utterance": "Go to reddit.com/r/technology.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 289,
+    "user_utterance": "Open linkedin and search for python developers.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 290,
+    "user_utterance": "Go to twitter and read my notifications.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 291,
+    "user_utterance": "Browse to Wikipedia article on black holes.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 292,
+    "user_utterance": "Open Google in browser.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 293,
+    "user_utterance": "Search Google for cheap laptops under 50000.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 294,
+    "user_utterance": "Search Google for best noise cancelling headphones.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 295,
+    "user_utterance": "Search Google for how neural networks work.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 296,
+    "user_utterance": "Fill out the contact form on this page.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 297,
+    "user_utterance": "Click the submit button on the webpage.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 298,
+    "user_utterance": "Take a screenshot of the current webpage.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 299,
+    "user_utterance": "Extract all links from this webpage.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 300,
+    "user_utterance": "Scrape the headlines from BBC news website.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 301,
+    "user_utterance": "Open a new incognito window in browser.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 302,
+    "user_utterance": "Close the active browser tab.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 303,
+    "user_utterance": "Switch to the second browser tab.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 304,
+    "user_utterance": "Clear my browsing history for today.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 305,
+    "user_utterance": "Bring back the browser tab I closed by accident.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 306,
+    "user_utterance": "Pull up GitHub in browser.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 307,
+    "user_utterance": "Pull up Reddit for me.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 308,
+    "user_utterance": "Pull up YouTube in browser.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 309,
+    "user_utterance": "Pull up Amazon for me.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 310,
+    "user_utterance": "Pull up Twitter for me.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 311,
+    "user_utterance": "Take me to GitHub.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 312,
+    "user_utterance": "Take me to YouTube.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 313,
+    "user_utterance": "Take me to Amazon.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 314,
+    "user_utterance": "Take me to Reddit.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 315,
+    "user_utterance": "Take me to Google.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 316,
+    "user_utterance": "Take me to Stack Overflow.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 317,
+    "user_utterance": "Search GitHub, but don't open anything.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 318,
+    "user_utterance": "Open GitHub but don't search anything.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 319,
+    "user_utterance": "Don't open any links on this page yet.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 320,
+    "user_utterance": "Google khol do.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 321,
+    "user_utterance": "GitHub khol do.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 322,
+    "user_utterance": "Netflix khol do.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 323,
+    "user_utterance": "Wikipedia khol do.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 324,
+    "user_utterance": "Stack Overflow khol do.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 325,
+    "user_utterance": "YouTube khol do.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 326,
+    "user_utterance": "Amazon khol do.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 327,
+    "user_utterance": "Reddit khol do.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 328,
+    "user_utterance": "LinkedIn pe jao.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 329,
+    "user_utterance": "Wikipedia pe jao.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 330,
+    "user_utterance": "Stack Overflow pe jao.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 331,
+    "user_utterance": "GitHub pe jao.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 332,
+    "user_utterance": "Google pe search karo cheap laptops under 50000.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 333,
+    "user_utterance": "Google pe search karo how neural networks work.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 334,
+    "user_utterance": "Google pe search karo best noise cancelling headphones.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 335,
+    "user_utterance": "Website pe jao aur title padho.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 336,
+    "user_utterance": "Iss site ko kholo aur content extract karo.",
+    "target_domain": "browser"
+  },
+  {
+    "id": 337,
+    "user_utterance": "Play a song.",
+    "target_domain": "media"
+  },
+  {
+    "id": 338,
+    "user_utterance": "Play some lofi music on Spotify.",
+    "target_domain": "media"
+  },
+  {
+    "id": 339,
+    "user_utterance": "Play romantic songs on Spotify.",
+    "target_domain": "media"
+  },
+  {
+    "id": 340,
+    "user_utterance": "Play Shape of You on YouTube.",
+    "target_domain": "media"
+  },
+  {
+    "id": 341,
+    "user_utterance": "Play acoustic guitar music on YouTube.",
+    "target_domain": "media"
+  },
+  {
+    "id": 342,
+    "user_utterance": "Play Arijit Singh songs on Spotify.",
+    "target_domain": "media"
+  },
+  {
+    "id": 343,
+    "user_utterance": "Play Bollywood romantic playlist.",
+    "target_domain": "media"
+  },
+  {
+    "id": 344,
+    "user_utterance": "Play the song I had on earlier.",
+    "target_domain": "media"
+  },
+  {
+    "id": 345,
+    "user_utterance": "Play the next episode on Netflix.",
+    "target_domain": "media"
+  },
+  {
+    "id": 346,
+    "user_utterance": "Open Spotify and play something chill.",
+    "target_domain": "media"
+  },
+  {
+    "id": 347,
+    "user_utterance": "Open YouTube Music and play focus beats.",
+    "target_domain": "media"
+  },
+  {
+    "id": 348,
+    "user_utterance": "Pause the music.",
+    "target_domain": "media"
+  },
+  {
+    "id": 349,
+    "user_utterance": "Pause that.",
+    "target_domain": "media"
+  },
+  {
+    "id": 350,
+    "user_utterance": "Resume playback.",
+    "target_domain": "media"
+  },
+  {
+    "id": 351,
+    "user_utterance": "Skip to the next song.",
+    "target_domain": "media"
+  },
+  {
+    "id": 352,
+    "user_utterance": "Skip this track.",
+    "target_domain": "media"
+  },
+  {
+    "id": 353,
+    "user_utterance": "Play the previous track.",
+    "target_domain": "media"
+  },
+  {
+    "id": 354,
+    "user_utterance": "Shuffle my liked songs.",
+    "target_domain": "media"
+  },
+  {
+    "id": 355,
+    "user_utterance": "What song is currently playing?",
+    "target_domain": "media"
+  },
+  {
+    "id": 356,
+    "user_utterance": "Increase volume to 80 percent.",
+    "target_domain": "media"
+  },
+  {
+    "id": 357,
+    "user_utterance": "Lower the volume.",
+    "target_domain": "media"
+  },
+  {
+    "id": 358,
+    "user_utterance": "Turn the volume up a bit.",
+    "target_domain": "media"
+  },
+  {
+    "id": 359,
+    "user_utterance": "Volume 50 percent karo.",
+    "target_domain": "media"
+  },
+  {
+    "id": 360,
+    "user_utterance": "Mute the music.",
+    "target_domain": "media"
+  },
+  {
+    "id": 361,
+    "user_utterance": "Unmute the player.",
+    "target_domain": "media"
+  },
+  {
+    "id": 362,
+    "user_utterance": "Seek forward 30 seconds.",
+    "target_domain": "media"
+  },
+  {
+    "id": 363,
+    "user_utterance": "Put on some lo-fi to focus.",
+    "target_domain": "media"
+  },
+  {
+    "id": 364,
+    "user_utterance": "Play Spotify, but don't change the volume.",
+    "target_domain": "media"
+  },
+  {
+    "id": 365,
+    "user_utterance": "Don't change the volume.",
+    "target_domain": "media"
+  },
+  {
+    "id": 366,
+    "user_utterance": "Don't play anything.",
+    "target_domain": "media"
+  },
+  {
+    "id": 367,
+    "user_utterance": "Gaana bajao.",
+    "target_domain": "media"
+  },
+  {
+    "id": 368,
+    "user_utterance": "Spotify pe lofi chalao.",
+    "target_domain": "media"
+  },
+  {
+    "id": 369,
+    "user_utterance": "YouTube pe cricket highlights lagao.",
+    "target_domain": "media"
+  },
+  {
+    "id": 370,
+    "user_utterance": "Spotify pe kuch chill gaana lagao.",
+    "target_domain": "media"
+  },
+  {
+    "id": 371,
+    "user_utterance": "Gaana aage badhao.",
+    "target_domain": "media"
+  },
+  {
+    "id": 372,
+    "user_utterance": "Gaana roko.",
+    "target_domain": "media"
+  },
+  {
+    "id": 373,
+    "user_utterance": "Music band karo.",
+    "target_domain": "media"
+  },
+  {
+    "id": 374,
+    "user_utterance": "Agla gaana bajao.",
+    "target_domain": "media"
+  },
+  {
+    "id": 375,
+    "user_utterance": "Volume kam karo.",
+    "target_domain": "media"
+  },
+  {
+    "id": 376,
+    "user_utterance": "Yeh song skip karo.",
+    "target_domain": "media"
+  },
+  {
+    "id": 377,
+    "user_utterance": "Open Chrome and then open VSCode.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 378,
+    "user_utterance": "Open Chrome and then open my project.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 379,
+    "user_utterance": "Close all my browser tabs and open a fresh window with GitHub.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 380,
+    "user_utterance": "Check the server logs, restart the container if it crashed, and let me know.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 381,
+    "user_utterance": "Download Python 3.12 installer and then install it.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 382,
+    "user_utterance": "Search for latest AI news on Google and summarize them.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 383,
+    "user_utterance": "Search for the latest AI news and summarize the important findings.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 384,
+    "user_utterance": "Take screenshot then send it on Telegram to Rahul.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 385,
+    "user_utterance": "Take a screenshot and send it to Rahul.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 386,
+    "user_utterance": "Kill Chrome and restart it.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 387,
+    "user_utterance": "Clean desktop then create a backup archive.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 388,
+    "user_utterance": "Find all pdf files in Documents and move them to Archive.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 389,
+    "user_utterance": "Open Spotify, play lo-fi, and set volume to 40%.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 390,
+    "user_utterance": "Open Spotify, play a song, and lower the volume.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 391,
+    "user_utterance": "Play some music, but first check if the volume is muted.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 392,
+    "user_utterance": "Open Outlook, draft the email, but don't send it until I say so.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 393,
+    "user_utterance": "Merge these PDFs and rename the result to 'final report'.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 394,
+    "user_utterance": "Analyze this CSV and create a chart, then email it to my manager.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 395,
+    "user_utterance": "Analyze this spreadsheet, make a chart, and save it as a PDF.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 396,
+    "user_utterance": "Download this report, convert it to PDF, and email it to my manager.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 397,
+    "user_utterance": "Scan this repo for vulnerabilities and send me a summary on Slack.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 398,
+    "user_utterance": "Fix the bug, run the tests, and push it if everything passes.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 399,
+    "user_utterance": "Set a reminder for the meeting and message the team it's rescheduled.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 400,
+    "user_utterance": "Research the best noise cancelling headphones and put together a comparison doc.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 401,
+    "user_utterance": "Pehle calculator kholo phir excel open karo.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 402,
+    "user_utterance": "Chrome kholo, GitHub search karo, aur release download karo.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 403,
+    "user_utterance": "Screenshot le lo aur Rahul ko bhej do.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 404,
+    "user_utterance": "Spotify kholo, gaana lagao, aur volume kam karo.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 405,
+    "user_utterance": "Reminder set karo aur team ko message bhi kar do.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 406,
+    "user_utterance": "Notepad band karo aur calculator kholo.",
+    "target_domain": "multi_step"
+  },
+  {
+    "id": 407,
+    "user_utterance": "Write a Python function to calculate fibonacci numbers.",
+    "target_domain": "code"
+  },
+  {
+    "id": 408,
+    "user_utterance": "Create a JavaScript sorting algorithm.",
+    "target_domain": "code"
+  },
+  {
+    "id": 409,
+    "user_utterance": "Write a Rust program to read a CSV file.",
+    "target_domain": "code"
+  },
+  {
+    "id": 410,
+    "user_utterance": "Debug this Python code for me.",
+    "target_domain": "code"
+  },
+  {
+    "id": 411,
+    "user_utterance": "Fix this Python code.",
+    "target_domain": "code"
+  },
+  {
+    "id": 412,
+    "user_utterance": "Check why this function keeps returning null.",
+    "target_domain": "code"
+  },
+  {
+    "id": 413,
+    "user_utterance": "Refactor this function to be more efficient.",
+    "target_domain": "code"
+  },
+  {
+    "id": 414,
+    "user_utterance": "Clean up this messy code.",
+    "target_domain": "code"
+  },
+  {
+    "id": 415,
+    "user_utterance": "Add comments to this function so it's readable.",
+    "target_domain": "code"
+  },
+  {
+    "id": 416,
+    "user_utterance": "Add error handling to this script.",
+    "target_domain": "code"
+  },
+  {
+    "id": 417,
+    "user_utterance": "Convert this script from Python to JavaScript.",
+    "target_domain": "code"
+  },
+  {
+    "id": 418,
+    "user_utterance": "Write unit tests for this class.",
+    "target_domain": "code"
+  },
+  {
+    "id": 419,
+    "user_utterance": "Explain this regex pattern.",
+    "target_domain": "code"
+  },
+  {
+    "id": 420,
+    "user_utterance": "Fix the bug, but don't change the function signature.",
+    "target_domain": "code"
+  },
+  {
+    "id": 421,
+    "user_utterance": "Don't run this script yet, just check syntax.",
+    "target_domain": "code"
+  },
+  {
+    "id": 422,
+    "user_utterance": "Don't push this to the repo yet, just review it.",
+    "target_domain": "code"
+  },
+  {
+    "id": 423,
+    "user_utterance": "Run this Python script.",
+    "target_domain": "code"
+  },
+  {
+    "id": 424,
+    "user_utterance": "Run it again.",
+    "target_domain": "code"
+  },
+  {
+    "id": 425,
+    "user_utterance": "Write a bash script to backup database.",
+    "target_domain": "code"
+  },
+  {
+    "id": 426,
+    "user_utterance": "Create a Dockerfile for a Node.js web app.",
+    "target_domain": "code"
+  },
+  {
+    "id": 427,
+    "user_utterance": "Implement binary search in Python.",
+    "target_domain": "code"
+  },
+  {
+    "id": 428,
+    "user_utterance": "Write a function that reverses a string.",
+    "target_domain": "code"
+  },
+  {
+    "id": 429,
+    "user_utterance": "Ek python script likho jo csv read kare.",
+    "target_domain": "code"
+  },
+  {
+    "id": 430,
+    "user_utterance": "Mujhe ek function bana ke do jo palindrome check kare.",
+    "target_domain": "code"
+  },
+  {
+    "id": 431,
+    "user_utterance": "Is function mein bug hai, fix karo.",
+    "target_domain": "code"
+  },
+  {
+    "id": 432,
+    "user_utterance": "Yeh code fix karo.",
+    "target_domain": "code"
+  },
+  {
+    "id": 433,
+    "user_utterance": "Script run karo.",
+    "target_domain": "code"
+  },
+  {
+    "id": 434,
+    "user_utterance": "Research the latest developments in quantum computing.",
+    "target_domain": "research"
+  },
+  {
+    "id": 435,
+    "user_utterance": "Find out what's new in AI this week.",
+    "target_domain": "research"
+  },
+  {
+    "id": 436,
+    "user_utterance": "Research artificial intelligence trends in 2026 and summarize.",
+    "target_domain": "research"
+  },
+  {
+    "id": 437,
+    "user_utterance": "Research market trends for electric vehicles.",
+    "target_domain": "research"
+  },
+  {
+    "id": 438,
+    "user_utterance": "Look up the side effects of this medicine.",
+    "target_domain": "research"
+  },
+  {
+    "id": 439,
+    "user_utterance": "Find recent papers on large language models.",
+    "target_domain": "research"
+  },
+  {
+    "id": 440,
+    "user_utterance": "Find the reviews for this restaurant.",
+    "target_domain": "research"
+  },
+  {
+    "id": 441,
+    "user_utterance": "Look up flight prices to Tokyo.",
+    "target_domain": "research"
+  },
+  {
+    "id": 442,
+    "user_utterance": "Find out who won the match last night.",
+    "target_domain": "research"
+  },
+  {
+    "id": 443,
+    "user_utterance": "Find out what's happening with the stock market today.",
+    "target_domain": "research"
+  },
+  {
+    "id": 444,
+    "user_utterance": "Search for recent papers on quantum computing.",
+    "target_domain": "research"
+  },
+  {
+    "id": 445,
+    "user_utterance": "Dig up everything you can on this company before my interview.",
+    "target_domain": "research"
+  },
+  {
+    "id": 446,
+    "user_utterance": "Research the latest AI models.",
+    "target_domain": "research"
+  },
+  {
+    "id": 447,
+    "user_utterance": "Research the latest AI models but don't summarize it, just give links.",
+    "target_domain": "research"
+  },
+  {
+    "id": 448,
+    "user_utterance": "Don't research this right now.",
+    "target_domain": "research"
+  },
+  {
+    "id": 449,
+    "user_utterance": "Don't dig any deeper into that topic, it's fine.",
+    "target_domain": "research"
+  },
+  {
+    "id": 450,
+    "user_utterance": "Dhundh ke batao latest tech news.",
+    "target_domain": "research"
+  },
+  {
+    "id": 451,
+    "user_utterance": "Khoj lagao nuclear fusion ke baare me.",
+    "target_domain": "research"
+  },
+  {
+    "id": 452,
+    "user_utterance": "Stock market ka haal pata karo aaj ka.",
+    "target_domain": "research"
+  },
+  {
+    "id": 453,
+    "user_utterance": "Yeh company ke baare mein pata karo.",
+    "target_domain": "research"
+  },
+  {
+    "id": 454,
+    "user_utterance": "AI models ke baare mein research karo.",
+    "target_domain": "research"
+  },
+  {
+    "id": 455,
+    "user_utterance": "Remind me to submit the report tomorrow at 3pm.",
+    "target_domain": "automation"
+  },
+  {
+    "id": 456,
+    "user_utterance": "Set a reminder for dentist appointment on Friday.",
+    "target_domain": "automation"
+  },
+  {
+    "id": 457,
+    "user_utterance": "Schedule a daily standup reminder at 9am.",
+    "target_domain": "automation"
+  },
+  {
+    "id": 458,
+    "user_utterance": "Set an alarm for 7am tomorrow.",
+    "target_domain": "automation"
+  },
+  {
+    "id": 459,
+    "user_utterance": "Set an alarm for 6am.",
+    "target_domain": "automation"
+  },
+  {
+    "id": 460,
+    "user_utterance": "Set a timer for 25 minutes pomodoro.",
+    "target_domain": "automation"
+  },
+  {
+    "id": 461,
+    "user_utterance": "Ping me in an hour about the laundry.",
+    "target_domain": "automation"
+  },
+  {
+    "id": 462,
+    "user_utterance": "Nudge me when it's time to leave for the airport.",
+    "target_domain": "automation"
+  },
+  {
+    "id": 463,
+    "user_utterance": "Automate sending this report every week.",
+    "target_domain": "automation"
+  },
+  {
+    "id": 464,
+    "user_utterance": "Schedule this task for next Monday.",
+    "target_domain": "automation"
+  },
+  {
+    "id": 465,
+    "user_utterance": "Set up a recurring reminder every Friday.",
+    "target_domain": "automation"
+  },
+  {
+    "id": 466,
+    "user_utterance": "Set the same reminder for tomorrow too.",
+    "target_domain": "automation"
+  },
+  {
+    "id": 467,
+    "user_utterance": "Set a reminder for tomorrow's meeting.",
+    "target_domain": "automation"
+  },
+  {
+    "id": 468,
+    "user_utterance": "Remind me, but not before 9am.",
+    "target_domain": "automation"
+  },
+  {
+    "id": 469,
+    "user_utterance": "Remind me at 7.",
+    "target_domain": "automation"
+  },
+  {
+    "id": 470,
+    "user_utterance": "List all my active reminders.",
+    "target_domain": "automation"
+  },
+  {
+    "id": 471,
+    "user_utterance": "Cancel that reminder.",
+    "target_domain": "automation"
+  },
+  {
+    "id": 472,
+    "user_utterance": "Cancel my 3pm reminder.",
+    "target_domain": "automation"
+  },
+  {
+    "id": 473,
+    "user_utterance": "I don't want a reminder.",
+    "target_domain": "automation"
+  },
+  {
+    "id": 474,
+    "user_utterance": "Don't set that reminder.",
+    "target_domain": "automation"
+  },
+  {
+    "id": 475,
+    "user_utterance": "Mujhe yaad dilana meeting ke baare me 2 baje.",
+    "target_domain": "automation"
+  },
+  {
+    "id": 476,
+    "user_utterance": "Reminder set karo kal subah 8 baje.",
+    "target_domain": "automation"
+  },
+  {
+    "id": 477,
+    "user_utterance": "Subah 7 baje ka reminder lagao.",
+    "target_domain": "automation"
+  },
+  {
+    "id": 478,
+    "user_utterance": "Mujhe 7 baje yaad dila dena.",
+    "target_domain": "automation"
+  },
+  {
+    "id": 479,
+    "user_utterance": "Kal ke meeting ke liye reminder set karo.",
+    "target_domain": "automation"
+  },
+  {
+    "id": 480,
+    "user_utterance": "Reminder mat lagana.",
+    "target_domain": "automation"
+  },
+  {
+    "id": 481,
+    "user_utterance": "Send a WhatsApp message to Rahul saying I will be late.",
+    "target_domain": "messaging"
+  },
+  {
+    "id": 482,
+    "user_utterance": "Draft an email to my boss about the meeting.",
+    "target_domain": "messaging"
+  },
+  {
+    "id": 483,
+    "user_utterance": "Send Telegram message to mom saying I'm coming home.",
+    "target_domain": "messaging"
+  },
+  {
+    "id": 484,
+    "user_utterance": "Message John on Discord about the project.",
+    "target_domain": "messaging"
+  },
+  {
+    "id": 485,
+    "user_utterance": "Message John on WhatsApp.",
+    "target_domain": "messaging"
+  },
+  {
+    "id": 486,
+    "user_utterance": "Message John on Telegram.",
+    "target_domain": "messaging"
+  },
+  {
+    "id": 487,
+    "user_utterance": "Message John on Slack.",
+    "target_domain": "messaging"
+  },
+  {
+    "id": 488,
+    "user_utterance": "Message Rahul on Slack.",
+    "target_domain": "messaging"
+  },
+  {
+    "id": 489,
+    "user_utterance": "Message Rahul on WhatsApp.",
+    "target_domain": "messaging"
+  },
+  {
+    "id": 490,
+    "user_utterance": "Message Rahul on Discord.",
+    "target_domain": "messaging"
+  },
+  {
+    "id": 491,
+    "user_utterance": "Message Rahul on Telegram.",
+    "target_domain": "messaging"
+  },
+  {
+    "id": 492,
+    "user_utterance": "Text mom that I'll be late.",
+    "target_domain": "messaging"
+  },
+  {
+    "id": 493,
+    "user_utterance": "Let Rahul know I'm running ten minutes late.",
+    "target_domain": "messaging"
+  },
+  {
+    "id": 494,
+    "user_utterance": "Send Priya the file we talked about.",
+    "target_domain": "messaging"
+  },
+  {
+    "id": 495,
+    "user_utterance": "Forward this email to my manager.",
+    "target_domain": "messaging"
+  },
+  {
+    "id": 496,
+    "user_utterance": "Reply to that WhatsApp message.",
+    "target_domain": "messaging"
+  },
+  {
+    "id": 497,
+    "user_utterance": "Reply to her with the same thing.",
+    "target_domain": "messaging"
+  },
+  {
+    "id": 498,
+    "user_utterance": "Send it, but not to mom.",
+    "target_domain": "messaging"
+  },
+  {
+    "id": 499,
+    "user_utterance": "Don't send that message.",
+    "target_domain": "messaging"
+  },
+  {
+    "id": 500,
+    "user_utterance": "Don't send it to the whole group.",
+    "target_domain": "messaging"
+  },
+  {
+    "id": 501,
+    "user_utterance": "Don't reply to him.",
+    "target_domain": "messaging"
+  },
+  {
+    "id": 502,
+    "user_utterance": "Rahul ko WhatsApp pe message bhejo.",
+    "target_domain": "messaging"
+  },
+  {
+    "id": 503,
+    "user_utterance": "Email likho client ke liye.",
+    "target_domain": "messaging"
+  },
+  {
+    "id": 504,
+    "user_utterance": "Mere inbox check karo.",
+    "target_domain": "messaging"
+  },
+  {
+    "id": 505,
+    "user_utterance": "Group mein yeh mat bhejna.",
+    "target_domain": "messaging"
+  },
+  {
+    "id": 506,
+    "user_utterance": "Rahul ko message bhej do.",
+    "target_domain": "messaging"
+  },
+  {
+    "id": 507,
+    "user_utterance": "Create an Excel sheet for monthly budget.",
+    "target_domain": "document"
+  },
+  {
+    "id": 508,
+    "user_utterance": "Make a Word document with meeting notes.",
+    "target_domain": "document"
+  },
+  {
+    "id": 509,
+    "user_utterance": "Generate a PDF report of sales data.",
+    "target_domain": "document"
+  },
+  {
+    "id": 510,
+    "user_utterance": "Create a PowerPoint presentation on AI.",
+    "target_domain": "document"
+  },
+  {
+    "id": 511,
+    "user_utterance": "Extract the text from this scanned document.",
+    "target_domain": "document"
+  },
+  {
+    "id": 512,
+    "user_utterance": "Merge these two PDFs.",
+    "target_domain": "document"
+  },
+  {
+    "id": 513,
+    "user_utterance": "Merge it with the other one.",
+    "target_domain": "document"
+  },
+  {
+    "id": 514,
+    "user_utterance": "Turn this into a proper invoice.",
+    "target_domain": "document"
+  },
+  {
+    "id": 515,
+    "user_utterance": "Turn that into a PDF.",
+    "target_domain": "document"
+  },
+  {
+    "id": 516,
+    "user_utterance": "Create a PDF from this.",
+    "target_domain": "document"
+  },
+  {
+    "id": 517,
+    "user_utterance": "Compress this PDF, it's too large to email.",
+    "target_domain": "document"
+  },
+  {
+    "id": 518,
+    "user_utterance": "Add a signature page to this contract.",
+    "target_domain": "document"
+  },
+  {
+    "id": 519,
+    "user_utterance": "Summarize this document into one page.",
+    "target_domain": "document"
+  },
+  {
+    "id": 520,
+    "user_utterance": "Don't convert it yet, just show me a preview.",
+    "target_domain": "document"
+  },
+  {
+    "id": 521,
+    "user_utterance": "Don't delete the file; just read it.",
+    "target_domain": "document"
+  },
+  {
+    "id": 522,
+    "user_utterance": "Ek excel banao monthly budget ke liye.",
+    "target_domain": "document"
+  },
+  {
+    "id": 523,
+    "user_utterance": "PPT banao marketing strategy pe.",
+    "target_domain": "document"
+  },
+  {
+    "id": 524,
+    "user_utterance": "PDF compile karo sab reports ka.",
+    "target_domain": "document"
+  },
+  {
+    "id": 525,
+    "user_utterance": "Yeh document Word mein convert karo.",
+    "target_domain": "document"
+  },
+  {
+    "id": 526,
+    "user_utterance": "Is file ko delete mat karna, sirf padho.",
+    "target_domain": "document"
+  },
+  {
+    "id": 527,
+    "user_utterance": "Analyze this CSV and create a chart.",
+    "target_domain": "data_analysis"
+  },
+  {
+    "id": 528,
+    "user_utterance": "Find the outliers in this dataset.",
+    "target_domain": "data_analysis"
+  },
+  {
+    "id": 529,
+    "user_utterance": "Calculate average revenue per quarter from this file.",
+    "target_domain": "data_analysis"
+  },
+  {
+    "id": 530,
+    "user_utterance": "Generate a bar chart from sales data.",
+    "target_domain": "data_analysis"
+  },
+  {
+    "id": 531,
+    "user_utterance": "Plot revenue trends from this data.",
+    "target_domain": "data_analysis"
+  },
+  {
+    "id": 532,
+    "user_utterance": "Chart it.",
+    "target_domain": "data_analysis"
+  },
+  {
+    "id": 533,
+    "user_utterance": "Run the same analysis on that one too.",
+    "target_domain": "data_analysis"
+  },
+  {
+    "id": 534,
+    "user_utterance": "Compare this month's numbers with last month's.",
+    "target_domain": "data_analysis"
+  },
+  {
+    "id": 535,
+    "user_utterance": "Tell me which product sold the most last quarter.",
+    "target_domain": "data_analysis"
+  },
+  {
+    "id": 536,
+    "user_utterance": "Find the average sales per month in this spreadsheet.",
+    "target_domain": "data_analysis"
+  },
+  {
+    "id": 537,
+    "user_utterance": "Clean up the duplicate rows in this spreadsheet.",
+    "target_domain": "data_analysis"
+  },
+  {
+    "id": 538,
+    "user_utterance": "Make a pivot table out of this data.",
+    "target_domain": "data_analysis"
+  },
+  {
+    "id": 539,
+    "user_utterance": "Analyze this, but don't share it with anyone.",
+    "target_domain": "data_analysis"
+  },
+  {
+    "id": 540,
+    "user_utterance": "Don't touch the raw data, just show me a summary.",
+    "target_domain": "data_analysis"
+  },
+  {
+    "id": 541,
+    "user_utterance": "Is CSV file ka analysis karo.",
+    "target_domain": "data_analysis"
+  },
+  {
+    "id": 542,
+    "user_utterance": "Sales data ka chart banao.",
+    "target_domain": "data_analysis"
+  },
+  {
+    "id": 543,
+    "user_utterance": "Is data ka chart bana do.",
+    "target_domain": "data_analysis"
+  },
+  {
+    "id": 544,
+    "user_utterance": "Yeh CSV analyze karo.",
+    "target_domain": "data_analysis"
+  },
+  {
+    "id": 545,
+    "user_utterance": "Scan my codebase for security vulnerabilities.",
+    "target_domain": "security"
+  },
+  {
+    "id": 546,
+    "user_utterance": "Check for leaked API keys in the repo.",
+    "target_domain": "security"
+  },
+  {
+    "id": 547,
+    "user_utterance": "Audit this SQL query for injection risks.",
+    "target_domain": "security"
+  },
+  {
+    "id": 548,
+    "user_utterance": "Scan dependencies for known CVEs.",
+    "target_domain": "security"
+  },
+  {
+    "id": 549,
+    "user_utterance": "Run a security audit on this server.",
+    "target_domain": "security"
+  },
+  {
+    "id": 550,
+    "user_utterance": "Check if this email looks like phishing.",
+    "target_domain": "security"
+  },
+  {
+    "id": 551,
+    "user_utterance": "Check if this password has been leaked.",
+    "target_domain": "security"
+  },
+  {
+    "id": 552,
+    "user_utterance": "See if my accounts have been part of a data breach.",
+    "target_domain": "security"
+  },
+  {
+    "id": 553,
+    "user_utterance": "Scan this file before I open it.",
+    "target_domain": "security"
+  },
+  {
+    "id": 554,
+    "user_utterance": "Scan this repo for vulnerabilities.",
+    "target_domain": "security"
+  },
+  {
+    "id": 555,
+    "user_utterance": "Scan it again.",
+    "target_domain": "security"
+  },
+  {
+    "id": 556,
+    "user_utterance": "Check the firewall rules on this server.",
+    "target_domain": "security"
+  },
+  {
+    "id": 557,
+    "user_utterance": "Don't share this password with anyone.",
+    "target_domain": "security"
+  },
+  {
+    "id": 558,
+    "user_utterance": "Don't scan the whole repo, just this folder.",
+    "target_domain": "security"
+  },
+  {
+    "id": 559,
+    "user_utterance": "Is repo ko scan karo vulnerabilities ke liye.",
+    "target_domain": "security"
+  },
+  {
+    "id": 560,
+    "user_utterance": "Yeh password leaked to nahi hua check karo.",
+    "target_domain": "security"
+  },
+  {
+    "id": 561,
+    "user_utterance": "Create a Docker compose file for my app.",
+    "target_domain": "devops"
+  },
+  {
+    "id": 562,
+    "user_utterance": "List all running Docker containers.",
+    "target_domain": "devops"
+  },
+  {
+    "id": 563,
+    "user_utterance": "Check the Docker container logs.",
+    "target_domain": "devops"
+  },
+  {
+    "id": 564,
+    "user_utterance": "Check the deployment status.",
+    "target_domain": "devops"
+  },
+  {
+    "id": 565,
+    "user_utterance": "See why the CI pipeline failed.",
+    "target_domain": "devops"
+  },
+  {
+    "id": 566,
+    "user_utterance": "Scale up the pods in Kubernetes.",
+    "target_domain": "devops"
+  },
+  {
+    "id": 567,
+    "user_utterance": "Bring the staging environment back up.",
+    "target_domain": "devops"
+  },
+  {
+    "id": 568,
+    "user_utterance": "Check if the production server is healthy.",
+    "target_domain": "devops"
+  },
+  {
+    "id": 569,
+    "user_utterance": "Restart the container that's crashing.",
+    "target_domain": "devops"
+  },
+  {
+    "id": 570,
+    "user_utterance": "Restart the server.",
+    "target_domain": "devops"
+  },
+  {
+    "id": 571,
+    "user_utterance": "Restart it.",
+    "target_domain": "devops"
+  },
+  {
+    "id": 572,
+    "user_utterance": "Roll back the last deployment.",
+    "target_domain": "devops"
+  },
+  {
+    "id": 573,
+    "user_utterance": "Kill the process that's hogging the server.",
+    "target_domain": "devops"
+  },
+  {
+    "id": 574,
+    "user_utterance": "Don't restart the server right now.",
+    "target_domain": "devops"
+  },
+  {
+    "id": 575,
+    "user_utterance": "Don't roll back the deployment yet.",
+    "target_domain": "devops"
+  },
+  {
+    "id": 576,
+    "user_utterance": "Restart the container, but not the database one.",
+    "target_domain": "devops"
+  },
+  {
+    "id": 577,
+    "user_utterance": "Server restart karo.",
+    "target_domain": "devops"
+  },
+  {
+    "id": 578,
+    "user_utterance": "Deployment ka status check karo.",
+    "target_domain": "devops"
+  },
+  {
+    "id": 579,
+    "user_utterance": "What do you know about me?",
+    "target_domain": "memory_query"
+  },
+  {
+    "id": 580,
+    "user_utterance": "What's my favorite music genre?",
+    "target_domain": "memory_query"
+  },
+  {
+    "id": 581,
+    "user_utterance": "Do you remember my birthday?",
+    "target_domain": "memory_query"
+  },
+  {
+    "id": 582,
+    "user_utterance": "Do you remember what I told you about the lease?",
+    "target_domain": "memory_query"
+  },
+  {
+    "id": 583,
+    "user_utterance": "Do you remember my sister's birthday?",
+    "target_domain": "memory_query"
+  },
+  {
+    "id": 584,
+    "user_utterance": "Do you remember the one I was using earlier?",
+    "target_domain": "memory_query"
+  },
+  {
+    "id": 585,
+    "user_utterance": "What did I ask you to keep track of for work?",
+    "target_domain": "memory_query"
+  },
+  {
+    "id": 586,
+    "user_utterance": "What did I tell you about my trip to Goa?",
+    "target_domain": "memory_query"
+  },
+  {
+    "id": 587,
+    "user_utterance": "What did I say I wanted for my birthday?",
+    "target_domain": "memory_query"
+  },
+  {
+    "id": 588,
+    "user_utterance": "What's the address I gave you last week?",
+    "target_domain": "memory_query"
+  },
+  {
+    "id": 589,
+    "user_utterance": "What was that book I mentioned last month?",
+    "target_domain": "memory_query"
+  },
+  {
+    "id": 590,
+    "user_utterance": "Do you remember the WiFi password I told you?",
+    "target_domain": "memory_query"
+  },
+  {
+    "id": 591,
+    "user_utterance": "Tumhe mere baare me kya pata hai?",
+    "target_domain": "memory_query"
+  },
+  {
+    "id": 592,
+    "user_utterance": "Mera favorite food kya hai yaad hai?",
+    "target_domain": "memory_query"
+  },
+  {
+    "id": 593,
+    "user_utterance": "Woh address yaad hai jo maine diya tha?",
+    "target_domain": "memory_query"
+  },
+  {
+    "id": 594,
+    "user_utterance": "Meri sister ka birthday yaad hai kya tumhe?",
+    "target_domain": "memory_query"
+  },
+  {
+    "id": 595,
+    "user_utterance": "Maine tumhe kya bataya tha uss project ke baare mein?",
+    "target_domain": "memory_query"
+  },
+  {
+    "id": 596,
+    "user_utterance": "Forget my phone number.",
+    "target_domain": "memory_forget"
+  },
+  {
+    "id": 597,
+    "user_utterance": "Delete the memory about my ex.",
+    "target_domain": "memory_forget"
+  },
+  {
+    "id": 598,
+    "user_utterance": "Forget what I said about my ex.",
+    "target_domain": "memory_forget"
+  },
+  {
+    "id": 599,
+    "user_utterance": "Forget that thing I mentioned about my ex.",
+    "target_domain": "memory_forget"
+  },
+  {
+    "id": 600,
+    "user_utterance": "Remove my home address from your memory.",
+    "target_domain": "memory_forget"
+  },
+  {
+    "id": 601,
+    "user_utterance": "Delete my saved info about that address.",
+    "target_domain": "memory_forget"
+  },
+  {
+    "id": 602,
+    "user_utterance": "Clear out whatever you remember about my old job.",
+    "target_domain": "memory_forget"
+  },
+  {
+    "id": 603,
+    "user_utterance": "Forget everything I told you about work stuff.",
+    "target_domain": "memory_forget"
+  },
+  {
+    "id": 604,
+    "user_utterance": "Delete that from your memory.",
+    "target_domain": "memory_forget"
+  },
+  {
+    "id": 605,
+    "user_utterance": "Erase the note I gave you yesterday.",
+    "target_domain": "memory_forget"
+  },
+  {
+    "id": 606,
+    "user_utterance": "Forget that.",
+    "target_domain": "memory_forget"
+  },
+  {
+    "id": 607,
+    "user_utterance": "Bhool jao mera password.",
+    "target_domain": "memory_forget"
+  },
+  {
+    "id": 608,
+    "user_utterance": "Meri old job ke baare mein sab bhool jao.",
+    "target_domain": "memory_forget"
+  },
+  {
+    "id": 609,
+    "user_utterance": "Jo maine bataya tha usse bhool jao.",
+    "target_domain": "memory_forget"
+  },
+  {
+    "id": 610,
+    "user_utterance": "Woh address yaad mat rakhna.",
+    "target_domain": "memory_forget"
+  },
+  {
+    "id": 611,
+    "user_utterance": "Write a short story about a lost dog finding its way home.",
+    "target_domain": "creative"
+  },
+  {
+    "id": 612,
+    "user_utterance": "Sing me a song.",
+    "target_domain": "creative"
+  },
+  {
+    "id": 613,
+    "user_utterance": "Sing a song for me.",
+    "target_domain": "creative"
+  },
+  {
+    "id": 614,
+    "user_utterance": "Sing a song.",
+    "target_domain": "creative"
+  },
+  {
+    "id": 615,
+    "user_utterance": "Write a short poem about the rain.",
+    "target_domain": "creative"
+  },
+  {
+    "id": 616,
+    "user_utterance": "Write another one, but shorter.",
+    "target_domain": "creative"
+  },
+  {
+    "id": 617,
+    "user_utterance": "Write a birthday message for my best friend.",
+    "target_domain": "creative"
+  },
+  {
+    "id": 618,
+    "user_utterance": "Draft a toast for my brother's wedding.",
+    "target_domain": "creative"
+  },
+  {
+    "id": 619,
+    "user_utterance": "Help me brainstorm ideas for a birthday party theme.",
+    "target_domain": "creative"
+  },
+  {
+    "id": 620,
+    "user_utterance": "Give me three name ideas for my startup.",
+    "target_domain": "creative"
+  },
+  {
+    "id": 621,
+    "user_utterance": "Come up with a tagline for my bakery.",
+    "target_domain": "creative"
+  },
+  {
+    "id": 622,
+    "user_utterance": "Come up with a caption for this photo.",
+    "target_domain": "creative"
+  },
+  {
+    "id": 623,
+    "user_utterance": "Generate an image prompt for a futuristic cyberpunk city.",
+    "target_domain": "creative"
+  },
+  {
+    "id": 624,
+    "user_utterance": "Don't make it too formal, keep it fun.",
+    "target_domain": "creative"
+  },
+  {
+    "id": 625,
+    "user_utterance": "Baarish pe ek chhoti kavita likho.",
+    "target_domain": "creative"
+  },
+  {
+    "id": 626,
+    "user_utterance": "Ek kahani likho dosti pe.",
+    "target_domain": "creative"
+  },
+  {
+    "id": 627,
+    "user_utterance": "Meri bakery ke liye ek tagline socho.",
+    "target_domain": "creative"
+  },
+  {
+    "id": 628,
+    "user_utterance": "Speak this text out loud.",
+    "target_domain": "voice"
+  },
+  {
+    "id": 629,
+    "user_utterance": "Read this message aloud.",
+    "target_domain": "voice"
+  },
+  {
+    "id": 630,
+    "user_utterance": "Read my last email out loud.",
+    "target_domain": "voice"
+  },
+  {
+    "id": 631,
+    "user_utterance": "Can you read that back to me?",
+    "target_domain": "voice"
+  },
+  {
+    "id": 632,
+    "user_utterance": "Switch to voice mode.",
+    "target_domain": "voice"
+  },
+  {
+    "id": 633,
+    "user_utterance": "Turn on voice replies for now.",
+    "target_domain": "voice"
+  },
+  {
+    "id": 634,
+    "user_utterance": "Dictate this note for me.",
+    "target_domain": "voice"
+  },
+  {
+    "id": 635,
+    "user_utterance": "Type what I'm saying.",
+    "target_domain": "voice"
+  },
+  {
+    "id": 636,
+    "user_utterance": "Start listening for voice commands.",
+    "target_domain": "voice"
+  },
+  {
+    "id": 637,
+    "user_utterance": "Stop voice recognition.",
+    "target_domain": "voice"
+  },
+  {
+    "id": 638,
+    "user_utterance": "Bol ke sunao ye message.",
+    "target_domain": "voice"
+  },
+  {
+    "id": 639,
+    "user_utterance": "Isko awaaz mein padh do.",
+    "target_domain": "voice"
+  },
+  {
+    "id": 640,
+    "user_utterance": "What time is it right now?",
+    "target_domain": "trivial"
+  },
+  {
+    "id": 641,
+    "user_utterance": "Current time in IST please.",
+    "target_domain": "trivial"
+  },
+  {
+    "id": 642,
+    "user_utterance": "What is today's date?",
+    "target_domain": "trivial"
+  },
+  {
+    "id": 643,
+    "user_utterance": "What day is it today?",
+    "target_domain": "trivial"
+  },
+  {
+    "id": 644,
+    "user_utterance": "Are you there?",
+    "target_domain": "trivial"
+  },
+  {
+    "id": 645,
+    "user_utterance": "What's up?",
+    "target_domain": "trivial"
+  },
+  {
+    "id": 646,
+    "user_utterance": "Thanks!",
+    "target_domain": "trivial"
+  },
+  {
+    "id": 647,
+    "user_utterance": "Alright, got it.",
+    "target_domain": "trivial"
+  },
+  {
+    "id": 648,
+    "user_utterance": "Okay cool.",
+    "target_domain": "trivial"
+  },
+  {
+    "id": 649,
+    "user_utterance": "Bye for now.",
+    "target_domain": "trivial"
+  },
+  {
+    "id": 650,
+    "user_utterance": "Aaj kya date hai?",
+    "target_domain": "trivial"
+  },
+  {
+    "id": 651,
+    "user_utterance": "Kitne baje hain?",
+    "target_domain": "trivial"
+  },
+  {
+    "id": 652,
+    "user_utterance": "Aaj kaun sa din hai?",
+    "target_domain": "trivial"
+  },
+  {
+    "id": 653,
+    "user_utterance": "Sab badhiya?",
+    "target_domain": "trivial"
+  },
+  {
+    "id": 654,
+    "user_utterance": "Theek hai, thanks.",
+    "target_domain": "trivial"
+  }
+]

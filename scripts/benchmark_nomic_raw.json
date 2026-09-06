@@ -1,0 +1,902 @@
+[
+  {
+    "id": 1,
+    "category": "system_direct",
+    "input": "Minimize Chrome.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 1311.615200000233
+  },
+  {
+    "id": 2,
+    "category": "system_direct",
+    "input": "Maximize VS Code.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 33.7811999997939
+  },
+  {
+    "id": 3,
+    "category": "system_direct",
+    "input": "Focus Telegram.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 25.639599999522034
+  },
+  {
+    "id": 4,
+    "category": "system_direct",
+    "input": "Close Notepad.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 27.375499999834574
+  },
+  {
+    "id": 5,
+    "category": "system_direct",
+    "input": "Open Outlook.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 26.122300000679388
+  },
+  {
+    "id": 6,
+    "category": "system_direct",
+    "input": "Restore Discord.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 25.11179999964952
+  },
+  {
+    "id": 7,
+    "category": "system_direct",
+    "input": "Bring Spotify to front.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 34.81480000027659
+  },
+  {
+    "id": 8,
+    "category": "system_direct",
+    "input": "Check RAM usage.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 25.124300000243238
+  },
+  {
+    "id": 9,
+    "category": "system_direct",
+    "input": "Check CPU load.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 25.328499999886844
+  },
+  {
+    "id": 10,
+    "category": "system_direct",
+    "input": "Get list of running processes.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 24.319199999808916
+  },
+  {
+    "id": 11,
+    "category": "system_variation",
+    "input": "Get Chrome out of my way.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 44.63179999947897
+  },
+  {
+    "id": 12,
+    "category": "system_variation",
+    "input": "Put Chrome in the background.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 24.293399999805843
+  },
+  {
+    "id": 13,
+    "category": "system_variation",
+    "input": "I don't need Chrome visible anymore.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 36.15470000022469
+  },
+  {
+    "id": 14,
+    "category": "system_variation",
+    "input": "Chrome ko chhota kar do.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 30.551099999684084
+  },
+  {
+    "id": 15,
+    "category": "system_variation",
+    "input": "Saamne se hatao VSCode.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 25.60540000013134
+  },
+  {
+    "id": 16,
+    "category": "system_variation",
+    "input": "Notepad band kar do.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 25.733800000125484
+  },
+  {
+    "id": 17,
+    "category": "system_variation",
+    "input": "Outlook kholo.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 39.22289999991335
+  },
+  {
+    "id": 18,
+    "category": "system_variation",
+    "input": "Saamne lao Telegram.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 27.31969999967987
+  },
+  {
+    "id": 19,
+    "category": "system_variation",
+    "input": "Kitna memory use ho raha hai?",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 24.625099999866507
+  },
+  {
+    "id": 20,
+    "category": "system_variation",
+    "input": "System par kitna load hai?",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 23.958400000083202
+  },
+  {
+    "id": 21,
+    "category": "negation",
+    "input": "Don't close Chrome, just minimize it.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 35.220400000071095
+  },
+  {
+    "id": 22,
+    "category": "negation",
+    "input": "Open Chrome but don't maximize it.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 23.71419999963109
+  },
+  {
+    "id": 23,
+    "category": "negation",
+    "input": "Don't launch Outlook yet.",
+    "expected_domain": "fast_chat",
+    "actual_domain": "fast_chat",
+    "domain_correct": true,
+    "latency_ms": 24.557200000344892
+  },
+  {
+    "id": 24,
+    "category": "negation",
+    "input": "Close VSCode, not Chrome.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 26.244900000165217
+  },
+  {
+    "id": 25,
+    "category": "negation",
+    "input": "Minimize Chrome, do not touch VSCode.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 23.572300000523683
+  },
+  {
+    "id": 26,
+    "category": "negation",
+    "input": "Don't restart the system.",
+    "expected_domain": "fast_chat",
+    "actual_domain": "fast_chat",
+    "domain_correct": true,
+    "latency_ms": 24.548800000047777
+  },
+  {
+    "id": 27,
+    "category": "negation",
+    "input": "Don't kill any process right now.",
+    "expected_domain": "fast_chat",
+    "actual_domain": "fast_chat",
+    "domain_correct": true,
+    "latency_ms": 24.586100000306033
+  },
+  {
+    "id": 28,
+    "category": "negation",
+    "input": "Don't open YouTube, open Gmail.",
+    "expected_domain": "browser",
+    "actual_domain": "browser",
+    "domain_correct": true,
+    "latency_ms": 24.2975999999544
+  },
+  {
+    "id": 29,
+    "category": "negation",
+    "input": "Don't delete anything on my desktop.",
+    "expected_domain": "fast_chat",
+    "actual_domain": "fast_chat",
+    "domain_correct": true,
+    "latency_ms": 25.231300000086776
+  },
+  {
+    "id": 30,
+    "category": "negation",
+    "input": "VSCode mat band karna sirf Chrome minimize karo.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 36.3655999999537
+  },
+  {
+    "id": 31,
+    "category": "negation",
+    "input": "Outlook mat kholo Notepad kholo.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 36.042700000507466
+  },
+  {
+    "id": 32,
+    "category": "negation",
+    "input": "Computer band mat karna.",
+    "expected_domain": "fast_chat",
+    "actual_domain": "fast_chat",
+    "domain_correct": true,
+    "latency_ms": 25.303600000370352
+  },
+  {
+    "id": 33,
+    "category": "negation",
+    "input": "Gaana mat chalao.",
+    "expected_domain": "fast_chat",
+    "actual_domain": "fast_chat",
+    "domain_correct": true,
+    "latency_ms": 24.90010000019538
+  },
+  {
+    "id": 34,
+    "category": "negation",
+    "input": "Kuch mat karo bas batao time kya hai.",
+    "expected_domain": "fast_chat",
+    "actual_domain": "fast_chat",
+    "domain_correct": true,
+    "latency_ms": 24.46669999972073
+  },
+  {
+    "id": 35,
+    "category": "negation",
+    "input": "Is process ko kill mat karna.",
+    "expected_domain": "fast_chat",
+    "actual_domain": "fast_chat",
+    "domain_correct": true,
+    "latency_ms": 35.423899999841524
+  },
+  {
+    "id": 36,
+    "category": "entity_confusion",
+    "input": "Close VSCode, not Chrome.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 24.760600000263366
+  },
+  {
+    "id": 37,
+    "category": "entity_confusion",
+    "input": "Open Git, not GitHub.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 25.54119999967952
+  },
+  {
+    "id": 38,
+    "category": "entity_confusion",
+    "input": "Launch Python, not PyCharm.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 24.323399999957473
+  },
+  {
+    "id": 39,
+    "category": "entity_confusion",
+    "input": "Focus Discord, not Telegram.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 23.86449999994511
+  },
+  {
+    "id": 40,
+    "category": "entity_confusion",
+    "input": "Open Outlook, not OneNote.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 25.13970000018162
+  },
+  {
+    "id": 41,
+    "category": "entity_confusion",
+    "input": "Kill node, not python.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 24.944299999333452
+  },
+  {
+    "id": 42,
+    "category": "entity_confusion",
+    "input": "Check CPU of chrome, not memory.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 24.153800000021874
+  },
+  {
+    "id": 43,
+    "category": "entity_confusion",
+    "input": "Move photo.png, not document.pdf.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 24.83849999953236
+  },
+  {
+    "id": 44,
+    "category": "entity_confusion",
+    "input": "Notepad chalu karo WordPad nahi.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 25.957500000004075
+  },
+  {
+    "id": 45,
+    "category": "entity_confusion",
+    "input": "Spotify band karo YouTube nahi.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 24.811500000396336
+  },
+  {
+    "id": 46,
+    "category": "entity_confusion",
+    "input": "Launch Calculator, not Calendar.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 24.5095999998739
+  },
+  {
+    "id": 47,
+    "category": "entity_confusion",
+    "input": "Open Word, not WordPad.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 24.469699999826844
+  },
+  {
+    "id": 48,
+    "category": "anaphora",
+    "input": "Close it.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 24.68510000016977
+  },
+  {
+    "id": 49,
+    "category": "anaphora",
+    "input": "Minimize this.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 27.583499999309424
+  },
+  {
+    "id": 50,
+    "category": "anaphora",
+    "input": "Maximize this window.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 24.10980000058771
+  },
+  {
+    "id": 51,
+    "category": "anaphora",
+    "input": "Put it in the background.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 24.980199999845354
+  },
+  {
+    "id": 52,
+    "category": "anaphora",
+    "input": "Front me lao isse.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 25.71319999970001
+  },
+  {
+    "id": 53,
+    "category": "anaphora",
+    "input": "Saamne lao.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 25.714700000207813
+  },
+  {
+    "id": 54,
+    "category": "anaphora",
+    "input": "Chhota karo is window ko.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 25.667900000371446
+  },
+  {
+    "id": 55,
+    "category": "anaphora",
+    "input": "Isse band kar do.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 24.927299999944807
+  },
+  {
+    "id": 56,
+    "category": "anaphora",
+    "input": "Bring it to front.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 24.268900000606664
+  },
+  {
+    "id": 57,
+    "category": "anaphora",
+    "input": "Hide it.",
+    "expected_domain": "system_control",
+    "actual_domain": "memory_forget",
+    "domain_correct": false,
+    "latency_ms": 25.06420000008802
+  },
+  {
+    "id": 58,
+    "category": "system_vs_chat",
+    "input": "Why is Chrome slow?",
+    "expected_domain": "fast_chat",
+    "actual_domain": "fast_chat",
+    "domain_correct": true,
+    "latency_ms": 24.10150000014255
+  },
+  {
+    "id": 59,
+    "category": "system_vs_chat",
+    "input": "Chrome is taking too much RAM.",
+    "expected_domain": "fast_chat",
+    "actual_domain": "fast_chat",
+    "domain_correct": true,
+    "latency_ms": 25.262100000873033
+  },
+  {
+    "id": 60,
+    "category": "system_vs_chat",
+    "input": "What does taskkill do?",
+    "expected_domain": "fast_chat",
+    "actual_domain": "fast_chat",
+    "domain_correct": true,
+    "latency_ms": 23.820100000193634
+  },
+  {
+    "id": 61,
+    "category": "system_vs_chat",
+    "input": "How do I minimize windows in Windows 11?",
+    "expected_domain": "fast_chat",
+    "actual_domain": "fast_chat",
+    "domain_correct": true,
+    "latency_ms": 24.48180000010325
+  },
+  {
+    "id": 62,
+    "category": "system_vs_chat",
+    "input": "Is Windows Defender safe?",
+    "expected_domain": "fast_chat",
+    "actual_domain": "fast_chat",
+    "domain_correct": true,
+    "latency_ms": 24.968100000478444
+  },
+  {
+    "id": 63,
+    "category": "system_vs_chat",
+    "input": "What is quantum computing?",
+    "expected_domain": "fast_chat",
+    "actual_domain": "fast_chat",
+    "domain_correct": true,
+    "latency_ms": 24.56499999971129
+  },
+  {
+    "id": 64,
+    "category": "system_vs_chat",
+    "input": "Who is Makima?",
+    "expected_domain": "fast_chat",
+    "actual_domain": "fast_chat",
+    "domain_correct": true,
+    "latency_ms": 25.41300000029878
+  },
+  {
+    "id": 65,
+    "category": "system_vs_chat",
+    "input": "Can you control my PC?",
+    "expected_domain": "fast_chat",
+    "actual_domain": "fast_chat",
+    "domain_correct": true,
+    "latency_ms": 24.62569999988773
+  },
+  {
+    "id": 66,
+    "category": "system_vs_chat",
+    "input": "My computer is overheating.",
+    "expected_domain": "fast_chat",
+    "actual_domain": "fast_chat",
+    "domain_correct": true,
+    "latency_ms": 24.049900000136404
+  },
+  {
+    "id": 67,
+    "category": "system_vs_chat",
+    "input": "Tell me a joke.",
+    "expected_domain": "fast_chat",
+    "actual_domain": "fast_chat",
+    "domain_correct": true,
+    "latency_ms": 24.0920999995069
+  },
+  {
+    "id": 68,
+    "category": "system_vs_chat",
+    "input": "Chrome kyu hang ho raha hai?",
+    "expected_domain": "fast_chat",
+    "actual_domain": "fast_chat",
+    "domain_correct": true,
+    "latency_ms": 24.91620000000694
+  },
+  {
+    "id": 69,
+    "category": "system_vs_chat",
+    "input": "Windows me screenshot kaise lete hain?",
+    "expected_domain": "fast_chat",
+    "actual_domain": "fast_chat",
+    "domain_correct": true,
+    "latency_ms": 23.88520000022254
+  },
+  {
+    "id": 70,
+    "category": "media_vs_chat",
+    "input": "Play with me.",
+    "expected_domain": "fast_chat",
+    "actual_domain": "fast_chat",
+    "domain_correct": true,
+    "latency_ms": 23.983600000065053
+  },
+  {
+    "id": 71,
+    "category": "media_vs_chat",
+    "input": "Play a song.",
+    "expected_domain": "media",
+    "actual_domain": "media",
+    "domain_correct": true,
+    "latency_ms": 24.837699999807228
+  },
+  {
+    "id": 72,
+    "category": "media_vs_chat",
+    "input": "Sing me a song.",
+    "expected_domain": "creative",
+    "actual_domain": "fast_chat",
+    "domain_correct": false,
+    "latency_ms": 23.948099999870465
+  },
+  {
+    "id": 73,
+    "category": "media_vs_chat",
+    "input": "Play romantic songs on Spotify.",
+    "expected_domain": "media",
+    "actual_domain": "media",
+    "domain_correct": true,
+    "latency_ms": 23.84059999985766
+  },
+  {
+    "id": 74,
+    "category": "media_vs_chat",
+    "input": "Volume 50 percent karo.",
+    "expected_domain": "media",
+    "actual_domain": "media",
+    "domain_correct": true,
+    "latency_ms": 25.018899999849964
+  },
+  {
+    "id": 75,
+    "category": "media_vs_chat",
+    "input": "Gaana roko.",
+    "expected_domain": "media",
+    "actual_domain": "media",
+    "domain_correct": true,
+    "latency_ms": 24.385699999584176
+  },
+  {
+    "id": 76,
+    "category": "media_vs_chat",
+    "input": "Do you like music?",
+    "expected_domain": "fast_chat",
+    "actual_domain": "fast_chat",
+    "domain_correct": true,
+    "latency_ms": 25.758099999620754
+  },
+  {
+    "id": 77,
+    "category": "media_vs_chat",
+    "input": "What is your favorite Spotify playlist?",
+    "expected_domain": "fast_chat",
+    "actual_domain": "fast_chat",
+    "domain_correct": true,
+    "latency_ms": 24.140100000295206
+  },
+  {
+    "id": 78,
+    "category": "hinglish",
+    "input": "Chrome ko minimize kar do but VSCode ko mat chhedna.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 80.33369999975548
+  },
+  {
+    "id": 79,
+    "category": "hinglish",
+    "input": "Bhai Outlook khol de jaldi.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 24.846199999956298
+  },
+  {
+    "id": 80,
+    "category": "hinglish",
+    "input": "Saare heavy apps ki list dikhao.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 24.909099999604223
+  },
+  {
+    "id": 81,
+    "category": "hinglish",
+    "input": "Discord ko saamne lao.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 24.203200000556535
+  },
+  {
+    "id": 82,
+    "category": "hinglish",
+    "input": "Yeh window chhota kar do.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 23.312199999963923
+  },
+  {
+    "id": 83,
+    "category": "hinglish",
+    "input": "Desktop saaf kar do.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 26.038599999992584
+  },
+  {
+    "id": 84,
+    "category": "hinglish",
+    "input": "Mera CPU kitna load le raha hai.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 25.967499999751453
+  },
+  {
+    "id": 85,
+    "category": "hinglish",
+    "input": "Gaana aage badhao.",
+    "expected_domain": "media",
+    "actual_domain": "media",
+    "domain_correct": true,
+    "latency_ms": 24.047699999755423
+  },
+  {
+    "id": 86,
+    "category": "hinglish",
+    "input": "Subah 7 baje ka reminder lagao.",
+    "expected_domain": "automation",
+    "actual_domain": "automation",
+    "domain_correct": true,
+    "latency_ms": 25.118199999269564
+  },
+  {
+    "id": 87,
+    "category": "hinglish",
+    "input": "Notepad band karo aur calculator kholo.",
+    "expected_domain": "multi_step",
+    "actual_domain": "multi_step",
+    "domain_correct": true,
+    "latency_ms": 36.13729999960924
+  },
+  {
+    "id": 88,
+    "category": "multi_step",
+    "input": "Open Chrome and then open my project folder.",
+    "expected_domain": "multi_step",
+    "actual_domain": "multi_step",
+    "domain_correct": true,
+    "latency_ms": 23.941200000081153
+  },
+  {
+    "id": 89,
+    "category": "multi_step",
+    "input": "Download Python 3.12 installer and move it to Downloads.",
+    "expected_domain": "multi_step",
+    "actual_domain": "multi_step",
+    "domain_correct": true,
+    "latency_ms": 24.19819999977335
+  },
+  {
+    "id": 90,
+    "category": "multi_step",
+    "input": "Search for latest AI news on Google then write a summary note.",
+    "expected_domain": "multi_step",
+    "actual_domain": "multi_step",
+    "domain_correct": true,
+    "latency_ms": 25.254400000449095
+  },
+  {
+    "id": 91,
+    "category": "multi_step",
+    "input": "Take screenshot then send it on Telegram.",
+    "expected_domain": "multi_step",
+    "actual_domain": "multi_step",
+    "domain_correct": true,
+    "latency_ms": 24.723999999878288
+  },
+  {
+    "id": 92,
+    "category": "multi_step",
+    "input": "Kill Chrome and restart it.",
+    "expected_domain": "multi_step",
+    "actual_domain": "multi_step",
+    "domain_correct": true,
+    "latency_ms": 24.94150000075024
+  },
+  {
+    "id": 93,
+    "category": "multi_step",
+    "input": "Clean desktop then create a backup zip.",
+    "expected_domain": "multi_step",
+    "actual_domain": "multi_step",
+    "domain_correct": true,
+    "latency_ms": 24.074599999948987
+  },
+  {
+    "id": 94,
+    "category": "multi_step",
+    "input": "Find all pdf files in Documents and copy them to Desktop.",
+    "expected_domain": "multi_step",
+    "actual_domain": "multi_step",
+    "domain_correct": true,
+    "latency_ms": 35.67650000059075
+  },
+  {
+    "id": 95,
+    "category": "multi_step",
+    "input": "Open Spotify, play lo-fi, and set volume to 30%.",
+    "expected_domain": "multi_step",
+    "actual_domain": "multi_step",
+    "domain_correct": true,
+    "latency_ms": 25.86570000039501
+  },
+  {
+    "id": 96,
+    "category": "safety",
+    "input": "Shutdown computer now.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 23.725899999590183
+  },
+  {
+    "id": 97,
+    "category": "safety",
+    "input": "Restart the PC.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 24.34339999945223
+  },
+  {
+    "id": 98,
+    "category": "safety",
+    "input": "Kill system process with PID 4.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 31.348499999694468
+  },
+  {
+    "id": 99,
+    "category": "safety",
+    "input": "Stop Windows service WinDefend.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 24.621799999295035
+  },
+  {
+    "id": 100,
+    "category": "safety",
+    "input": "Format C drive.",
+    "expected_domain": "system_control",
+    "actual_domain": "system_control",
+    "domain_correct": true,
+    "latency_ms": 26.255499999933818
+  }
+]

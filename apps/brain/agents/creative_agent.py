@@ -3,12 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import logging
 import re
 import time
-import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Any, Optional, Dict, List, Tuple
 
@@ -28,7 +26,7 @@ try:
 except ImportError:
     tiktoken = None
 
-from .base_agent import BaseAgent
+from .base_agent import BaseAgent, TOOL_DISCIPLINE_BLOCK
 
 logger = logging.getLogger("makima.agents.creative")
 
@@ -134,6 +132,18 @@ def _post_process(raw: str, fmt: CreativeFormat, c: CreativeConstraints) -> str:
 class CreativeAgent(BaseAgent):
     """Elite Creative Design, UI Mockup, and Visual Asset Orchestration Engine."""
 
+    AGENT_NAME = "creative"
+    DESCRIPTION = "Creative writing, storytelling, poetry, essays, brainstorming, and content generation."
+
+    SYSTEM_PROMPT = """You are Makima's Elite Creative Agent — an expert AI Art Director, copywriter, and storyteller.
+You craft vivid image-generation prompts, compelling copy, immersive stories, and clean UI mockups.
+
+CREATIVE DOMAINS:
+1. Image Prompt Engineering: Generate rich prompts tailored for Midjourney v6, DALL-E 3, or Stable Diffusion (lighting, composition, camera optics, textures).
+2. Copywriting & Content: Write engaging marketing copy, newsletters, taglines, scripts, and long-form prose.
+3. Storytelling & Narrative: Develop world-building, dialogue, character arcs, and atmospheric scenes.
+4. UI/UX Ideation: Design modern, glassmorphic, and aesthetically pleasing component/screen concepts.""" + "\n" + TOOL_DISCIPLINE_BLOCK
+
     def __init__(
         self,
         ai_handler=None,
@@ -147,26 +157,65 @@ class CreativeAgent(BaseAgent):
         super().__init__(ai_handler, memory, tool_registry, ws_broadcast, orchestrator, guardrails)
         self._cache: Dict[str, str] = {}
 
-    async def _generate_content(self, prompt: str, cfg: FormatConfig, constraints: CreativeConstraints) -> str:
-        """Routes to LLM Gateway or yields high-fidelity structural mockups."""
+    async def _generate_content(self, prompt: str, cfg: FormatConfig, constraints: CreativeConstraints, context: Optional[Dict[str, Any]] = None) -> str:
+        """Routes to LLM Gateway with full system persona, skill guides, and memory context."""
         fmt = constraints.detected_format
         llm_prompt = f"{cfg.guidance}\n\nPrompt: {prompt}\n\nConstraints: {constraints}\n\nAddendum: {cfg.addendum}"
-        return await self._call_llm(llm_prompt)
+        messages = self._build_messages(llm_prompt, context or {})
+        return await self._llm_call(messages, task="creative")
 
-    async def _orchestrate_parallel(self, msg: str, formats: List[CreativeFormat]) -> List[str]:
+    async def _orchestrate_parallel(self, msg: str, formats: List[CreativeFormat], context: Optional[Dict[str, Any]] = None) -> List[str]:
         """Executes multiple creative generation tasks concurrently."""
         async def _run_single(f: CreativeFormat) -> str:
             c = _extract_constraints(msg, f)
             cfg = _CONFIGS[f]
-            raw = await self._generate_content(msg, cfg, c)
+            raw = await self._generate_content(msg, cfg, c, context=context)
             return _post_process(raw, f, c)
             
         results = await asyncio.gather(*[_run_single(f) for f in formats], return_exceptions=True)
         return [r if not isinstance(r, Exception) else f"Generation Error: {r}" for r in results]
 
-    async def execute(self, task_id: str, message: str, context: Dict[str, Any], entities: List[Any]) -> Dict[str, Any]:
+    async def execute(self, task_id: str, message: str, context: Dict[str, Any], entities: Optional[Dict[str, Any]] = None) -> str:
         """Executes the creative orchestration pipeline."""
-        start_time = time.time()
+        self._reset_state()
+        # ── P1 Bridge 4B: Consume structured AgentTask parameters directly ────
+        agent_task = getattr(self, "_current_agent_task", None) or (context.get("agent_task") if isinstance(context, dict) else None)
+        if agent_task and hasattr(agent_task, "goal") and agent_task.goal:
+            message = message or agent_task.goal
+        # ── OpenAI Agents SDK Runner Execution ────────────────────────────────
+        try:
+            formats = _detect_formats(message)
+            primary_fmt = formats[0]
+            constraints = _extract_constraints(message, primary_fmt)
+            cfg = _CONFIGS[primary_fmt]
+
+            req_hash = hashlib.md5(f"{message}:{primary_fmt.name}".encode()).hexdigest()
+            if req_hash in self._cache and not constraints.is_revision:
+                raw_output = self._cache[req_hash]
+                final_output = _post_process(raw_output, primary_fmt, constraints)
+                self._partial_result = final_output
+                return final_output
+
+            extra_sys = f"Format Guidance: {cfg.guidance}\nRole Persona: {cfg.addendum}"
+            raw_output = await self.run_sdk_execution(
+                task_id=task_id,
+                message=message,
+                context=context,
+                max_turns=3,
+                task_type="creative",
+                extra_system=extra_sys,
+                input_guardrails=[],
+                output_guardrails=[],
+            )
+            if len(self._cache) >= 256:
+                self._cache.pop(next(iter(self._cache)), None)
+            self._cache[req_hash] = raw_output
+            final_output = _post_process(raw_output, primary_fmt, constraints)
+            self._partial_result = final_output
+            return final_output
+        except Exception as sdk_exc:
+            logger.warning("[creative] SDK Runner encountered exception, falling back: %s", sdk_exc)
+
         try:
             formats = _detect_formats(message)
             primary_fmt = formats[0]
@@ -179,35 +228,19 @@ class CreativeAgent(BaseAgent):
                 raw_output = self._cache[req_hash]
                 final_output = _post_process(raw_output, primary_fmt, constraints)
             elif len(formats) > 1:
-                parallel_results = await self._orchestrate_parallel(message, formats)
+                parallel_results = await self._orchestrate_parallel(message, formats, context=context)
                 final_output = "\n\n---\n\n".join(parallel_results)
             else:
-                raw_output = await self._generate_content(message, cfg, constraints)
+                raw_output = await self._generate_content(message, cfg, constraints, context=context)
+                if len(self._cache) >= 256:
+                    # Evict oldest entry
+                    self._cache.pop(next(iter(self._cache)), None)
                 self._cache[req_hash] = raw_output
                 final_output = _post_process(raw_output, primary_fmt, constraints)
             
-            return {
-                "task_id": task_id, 
-                "status": "success", 
-                "format": primary_fmt.name,
-                "constraints": {
-                    "aspect_ratio": constraints.aspect_ratio, 
-                    "ui_framework": constraints.ui_framework, 
-                    "is_revision": constraints.is_revision
-                },
-                "metadata": {
-                    "temperature": cfg.temperature, 
-                    "top_p": cfg.top_p, 
-                    "tokens_est": len(final_output) // 4, 
-                    "latency_ms": round((time.time() - start_time) * 1000, 2)
-                },
-                "result": final_output
-            }
+            self._partial_result = final_output
+            return final_output
         except Exception as e:
             logger.error(f"CreativeAgent execution failed: {e}", exc_info=True)
-            return {
-                "task_id": task_id, 
-                "status": "error", 
-                "error": str(e), 
-                "result": "Creative generation pipeline encountered an unexpected error."
-            }
+            return f"Creative generation pipeline encountered an unexpected error: {e}"
+
