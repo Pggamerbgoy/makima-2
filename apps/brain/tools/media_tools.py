@@ -260,12 +260,6 @@ async def _get_default_bc() -> Optional[Any]:
             return bc
     except Exception:
         pass
-    try:
-        from ..agents.browser_agent import BrowserAgent
-        if getattr(BrowserAgent, "_shared_bc", None) is not None:
-            return BrowserAgent._shared_bc
-    except Exception:
-        pass
     return None
 
 

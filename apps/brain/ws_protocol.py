@@ -647,7 +647,7 @@ def build_ping(ts: float) -> WSMessage:
     return WSMessage(v=PROTOCOL_VERSION, type=ServerMessageType.PING, payload={"ts": ts})
 
 def build_pong(ts: float) -> WSMessage:
-    return WSMessage(v=PROTOCOL_VERSION, type=ServerMessageType.PONG, payload={"ts": ts})
+    return WSMessage(v=PROTOCOL_VERSION, type=ServerMessageType.PONG, payload={"ts": ts, "timestamp": ts}, timestamp=ts)
 
 def build_ai_chunk(
     task_id: str,
@@ -704,6 +704,7 @@ def build_tool_call_started(
     tool_name: str,
     parameters: dict[str, Any] | None = None,
     agent: str = "",
+    call_id: str = "",
 ) -> WSMessage:
     """Build a real-time event when a tool begins execution.
 
@@ -711,6 +712,7 @@ def build_tool_call_started(
     Python silently kept only the last one before, causing field drift).
     Payload carries legacy aliases ('tool', 'arguments') plus canonical
     'tool_name'/'parameters' for consumer compatibility.
+    Includes call_id to correlate concurrent parallel tool executions.
     """
     params = parameters or {}
     return WSMessage(
@@ -723,6 +725,7 @@ def build_tool_call_started(
             "arguments": params,
             "parameters": params,
             "agent": agent,
+            "call_id": call_id,
         },
     )
 
@@ -734,8 +737,9 @@ def build_tool_call_finished(
     duration_ms: float = 0.0,
     is_success: bool = True,
     agent: str = "",
+    call_id: str = "",
 ) -> WSMessage:
-    """Build a real-time event when a tool finishes execution."""
+    """Build a real-time event when a tool finishes execution. Includes call_id to correlate concurrent parallel tool executions."""
     return WSMessage(
         v=PROTOCOL_VERSION,
         type=ServerMessageType.TOOL_CALL_FINISHED,
@@ -747,6 +751,7 @@ def build_tool_call_finished(
             "duration_ms": round(duration_ms, 2),
             "is_success": bool(is_success),
             "agent": agent,
+            "call_id": call_id,
         },
     )
 

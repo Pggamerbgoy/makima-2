@@ -670,7 +670,7 @@ class VoiceEngine:
                     approved = bool(call_args.get("approved", False))
                     confirm_task_id = call_args.get("task_id", task_id)
                     try:
-                        from ..agents.base_agent import BaseAgent
+                        from ..core.confirmations import ActionConfirmationManager as BaseAgent
                         await BaseAgent.resolve_confirmation(confirm_task_id, approved)
                         result_str = f"Confirmation resolved: {'approved' if approved else 'rejected'}"
                     except Exception as e:

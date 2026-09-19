@@ -102,7 +102,7 @@ class MentalStateDetector:
     def detect_state(self) -> MentalStateSnapshot:
         """Infer current mental state from OS telemetry and timers."""
         now = time.monotonic()
-        from .agents.os_state import get_os_state
+        from .core.os_state import get_os_state
         os_provider = get_os_state()
 
         # Update latest foreground window if available

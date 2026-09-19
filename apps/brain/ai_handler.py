@@ -88,13 +88,13 @@ API_KEY_PATTERNS = [
 
 # OpenRouter Free-Tier Dynamic Auto-Routing & Model Suite
 _OPENROUTER_AGENT_MODELS = {
-    "code": "qwen/qwen-2.5-coder-32b-instruct:free",
-    "research": "meta-llama/llama-3.3-70b-instruct:free",
-    "creative": "meta-llama/llama-3.3-70b-instruct:free",
-    "data_analysis": "meta-llama/llama-3.3-70b-instruct:free",
-    "automation": "meta-llama/llama-3.3-70b-instruct:free",
-    "media": "meta-llama/llama-3.3-70b-instruct:free",
-    "general": "meta-llama/llama-3.3-70b-instruct:free",
+    "code": "openrouter/free",
+    "research": "openrouter/free",
+    "creative": "openrouter/free",
+    "data_analysis": "openrouter/free",
+    "automation": "openrouter/free",
+    "media": "openrouter/free",
+    "general": "openrouter/free",
 }
 _CODE_TASKS = frozenset({"code", "debugging", "refactoring"})
 _RESEARCH_TASKS = frozenset({"research", "analysis", "daily_briefing"})
@@ -104,20 +104,7 @@ _DATA_TASKS = frozenset({"data_analysis"})
 
 def _resolve_openrouter_model(task: str) -> str:
     """Map a task tag to the best free OpenRouter model for that role."""
-    if task in _CODE_TASKS:
-        return _OPENROUTER_AGENT_MODELS["code"]
-    if task in _RESEARCH_TASKS:
-        return _OPENROUTER_AGENT_MODELS["research"]
-    if task in _CREATIVE_TASKS:
-        return _OPENROUTER_AGENT_MODELS["creative"]
-    if task in _DATA_TASKS:
-        return _OPENROUTER_AGENT_MODELS["data_analysis"]
-    t = (task or "").lower()
-    if "media" in t:
-        return _OPENROUTER_AGENT_MODELS["media"]
-    if "automation" in t or "system" in t:
-        return _OPENROUTER_AGENT_MODELS["automation"]
-    return _OPENROUTER_AGENT_MODELS["general"]
+    return _OPENROUTER_AGENT_MODELS.get(task, "openrouter/free")
 
 
 # =============================================================================
@@ -216,15 +203,14 @@ class BackendProfile:
     circuit_breaker: CircuitBreaker = field(default_factory=CircuitBreaker)
     rate_limit_tpm: int = 0
     rate_limit_rpm: int = 0
+    max_tools: Optional[int] = None
     ewma_latency_ms: float = 0.0
     _key_idx: int = 0
 
     def get_api_key(self) -> str:
-        """Return the active API key and advance index for round-robin rotation."""
+        """Return the current active API key."""
         if self.api_keys:
-            key = self.api_keys[self._key_idx % len(self.api_keys)]
-            self._key_idx = (self._key_idx + 1) % len(self.api_keys)
-            return key
+            return self.api_keys[self._key_idx % len(self.api_keys)]
         return self.api_key
 
     def rotate_key(self) -> str:
@@ -464,6 +450,8 @@ class OpenAICompatibleAdapter(BaseProviderAdapter):
                             }
                         })
             if valid_tools:
+                if profile.max_tools and len(valid_tools) > profile.max_tools:
+                    valid_tools = valid_tools[:profile.max_tools]
                 body["tools"] = valid_tools
                 if kwargs.get("tool_choice"):
                     body["tool_choice"] = kwargs["tool_choice"]
@@ -572,7 +560,12 @@ class OpenAICompatibleAdapter(BaseProviderAdapter):
             data = resp.json()
             break
 
-        if not data or "choices" not in data:
+        if isinstance(data, dict) and "error" in data:
+            err_msg = data.get("error", {}).get("message", str(data["error"]))
+            logger.warning("[%s] API returned error in payload: %s", profile.name, err_msg)
+            raise ValueError(f"Backend '{profile.name}' returned API error: {err_msg}")
+
+        if not data or not data.get("choices"):
             raise ValueError(f"Invalid empty response from backend '{profile.name}'")
 
         choice = data["choices"][0]
@@ -673,6 +666,8 @@ class OpenAICompatibleAdapter(BaseProviderAdapter):
                             }
                         })
             if valid_tools:
+                if profile.max_tools and len(valid_tools) > profile.max_tools:
+                    valid_tools = valid_tools[:profile.max_tools]
                 body["tools"] = valid_tools
                 if kwargs.get("tool_choice"):
                     body["tool_choice"] = kwargs["tool_choice"]
@@ -683,7 +678,8 @@ class OpenAICompatibleAdapter(BaseProviderAdapter):
             timeout=httpx.Timeout(45.0, connect=10.0),
         ) as resp:
             if resp.status_code == 429:
-                retry_after = resp.headers.get("Retry-After", "60")
+                profile.rotate_key()
+                retry_after = resp.headers.get("Retry-After", "5")
                 if gateway.rate_limit_manager:
                     gateway.rate_limit_manager.handle_429(profile.name, float(retry_after))
                 raise RateLimitError(f"{profile.name} rate limited")
@@ -1389,19 +1385,19 @@ class AIHandler:
         # Canonical task routing map: inclusive priority cascade across all available providers
         # ParetoRouter filters out backends that do not have active credentials in 0.001ms.
         standard_cascade = [
-            "gemini", "groq", "groq_fast", "deepseek", "qwen_flash",
-            "openai", "claude", "cerebras", "ollama", "openrouter"
+            "groq", "groq_fast", "gemini", "deepseek", "qwen_flash", "qwen",
+            "openai", "claude", "cerebras", "openrouter", "ollama"
         ]
         fast_cascade = [
-            "groq_fast", "groq", "cerebras", "gemini", "qwen_flash",
-            "deepseek", "openai", "claude", "ollama"
+            "groq", "groq_fast", "cerebras", "gemini", "qwen_flash", "qwen",
+            "deepseek", "openai", "claude", "openrouter", "ollama"
         ]
         code_cascade = [
-            "deepseek", "openai", "claude", "qwen_flash", "gemini",
+            "deepseek", "openai", "claude", "qwen_flash", "qwen", "gemini",
             "groq", "cerebras", "ollama"
         ]
         deep_cascade = [
-            "deepseek", "claude", "gemini", "openai", "qwen_flash",
+            "deepseek", "claude", "gemini", "openai", "qwen_flash", "qwen",
             "groq", "cerebras", "ollama"
         ]
 
@@ -1524,11 +1520,17 @@ class AIHandler:
         found_keys: list[str] = []
         name_lower = backend_name.lower()
 
+        def _add_key(k_val: str) -> None:
+            if not k_val:
+                return
+            for sub_k in k_val.split(","):
+                sub_k = sub_k.strip().strip("'\"")
+                if sub_k and is_valid_api_key(sub_k) and sub_k not in found_keys:
+                    found_keys.append(sub_k)
+
         # Step 1: Explicit env
         if explicit_env and os.environ.get(explicit_env):
-            val = os.environ[explicit_env].strip()
-            if val and val not in found_keys:
-                found_keys.append(val)
+            _add_key(os.environ[explicit_env])
 
         # Step 2: Standard and well-known aliases per backend family
         alias_map: dict[str, list[str]] = {
@@ -1578,15 +1580,11 @@ class AIHandler:
             family = "claude"
 
         for k_name in alias_map.get(family, []):
-            val = os.environ.get(k_name, "").strip()
-            if val and is_valid_api_key(val) and val not in found_keys:
-                found_keys.append(val)
+            _add_key(os.environ.get(k_name, ""))
 
         # Step 3: Generic patterns e.g. MAKIMA_<NAME>_KEY, <NAME>_API_KEY
         for generic_k in (f"MAKIMA_{backend_name.upper()}_KEY", f"{backend_name.upper()}_API_KEY", f"{backend_name.upper()}_KEY"):
-            val = os.environ.get(generic_k, "").strip()
-            if val and is_valid_api_key(val) and val not in found_keys:
-                found_keys.append(val)
+            _add_key(os.environ.get(generic_k, ""))
 
         # Step 4: Fuzzy Environment Variable Name Scan
         fuzzy_keywords = {
@@ -1604,10 +1602,10 @@ class AIHandler:
         for env_k, env_v in os.environ.items():
             k_clean = env_k.lower()
             v_clean = env_v.strip()
-            if not v_clean or not is_valid_api_key(v_clean) or v_clean in found_keys:
+            if not v_clean:
                 continue
             if any(kw in k_clean for kw in kw_list) and any(suf in k_clean for suf in ("key", "token", "secret", "auth", "api")):
-                found_keys.append(v_clean)
+                _add_key(v_clean)
 
         # Step 5: Vendor Prefix Signature Sniffing (Arbitrary variable name like KUCH_BHI=...)
         prefix_signatures = {
@@ -1736,6 +1734,7 @@ class AIHandler:
                 ),
                 rate_limit_tpm=cfg.get("rate_limit_tpm", 0),
                 rate_limit_rpm=cfg.get("rate_limit_rpm", 0),
+                max_tools=int(cfg["max_tools"]) if cfg.get("max_tools") is not None else None,
             )
 
             if is_enabled:
@@ -1856,7 +1855,11 @@ class AIHandler:
                 if profile and profile.is_available():
                     candidates = [pref_backend] + [b for b in candidates if b != pref_backend]
 
-        return candidates
+        # Prioritize healthy/available backends before circuit-broken or disabled ones
+        available = [b for b in candidates if b in self.backends and self.backends[b].is_available()]
+        unavailable = [b for b in candidates if b in self.backends and not self.backends[b].is_available()]
+        remaining = [b for b in candidates if b not in self.backends]
+        return available + unavailable + remaining
 
     def extract_thought_content(self, text: str) -> tuple[str, str]:
         """Extract reasoning from <think>, <thinking>, <thought>, or <reasoning> tags, returning (cleaned_text, thought_content)."""

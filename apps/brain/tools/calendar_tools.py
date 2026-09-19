@@ -21,18 +21,23 @@ class CalendarStore:
     """High-performance in-memory calendar store with async locking."""
     def __init__(self):
         self.events: List[Dict[str, Any]] = []
-        self._lock = asyncio.Lock()
+        self._lock: Optional[asyncio.Lock] = None
+
+    def _get_lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
 
     async def add_event(self, event: Dict[str, Any]) -> None:
-        async with self._lock:
+        async with self._get_lock():
             self.events.append(event)
 
     async def get_overlaps(self, start: datetime, end: datetime) -> List[Dict[str, Any]]:
-        async with self._lock:
+        async with self._get_lock():
             return [e for e in self.events if e["start"] < end and e["end"] > start]
 
     async def get_events_on_date(self, target_date: datetime) -> List[Dict[str, Any]]:
-        async with self._lock:
+        async with self._get_lock():
             return [e for e in self.events if e["start"].date() == target_date.date()]
 
 _store = CalendarStore()

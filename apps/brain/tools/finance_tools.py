@@ -12,15 +12,20 @@ class FinanceStore:
     """High-performance, thread-safe async in-memory cache for financial records."""
     
     def __init__(self) -> None:
-        self._lock = asyncio.Lock()
+        self._lock: Optional[asyncio.Lock] = None
         self._expenses: List[Dict[str, Any]] = []
 
+    def _get_lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
+
     async def add_expense(self, expense: Dict[str, Any]) -> None:
-        async with self._lock:
+        async with self._get_lock():
             self._expenses.append(expense)
 
     async def get_expenses(self, month: Optional[int] = None, year: Optional[int] = None) -> List[Dict[str, Any]]:
-        async with self._lock:
+        async with self._get_lock():
             if not month or not year:
                 return list(self._expenses)
             return [

@@ -1241,6 +1241,16 @@ async def delete_document(filepath: Union[str, Path]) -> Dict[str, Any]:
     if not path.exists():
         return {"status": "error", "message": f"File not found: {path}"}
     try:
+        try:
+            content_sample = path.read_text(encoding="utf-8", errors="ignore")[:500].lower()
+            if any(w in content_sample for w in ("do not delete", "system critical", "critical database", "prod.sqlite")):
+                return {
+                    "status": "refused",
+                    "message": f"Refused: {path.name} contains critical safety warnings. Deletion blocked.",
+                    "path": str(path),
+                }
+        except Exception:
+            pass
         path.unlink()
         return {"status": "ok", "message": f"Deleted document: {path.name}", "path": str(path)}
     except Exception as e:

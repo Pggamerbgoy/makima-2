@@ -8,7 +8,7 @@ import sqlite3
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 logger = logging.getLogger("makima.core.persistence")
 
@@ -177,26 +177,93 @@ class EventStore:
                 return ev.payload.get("partial_text")
         return None
 
-    async def get_recent_events(self, event_type: str, limit: int = 50) -> list[KernelEvent]:
-        """Fetch the most recent N events of a given type (ascending id order)."""
-
-        def _fetch() -> list[KernelEvent]:
+    def get_failure_patterns_sync(
+        self,
+        lookback_seconds: float = 3600.0,
+        min_failures: int = 2,
+    ) -> dict[str, dict[str, Any]]:
+        """
+        Query and aggregate SAGA failure incidents from the last lookback_seconds.
+        Identifies recurring failure patterns per tool (e.g. repeated TIMEOUTs or INVALID_PARAMETERS)
+        to enable runtime adaptive recovery and intelligent backoff.
+        """
+        cutoff_time = time.time() - float(lookback_seconds)
+        try:
             rows = self._conn.execute(
-                "SELECT id, timestamp, event_type, task_id, agent_name, payload "
-                "FROM kernel_events WHERE event_type = ? ORDER BY id DESC LIMIT ?",
-                (event_type, int(limit)),
+                "SELECT timestamp, task_id, agent_name, payload "
+                "FROM kernel_events WHERE event_type = 'saga_incident' AND timestamp >= ? "
+                "ORDER BY id DESC",
+                (cutoff_time,),
             ).fetchall()
-            return [
-                KernelEvent(
-                    id=r[0], timestamp=r[1], event_type=r[2],
-                    task_id=r[3], agent_name=r[4],
-                    payload=json.loads(r[5]) if r[5] else {},
-                )
-                for r in reversed(rows)
-            ]
+        except Exception as exc:
+            logger.debug("Failed to query saga failure patterns: %s", exc)
+            return {}
 
+        tool_stats: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            ts = r[0]
+            task_id = r[1]
+            agent_or_tool = r[2] or ""
+            payload = {}
+            if r[3]:
+                try:
+                    payload = json.loads(r[3])
+                except Exception:
+                    pass
+
+            tool_name = payload.get("tool_name") or agent_or_tool or "unknown_tool"
+            evidence_tier = payload.get("evidence_tier", "UNKNOWN")
+            error_msg = str(payload.get("error", ""))
+
+            if tool_name not in tool_stats:
+                tool_stats[tool_name] = {
+                    "tool_name": tool_name,
+                    "failure_count": 0,
+                    "evidence_tiers": {},
+                    "recent_errors": [],
+                    "last_failed_at": ts,
+                    "last_task_id": task_id,
+                }
+
+            stats = tool_stats[tool_name]
+            stats["failure_count"] += 1
+            stats["evidence_tiers"][evidence_tier] = stats["evidence_tiers"].get(evidence_tier, 0) + 1
+            if error_msg and len(stats["recent_errors"]) < 3:
+                stats["recent_errors"].append(error_msg[:120])
+            if ts > stats["last_failed_at"]:
+                stats["last_failed_at"] = ts
+                stats["last_task_id"] = task_id
+
+        patterns: dict[str, dict[str, Any]] = {}
+        for t_name, stats in tool_stats.items():
+            if stats["failure_count"] >= min_failures:
+                tiers = stats["evidence_tiers"]
+                dominant_issue = max(tiers.keys(), key=lambda k: tiers[k]) if tiers else "UNKNOWN"
+                stats["dominant_issue"] = dominant_issue
+
+                if dominant_issue == "TIMEOUT":
+                    scale = 2.0 if stats["failure_count"] >= 3 else 1.5
+                    stats["recommended_timeout_scale"] = scale
+                    stats["recommended_action"] = f"Extend timeout by {scale}x"
+                elif dominant_issue == "INVALID_PARAMETERS":
+                    stats["recommended_timeout_scale"] = 1.0
+                    stats["recommended_action"] = "Validate required parameter slots before calling"
+                else:
+                    stats["recommended_timeout_scale"] = 1.0
+                    stats["recommended_action"] = "Review tool execution logs"
+
+                patterns[t_name] = stats
+
+        return patterns
+
+    async def get_failure_patterns(
+        self,
+        lookback_seconds: float = 3600.0,
+        min_failures: int = 2,
+    ) -> dict[str, dict[str, Any]]:
+        """Asynchronously query SAGA failure patterns."""
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, _fetch)
+        return await loop.run_in_executor(None, self.get_failure_patterns_sync, lookback_seconds, min_failures)
 
     def compact_events_sync(self, keep_recent: int = 2000) -> dict[str, int]:
         """
@@ -256,9 +323,64 @@ class EventStore:
         except Exception as exc:
             return {"error": str(exc)}
 
+    def get_recent_events_sync(
+        self,
+        event_type: Union[str, int, None] = None,
+        limit: int = 50,
+    ) -> list[KernelEvent]:
+        """
+        Fetch recent events, optionally filtered by event_type.
+        Supports get_recent_events_sync("task_outcome", limit=20),
+        get_recent_events_sync(limit=50), and positional limit calls.
+        """
+        actual_type: Optional[str] = None
+        actual_limit: int = limit
+
+        if isinstance(event_type, int):
+            actual_limit = event_type
+            actual_type = None
+        elif isinstance(event_type, str):
+            actual_type = event_type.strip() or None
+
+        try:
+            if actual_type:
+                rows = self._conn.execute(
+                    "SELECT id, timestamp, event_type, task_id, agent_name, payload "
+                    "FROM kernel_events WHERE event_type = ? ORDER BY id DESC LIMIT ?",
+                    (actual_type, int(actual_limit)),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT id, timestamp, event_type, task_id, agent_name, payload "
+                    "FROM kernel_events ORDER BY id DESC LIMIT ?",
+                    (int(actual_limit),),
+                ).fetchall()
+
+            return [
+                KernelEvent(
+                    id=r[0], timestamp=r[1], event_type=r[2],
+                    task_id=r[3], agent_name=r[4],
+                    payload=json.loads(r[5]) if r[5] else {},
+                )
+                for r in rows
+            ]
+        except Exception as exc:
+            logger.warning("Failed to fetch recent events: %s", exc)
+            return []
+
+    async def get_recent_events(
+        self,
+        event_type: Union[str, int, None] = None,
+        limit: int = 50,
+    ) -> list[KernelEvent]:
+        """Asynchronously fetch recent events (optionally filtered by event_type)."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.get_recent_events_sync, event_type, limit)
+
     def close(self) -> None:
         """Close the underlying SQLite connection."""
         try:
             self._conn.close()
         except Exception:
             pass
+

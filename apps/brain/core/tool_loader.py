@@ -82,9 +82,142 @@ def register_core_tools(tool_registry: Any, services: Any = None) -> None:
     except ImportError as e:
         logger.warning("Cannot import fetch_url from web_search_tool: %s", e)
 
+    # ── generate_image ───────────────────────────────────────────────────────
+    async def _generate_image(
+        prompt: str,
+        size: str = "1024x1024",
+        quality: str = "standard",
+        n: int = 1,
+        **kwargs: Any,
+    ) -> str:
+        """
+        Generate an image from a text prompt using OpenAI gpt-image-1.
+        Saves image to ~/.makima/images/ and returns path + base64 data URL.
+        """
+        import os, base64, time as _time, asyncio as _asyncio
+        clean_prompt = (prompt or "").strip()
+        if not clean_prompt:
+            return "[generate_image] No prompt provided."
+
+        handler_obj = services.get("ai_handler") if hasattr(services, "get") else None
+        api_key = (
+            os.environ.get("OPENAI_API_KEY")
+            or os.environ.get("OPENAI_KEY")
+            or getattr(handler_obj, "_openai_api_key", None)
+            or getattr(handler_obj, "api_key", None)
+        )
+
+        if not api_key:
+            return (
+                "[generate_image] No OpenAI API key found. "
+                "Set OPENAI_API_KEY environment variable to enable image generation."
+            )
+
+        try:
+            import openai
+        except ImportError:
+            return "[generate_image] openai package not installed. Run: pip install openai"
+
+        # Clamp n to valid range (1-4 for DALL-E-3 actually requires n=1)
+        n_images = max(1, min(int(n or 1), 1))
+        # Validate size
+        valid_sizes = {"256x256", "512x512", "1024x1024", "1792x1024", "1024x1792"}
+        img_size = size if size in valid_sizes else "1024x1024"
+
+        def _call_openai() -> str:
+            import openai as _openai  # noqa: F811
+            client = _openai.OpenAI(api_key=api_key)
+            try:
+                resp = client.images.generate(
+                    model="gpt-image-1",
+                    prompt=clean_prompt,
+                    size=img_size,
+                    n=n_images,
+                )
+            except _openai.BadRequestError as e:
+                return f"[generate_image] Content policy rejection: {e}"
+            except _openai.AuthenticationError:
+                return "[generate_image] Invalid OpenAI API key."
+            except _openai.RateLimitError:
+                return "[generate_image] OpenAI rate limit exceeded. Try again later."
+            except Exception as e:
+                return f"[generate_image] OpenAI API error: {e}"
+            finally:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+
+            # Save and return
+            img_dir = os.path.expanduser("~/.makima/images")
+            os.makedirs(img_dir, exist_ok=True)
+            timestamp = _time.strftime("%Y%m%d_%H%M%S")
+            saved_paths = []
+            b64_images = []
+
+            for idx, img_data in enumerate(resp.data):
+                suffix = f"_{idx}" if len(resp.data) > 1 else ""
+                fname = f"gen_{timestamp}{suffix}.png"
+                fpath = os.path.join(img_dir, fname)
+
+                # gpt-image-1 returns b64_json; dall-e-3 may return url
+                if hasattr(img_data, "b64_json") and img_data.b64_json:
+                    raw = base64.b64decode(img_data.b64_json)
+                    with open(fpath, "wb") as f:
+                        f.write(raw)
+                    b64 = img_data.b64_json
+                elif hasattr(img_data, "url") and img_data.url:
+                    import urllib.request
+                    urllib.request.urlretrieve(img_data.url, fpath)
+                    with open(fpath, "rb") as f:
+                        b64 = base64.b64encode(f.read()).decode("ascii")
+                else:
+                    continue
+                saved_paths.append(fpath)
+                b64_images.append(b64)
+
+            if not saved_paths:
+                return "[generate_image] No images returned by API."
+
+            result_parts = [f"Generated {len(saved_paths)} image(s) for: '{clean_prompt[:80]}'"]
+            for i, (path, b64) in enumerate(zip(saved_paths, b64_images)):
+                result_parts.append(f"Image {i+1}: {path}")
+                result_parts.append(f"data:image/png;base64,{b64[:200]}...  [{len(b64)} chars total]")
+                result_parts.append(f"FULL_BASE64:{b64}")
+            return "\n".join(result_parts)
+
+        return await _asyncio.to_thread(_call_openai)
+
+    _safe("generate_image", lambda: {
+        "name": "generate_image",
+        "description": "Generate an image from a text prompt using OpenAI gpt-image-1. Returns saved path and base64 PNG.",
+        "func": _generate_image,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "Detailed text description of the image to generate."},
+                "size": {
+                    "type": "string",
+                    "enum": ["256x256", "512x512", "1024x1024", "1792x1024", "1024x1792"],
+                    "description": "Image resolution (default '1024x1024').",
+                },
+                "quality": {
+                    "type": "string",
+                    "enum": ["standard", "hd"],
+                    "description": "Image quality (default 'standard'). 'hd' costs more tokens.",
+                },
+            },
+            "required": ["prompt"],
+        },
+        "category": "creative",
+        "agent_hints": ["creative", "research", "commander", "general"],
+        "task_tags": ["image", "generate", "creative", "art", "dalle", "vision"],
+        "priority": 1,
+    })
+
     # ── search_installed_apps (OS-wide application discovery) ────────────────
     try:
-        from ..agents.system_agent import search_installed_apps
+        from ..tools.system_tools import search_installed_apps
         _safe("search_installed_apps", lambda: {
             "name": "search_installed_apps",
             "description": "Search, list, or discover what applications or software are installed on the computer (e.g. 'konse apps hain', 'check if blender is installed', 'list installed apps'). Use ONLY for discovery/listing. NEVER use to open or launch an app (use launch_app instead).",
@@ -124,6 +257,7 @@ def register_core_tools(tool_registry: Any, services: Any = None) -> None:
         ("security", "..tools.security_tools", "register_security_tools"),
         ("system", "..tools.system_tools", "register_system_tools"),
         ("document", "..tools.document_tools", "register_document_tools"),
+        ("memory", "..tools.memory_tools", "register_memory_tools"),
     ]
     for _domain, _module_path, _fn_name in _domain_tool_loaders:
         try:
@@ -134,6 +268,15 @@ def register_core_tools(tool_registry: Any, services: Any = None) -> None:
             if _fn is None:
                 logger.warning("Tool module '%s' missing function '%s' — skipping", _module_path, _fn_name)
                 continue
+
+            call_kwargs = {}
+            try:
+                sig = _inspect.signature(_fn)
+                if "services" in sig.parameters:
+                    call_kwargs["services"] = services
+            except Exception:
+                pass
+
             if _inspect.iscoroutinefunction(_fn):
                 import asyncio as _asyncio
                 try:
@@ -141,13 +284,13 @@ def register_core_tools(tool_registry: Any, services: Any = None) -> None:
                 except RuntimeError:
                     loop = None
                 if loop and loop.is_running():
-                    _t = loop.create_task(_fn(tool_registry))
+                    _t = loop.create_task(_fn(tool_registry, **call_kwargs))
                     _loader_tasks.add(_t)
                     _t.add_done_callback(_loader_tasks.discard)
                 else:
-                    _asyncio.get_event_loop().run_until_complete(_fn(tool_registry))
+                    _asyncio.get_event_loop().run_until_complete(_fn(tool_registry, **call_kwargs))
             else:
-                _fn(tool_registry)
+                _fn(tool_registry, **call_kwargs)
             logger.info("Registered %s tools from %s", _domain, _fn_name)
         except Exception as _e:
             logger.warning("Failed to register %s tools: %s", _domain, _e)
@@ -169,7 +312,7 @@ async def register_mcp_tools(tool_registry: Any, mcp_config: list) -> None:
         return
 
     try:
-        from ..tools.mcp_adapter import AsyncMcpMultiplexer, McpToolAdapter
+        from ..tools.mcp_adapter import AsyncMcpMultiplexer, AsyncMcpHttpClient, McpToolAdapter
     except ImportError as e:
         logger.warning("MCP adapter unavailable — skipping MCP tool registration: %s", e)
         return
@@ -183,17 +326,23 @@ async def register_mcp_tools(tool_registry: Any, mcp_config: list) -> None:
             return
         name = entry.get("name", "mcp")
         command = entry.get("command")
+        url = entry.get("url")
         env = entry.get("env") or None
-        if not command or not isinstance(command, list):
-            logger.warning("MCP server '%s' has no valid command — skipping", name)
+        headers = entry.get("headers") or None
+
+        if not command and not url:
+            logger.warning("MCP server '%s' has no valid command or url — skipping", name)
             return
         try:
-            mux = AsyncMcpMultiplexer(command=command, env=env)
-            await mux.start()
-            adapter = McpToolAdapter(client=mux, prefix=f"mcp_{name}")
+            if url:
+                client = AsyncMcpHttpClient(base_url=url, headers=headers)
+            else:
+                client = AsyncMcpMultiplexer(command=command, env=env)
+            await client.start()
+            adapter = McpToolAdapter(client=client, prefix=f"mcp_{name}")
             registered = await adapter.discover_and_register(tool_registry)
-            # Hold strong references so GC doesn't kill the subprocess or handlers
-            tool_registry._mcp_multiplexers.append(mux)
+            # Hold strong references so GC doesn't kill the subprocess or client
+            tool_registry._mcp_multiplexers.append(client)
             logger.info(
                 "MCP server '%s' online — registered %d tools: %s",
                 name, len(registered), registered,

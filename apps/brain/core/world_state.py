@@ -4,11 +4,14 @@ Facade over domain state providers (OS, Windows, Processes, Filesystem, Audio) w
 """
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 import threading
 import time
 from typing import Any, Optional
+
+from .os_state import get_os_state
 
 logger = logging.getLogger("makima.world_state")
 
@@ -67,7 +70,6 @@ class WorldStateService:
     def get_foreground_window(self) -> str:
         """Query active foreground window title via OS domain provider."""
         try:
-            from ..agents.os_state import get_os_state
             return get_os_state().get_foreground_window()
         except Exception as e:
             logger.warning("[world_state] get_foreground_window failed: %s", e)
@@ -76,8 +78,6 @@ class WorldStateService:
     async def get_active_audio_owner(self) -> Optional[str]:
         """Query application currently producing audio."""
         try:
-            import inspect
-            from ..agents.os_state import get_os_state
             res = get_os_state().get_active_audio_owner()
             if inspect.isawaitable(res):
                 return await res
@@ -89,7 +89,6 @@ class WorldStateService:
     def cpu_avg(self) -> Optional[float]:
         """Query CPU usage 5-minute rolling average."""
         try:
-            from ..agents.os_state import get_os_state
             return get_os_state().cpu_avg()
         except Exception as e:
             logger.warning("[world_state] cpu_avg failed: %s", e)
@@ -98,8 +97,6 @@ class WorldStateService:
     async def get_processes(self) -> list[dict[str, Any]]:
         """Query active OS processes."""
         try:
-            import inspect
-            from ..agents.os_state import get_os_state
             res = get_os_state().get_processes()
             if inspect.isawaitable(res):
                 return await res
@@ -111,8 +108,6 @@ class WorldStateService:
     async def get_open_windows(self) -> list[dict[str, Any]]:
         """Query open visible windows."""
         try:
-            import inspect
-            from ..agents.os_state import get_os_state
             res = get_os_state().get_open_windows()
             if inspect.isawaitable(res):
                 return await res
@@ -131,7 +126,6 @@ class WorldStateService:
                     return list(cached["open_windows"])
 
         try:
-            from ..agents.os_state import get_os_state
             os_state = get_os_state()
             wins = []
             if hasattr(os_state, "get_open_windows_sync"):
@@ -153,7 +147,6 @@ class WorldStateService:
     def get_battery_status(self) -> dict[str, Any]:
         """Query laptop battery status via OS state provider."""
         try:
-            from ..agents.os_state import get_os_state
             return get_os_state().get_battery_status()
         except Exception as e:
             logger.debug("[world_state] get_battery_status failed: %s", e)
@@ -175,7 +168,6 @@ class WorldStateService:
 
         # Trigger underlying provider invalidations
         try:
-            from ..agents.os_state import get_os_state
             os_state = get_os_state()
             if domain in ("process", "processes", "os"):
                 if hasattr(os_state, "invalidate_processes"):
@@ -209,7 +201,6 @@ class WorldStateService:
     # ─────────────────────────────────────────────────────────────────────────
     async def _probe_os(self) -> dict[str, Any]:
         try:
-            from ..agents.os_state import get_os_state
             os_state = get_os_state()
             open_wins = await os_state.get_open_windows() if hasattr(os_state, "get_open_windows") else getattr(os_state, "_window_cache", [])
             return {
@@ -224,7 +215,6 @@ class WorldStateService:
 
     async def _probe_processes(self) -> dict[str, Any]:
         try:
-            from ..agents.os_state import get_os_state
             os_state = get_os_state()
             procs = await os_state.get_processes()
             return {
@@ -237,7 +227,6 @@ class WorldStateService:
 
     async def _probe_windows(self) -> dict[str, Any]:
         try:
-            from ..agents.os_state import get_os_state
             os_state = get_os_state()
             windows = await os_state.get_open_windows()
             return {
@@ -251,7 +240,6 @@ class WorldStateService:
 
     async def _probe_audio(self) -> dict[str, Any]:
         try:
-            from ..agents.os_state import get_os_state
             owner = await get_os_state().get_active_audio_owner()
             return {
                 "active_audio_owner": owner,

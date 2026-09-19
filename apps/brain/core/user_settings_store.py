@@ -90,26 +90,35 @@ class UserSettingsStore:
 
     def get_llm_overrides(self) -> Dict[str, Dict[str, Any]]:
         """Return persisted provider overrides without exposing unrelated secrets."""
+        OBSOLETE_MODELS = {
+            "qwen-turbo": "qwen3.8-27b",
+            "qwen-plus": "qwen3.8-27b",
+            "qwen3.6-flash-2026-04-16": "qwen3.8-27b",
+        }
         overrides: Dict[str, Dict[str, Any]] = {}
         for integration_id, fields in self._integrations.items():
             if not integration_id.startswith("llm:") or not isinstance(fields, dict):
                 continue
             provider = integration_id.removeprefix("llm:")
-            overrides[provider] = {
+            entry = {
                 key: fields[key]
                 for key in ("api_key", "model", "base_url", "enabled")
                 if key in fields
             }
+            if "model" in entry and isinstance(entry["model"], str):
+                model_str = entry["model"].strip()
+                if model_str in OBSOLETE_MODELS:
+                    entry["model"] = OBSOLETE_MODELS[model_str]
+            overrides[provider] = entry
         return overrides
 
     def save_llm_provider(self, provider: str, fields: Dict[str, Any]) -> None:
         """Persist an LLM provider config separately from general UI settings."""
         safe_fields = {
-            key: value
+            key: (value.strip() if isinstance(value, str) else value)
             for key, value in fields.items()
             if key in {"api_key", "model", "base_url", "enabled"}
             and value is not None
-            and (not isinstance(value, str) or value.strip())
         }
         self.save_integration(f"llm:{provider}", safe_fields)
 
@@ -127,5 +136,17 @@ class UserSettingsStore:
         self._save(self._integrations_path, self._integrations)
         logger.info("Saved integration config for: %s", integration_id)
 
+    def save_integration_fields(self, integration_id: str, fields: Dict[str, Any]) -> None:
+        """Alias for save_integration for caller compatibility."""
+        self.save_integration(integration_id, fields)
+
+    def has_integration_configured(self, integration_id: str) -> bool:
+        """Check if integration has any non-empty configuration value."""
+        fields = self._integrations.get(integration_id, {})
+        if not isinstance(fields, dict):
+            return False
+        return any(bool(v) for v in fields.values())
+
     def list_integrations(self) -> list[str]:
         return list(self._integrations.keys())
+

@@ -19,6 +19,7 @@ import inspect
 import json
 import logging
 import os
+import platform
 import re
 import time
 import uuid
@@ -30,6 +31,7 @@ logging.getLogger("openai.agents").setLevel(logging.ERROR)
 
 from agents import (
     Agent,
+    AgentHooks,
     GuardrailFunctionOutput,
     Handoff,
     InputGuardrail,
@@ -60,6 +62,25 @@ from agents.models.interface import Model, ModelTracing
 from agents.tool import FunctionTool, Tool, ToolContext
 
 logger = logging.getLogger("makima.sdk_bridge")
+
+
+def adapt_tool_call_args(
+    target_fn: Callable,
+    in_params: dict[str, Any],
+    user_ctx: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Adapt keyword arguments to match target_fn signature, injecting context/ai_handler if accepted."""
+    final_args = dict(in_params)
+    try:
+        sig = inspect.signature(target_fn)
+        has_varkw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+        if ("context" in sig.parameters or has_varkw) and "context" not in final_args and user_ctx:
+            final_args["context"] = user_ctx
+        if ("ai_handler" in sig.parameters or has_varkw) and "ai_handler" not in final_args and user_ctx and user_ctx.get("ai_handler"):
+            final_args["ai_handler"] = user_ctx["ai_handler"]
+    except Exception:
+        pass
+    return final_args
 
 
 class ToolInvokerProxy:
@@ -116,7 +137,7 @@ class ToolInvokerProxy:
         real_task_id = user_ctx.get("task_id") or "task_sdk_runner"
 
         # 0. Check for Agent Delegation Tools (e.g. call_system_agent, call_browser_agent, call_code_agent)
-        clean_ag = self.tool_name.replace("call_", "").replace("_agent", "")
+        clean_ag = self.tool_name.removeprefix("call_").removesuffix("_agent")
         is_agent_call = (
             self.tool_name.startswith("call_")
             or self.tool_name.endswith("_agent")
@@ -145,7 +166,41 @@ class ToolInvokerProxy:
                 logger.error("[sdk_bridge] Agent delegation '%s' failed: %s", self.tool_name, e)
                 return f"[Agent Delegation Error in {self.tool_name}]: {e}"
 
-        # 1. Dispatch via Agent's _use_tool (Preserves per-agent locks, gates, and ExecutionRuntime)
+        def _adapt_call_args(target_fn: Callable, in_params: dict[str, Any]) -> dict[str, Any]:
+            return adapt_tool_call_args(target_fn, in_params, user_ctx)
+
+        # 1. Direct tool execution via Custom Func
+        if self.custom_func is not None:
+            try:
+                call_args = _adapt_call_args(self.custom_func, params)
+                res = self.custom_func(**call_args)
+                if inspect.isawaitable(res):
+                    res = await res
+                return str(res) if not isinstance(res, (dict, list)) else json.dumps(res, ensure_ascii=False)
+            except Exception as e:
+                return f"[Tool Error in {self.tool_name}]: {e}"
+
+        # 2. Direct tool execution via Registry tool lookup
+        if self.registry is not None and hasattr(self.registry, "get_tool"):
+            meta = (
+                self.registry.get_tool(self.tool_name)
+                or self.registry.get_tool(f"system_{self.tool_name}")
+                or (self.registry.get_tool(self.tool_name[7:]) if self.tool_name.startswith("system_") else None)
+            )
+            if meta and getattr(meta, "func", None):
+                try:
+                    call_args = _adapt_call_args(meta.func, params)
+                    res = meta.func(**call_args)
+                    if inspect.isawaitable(res):
+                        res = await res
+                    out = str(res) if not isinstance(res, (dict, list)) else json.dumps(res, ensure_ascii=False)
+                    if len(out) > 3500:
+                        out = out[:3500] + f"\n... [Output truncated: {len(out) - 3500} chars omitted]"
+                    return out
+                except Exception as e:
+                    return f"[Tool Error in {self.tool_name}]: {e}"
+
+        # 3. Dispatch via Agent's _use_tool (if bound to agent)
         if self.agent is not None and hasattr(self.agent, "_use_tool"):
             try:
                 res = await self.agent._use_tool(self.tool_name, **params)
@@ -160,7 +215,7 @@ class ToolInvokerProxy:
                 )
                 return f"[Tool Error in {self.tool_name}]: {e}"
 
-        # 2. Dispatch via ExecutionRuntime (Preserves Saga rollback & Invariant verification)
+        # 4. Dispatch via ExecutionRuntime (fallback)
         runtime = self.execution_runtime
         if not runtime and self.registry and hasattr(self.registry, "_execution_runtime"):
             runtime = self.registry._execution_runtime
@@ -190,28 +245,6 @@ class ToolInvokerProxy:
                 )
                 return f"[Tool Error in {self.tool_name}]: {e}"
 
-        # 3. Dispatch via Registry direct tool lookup
-        if self.registry is not None and hasattr(self.registry, "get_tool"):
-            meta = self.registry.get_tool(self.tool_name)
-            if meta and getattr(meta, "func", None):
-                try:
-                    res = meta.func(**params)
-                    if inspect.isawaitable(res):
-                        res = await res
-                    return str(res) if not isinstance(res, (dict, list)) else json.dumps(res, ensure_ascii=False)
-                except Exception as e:
-                    return f"[Tool Error in {self.tool_name}]: {e}"
-
-        # 4. Dispatch via Custom Func
-        if self.custom_func is not None:
-            try:
-                res = self.custom_func(**params)
-                if inspect.isawaitable(res):
-                    res = await res
-                return str(res) if not isinstance(res, (dict, list)) else json.dumps(res, ensure_ascii=False)
-            except Exception as e:
-                return f"[Tool Error in {self.tool_name}]: {e}"
-
         return f"[Tool Error]: No execution handler registered for tool '{self.tool_name}'"
 
 
@@ -233,7 +266,7 @@ def to_sdk_function_tool(
     - Saga auto-compensation / rollback occurs on failure
     - WebSocket started / finished events are broadcasted
     """
-    clean_name = tool_name.replace("call_", "").strip()
+    clean_name = tool_name.removeprefix("call_").strip()
     tool_desc = description or ""
     tool_schema: dict[str, Any] = schema or {}
     custom_fn = func
@@ -241,7 +274,12 @@ def to_sdk_function_tool(
     tool_category = "general"
     tool_tags: list[str] = []
     if registry is not None:
-        meta = registry.get_tool(clean_name) or registry.get_tool(tool_name)
+        meta = (
+            registry.get_tool(clean_name)
+            or registry.get_tool(tool_name)
+            or registry.get_tool(f"system_{clean_name}")
+            or (registry.get_tool(clean_name[7:]) if clean_name.startswith("system_") else None)
+        )
         if meta:
             if not tool_desc:
                 tool_desc = getattr(meta, "description", "")
@@ -266,7 +304,9 @@ def to_sdk_function_tool(
         if not tool_desc:
             handler = getattr(agent, f"_tool_{clean_name}", None) or getattr(agent, f"_tool_{tool_name}", None)
             if handler and handler.__doc__:
-                tool_desc = handler.__doc__.strip().splitlines()[0]
+                lines = handler.__doc__.strip().splitlines()
+                if lines:
+                    tool_desc = lines[0]
         if hasattr(agent, "DOMAIN_LANE"):
             tool_category = getattr(agent, "DOMAIN_LANE", "general")
         elif hasattr(agent, "TAGS"):
@@ -344,24 +384,112 @@ def to_sdk_function_tool(
     )
 
 
+def _load_agent_config() -> dict[str, Any]:
+    """Loads agent configuration from configs/default.yaml."""
+    try:
+        import yaml
+        from pathlib import Path
+        cfg_path = Path(__file__).resolve().parents[3] / "configs" / "default.yaml"
+        if cfg_path.exists():
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+                if isinstance(data, dict):
+                    return data.get("agent") or data.get("agents") or {}
+    except Exception:
+        pass
+    return {}
+
+
 def to_sdk_tools(
-    tool_names: Sequence[str],
+    tool_names: Sequence[Any],
     registry: Optional[Any] = None,
     execution_runtime: Optional[Any] = None,
     agent: Optional[Any] = None,
+    config: Optional[dict[str, Any]] = None,
 ) -> list[FunctionTool]:
-    """Batch convert a collection of Makima tool names into SDK FunctionTool objects."""
+    """
+    Batch convert Makima tool names or ToolMeta objects into SDK FunctionTool objects.
+    
+    Configuration via default.yaml (or config dict):
+      - canonical_tools: list[str] (empty list [] = use ALL tools from registry directly without filtering)
+      - tool_budget_tokens: int (max estimated token budget for tool schemas, 0 = unlimited)
+    """
     tools: list[FunctionTool] = []
-    for name in tool_names:
-        if name and isinstance(name, str):
-            tools.append(
-                to_sdk_function_tool(
-                    tool_name=name,
-                    registry=registry,
-                    execution_runtime=execution_runtime,
-                    agent=agent,
-                )
-            )
+    seen: set[str] = set()
+
+    cfg = config if config is not None else _load_agent_config()
+    canonical_tools_cfg = (
+        cfg.get("canonical_tools")
+        if "canonical_tools" in cfg
+        else (cfg.get("agent") or {}).get("canonical_tools") or []
+    )
+    raw_budget = (
+        cfg.get("tool_budget_tokens")
+        if "tool_budget_tokens" in cfg
+        else (cfg.get("agent") or {}).get("tool_budget_tokens")
+    )
+    tool_budget_tokens = int(raw_budget) if raw_budget is not None else 3500
+    canonical_filter_active = bool(canonical_tools_cfg)
+    canonical_set = set(canonical_tools_cfg) if canonical_filter_active else set()
+
+    all_names = {
+        (item.get("name") if isinstance(item, dict) else getattr(item, "name", str(item)))
+        for item in tool_names
+        if item
+    }
+    accumulated_tokens = 0
+
+    for item in tool_names:
+        if isinstance(item, dict):
+            raw_name = item.get("name")
+            desc = item.get("description")
+            schema = item.get("schema")
+            func = item.get("func")
+        else:
+            raw_name = getattr(item, "name", item) if item else None
+            desc = getattr(item, "description", None)
+            schema = getattr(item, "schema", None)
+            func = getattr(item, "func", None)
+
+        if not raw_name or not isinstance(raw_name, str):
+            continue
+
+        name = raw_name
+        if name.startswith("system_") and (name[7:] in all_names or (canonical_filter_active and name[7:] in canonical_set)):
+            name = name[7:]
+
+        # If canonical_tools list is configured non-empty in default.yaml, filter strictly to it
+        if canonical_filter_active and name not in canonical_set and raw_name not in canonical_set:
+            continue
+
+        # If canonical_tools is empty, use all tools directly from registry without filtering
+        if name in seen:
+            continue
+        seen.add(name)
+
+        fn_tool = to_sdk_function_tool(
+            tool_name=name,
+            registry=registry,
+            execution_runtime=execution_runtime,
+            agent=agent,
+            description=desc,
+            schema=schema,
+            func=func,
+        )
+        fn_tool = _compress_tool_schema(fn_tool)
+
+        # Budget guard: apply on compressed schema when tool_budget_tokens > 0
+        if tool_budget_tokens > 0:
+            schema_dict = getattr(fn_tool, "params_json_schema", {}) or {}
+            desc_str = getattr(fn_tool, "description", "") or ""
+            estimated_tokens = len(json.dumps(schema_dict)) // 4 + len(desc_str) // 4 + 4
+            if (accumulated_tokens + estimated_tokens) > tool_budget_tokens and len(tools) >= 5:
+                logger.debug("[sdk_bridge] Tool budget reached (%d tokens), omitting tool '%s'", accumulated_tokens, name)
+                continue
+            accumulated_tokens += estimated_tokens
+
+        tools.append(fn_tool)
+
     return tools
 
 
@@ -530,10 +658,58 @@ class MakimaModel(Model):
                     pass
             if t_name:
                 valid_tool_map[t_name.lower()] = t_name
+                if t_name.startswith("system_"):
+                    valid_tool_map[t_name[7:].lower()] = t_name
+                else:
+                    valid_tool_map[f"system_{t_name}".lower()] = t_name
         for h in handoffs:
             h_name = getattr(h, "name", None) or getattr(h, "tool_name", None)
             if h_name:
                 valid_tool_map[h_name.lower()] = h_name
+
+        # Canonical cross-agent synonym aliases
+        _TOOL_SYNONYMS = {
+            "play_media": "media_play",
+            "play_music": "media_play",
+            "play_song": "media_play",
+            "play_video": "media_play",
+            "play_youtube": "media_play",
+            "pause_media": "media_pause",
+            "pause_music": "media_pause",
+            "resume_media": "media_resume",
+            "resume_music": "media_resume",
+            "next_track": "media_next",
+            "previous_track": "media_previous",
+            "skip_ad": "media_skip_ad",
+            "open_app": "launch_app",
+            "start_app": "launch_app",
+            "run_app": "launch_app",
+            "close_window": "manage_window",
+            "minimize_window": "manage_window",
+            "maximize_window": "manage_window",
+            "restore_window": "manage_window",
+            "focus_window": "manage_window",
+            "search_web": "web_search",
+            "google_search": "web_search",
+            "duckduckgo_search": "web_search",
+            "write_to_file": "write_file",
+            "create_file": "write_file",
+            "save_file": "write_file",
+            "read_from_file": "read_file",
+            "screenshot": "take_screenshot",
+            "capture_screen": "take_screenshot",
+            "system_info": "get_system_specs",
+            "hardware_info": "get_system_specs",
+            "cpu_usage": "get_system_stats",
+            "ram_usage": "get_system_stats",
+            "system_stats": "get_system_stats",
+            "system_specs": "get_system_specs",
+            "open_url": "browser_navigate",
+            "browse_url": "browser_navigate",
+            "navigate_browser": "browser_navigate",
+            "search_apps": "search_installed_apps",
+            "find_apps": "search_installed_apps",
+        }
 
         # PATH A: Native Tool Calls
         if raw_tool_calls:
@@ -561,29 +737,24 @@ class MakimaModel(Model):
                 raw_args = tc.get("arguments") or tc.get("function", {}).get("arguments", "{}")
                 args_str = raw_args if isinstance(raw_args, str) else json.dumps(raw_args)
 
-                resolved_fn_name = valid_tool_map.get(fn_name.lower())
+                fn_lower = fn_name.lower()
+                resolved_fn_name = valid_tool_map.get(fn_lower)
+
                 if not resolved_fn_name:
-                    lower_fn = fn_name.lower()
-                    if any(k in lower_fn for k in ("research", "web_search", "search", "fetch_url")):
-                        resolved_fn_name = valid_tool_map.get("transfer_to_researchagent")
-                    elif any(k in lower_fn for k in ("system", "stats", "process", "launch_app", "window")):
-                        resolved_fn_name = valid_tool_map.get("transfer_to_systemagent")
-                    elif any(k in lower_fn for k in ("browser", "navigate", "dom", "click", "scrape")):
-                        resolved_fn_name = valid_tool_map.get("transfer_to_browseragent")
-                    elif any(k in lower_fn for k in ("code", "python", "script", "syntax")):
-                        resolved_fn_name = valid_tool_map.get("transfer_to_codeagent")
-                    elif any(k in lower_fn for k in ("media", "music", "spotify", "youtube", "volume")):
-                        resolved_fn_name = valid_tool_map.get("transfer_to_mediaagent")
-                    elif any(k in lower_fn for k in ("automation", "timer", "cron", "schedule")):
-                        resolved_fn_name = valid_tool_map.get("transfer_to_automationagent")
-                    elif any(k in lower_fn for k in ("security", "vuln", "cve", "audit")):
-                        resolved_fn_name = valid_tool_map.get("transfer_to_securityagent")
-                    elif any(k in lower_fn for k in ("data", "csv", "chart", "pandas")):
-                        resolved_fn_name = valid_tool_map.get("transfer_to_dataanalystagent")
-                    elif any(k in lower_fn for k in ("document", "docx", "pdf", "xlsx", "pptx")):
-                        resolved_fn_name = valid_tool_map.get("transfer_to_documentagent")
-                    elif any(k in lower_fn for k in ("message", "whatsapp", "telegram", "discord", "email")):
-                        resolved_fn_name = valid_tool_map.get("transfer_to_messagingagent")
+                    canonical_synonym = _TOOL_SYNONYMS.get(fn_lower)
+                    if canonical_synonym:
+                        resolved_fn_name = valid_tool_map.get(canonical_synonym.lower())
+
+                if not resolved_fn_name:
+                    clean_name = fn_lower.removeprefix("call_").removeprefix("tool_").removeprefix("system_")
+                    resolved_fn_name = valid_tool_map.get(clean_name) or valid_tool_map.get(f"system_{clean_name}")
+
+                if not resolved_fn_name:
+                    # Substring match against valid tools
+                    for vt_lower, vt_orig in valid_tool_map.items():
+                        if vt_lower and (vt_lower in fn_lower or fn_lower in vt_lower):
+                            resolved_fn_name = vt_orig
+                            break
 
                 if not resolved_fn_name:
                     logger.warning("[sdk_bridge] Discarding invalid/unregistered tool call '%s'", fn_name)
@@ -644,28 +815,6 @@ class MakimaModel(Model):
                     )
                 else:
                     resolved_b = valid_tool_map.get(str(fn_name).lower())
-                    if not resolved_b:
-                        lower_fn = str(fn_name).lower()
-                        if any(k in lower_fn for k in ("research", "web_search", "search", "fetch_url")):
-                            resolved_b = valid_tool_map.get("transfer_to_researchagent")
-                        elif any(k in lower_fn for k in ("system", "stats", "process", "launch_app", "window")):
-                            resolved_b = valid_tool_map.get("transfer_to_systemagent")
-                        elif any(k in lower_fn for k in ("browser", "navigate", "dom", "click", "scrape")):
-                            resolved_b = valid_tool_map.get("transfer_to_browseragent")
-                        elif any(k in lower_fn for k in ("code", "python", "script", "syntax")):
-                            resolved_b = valid_tool_map.get("transfer_to_codeagent")
-                        elif any(k in lower_fn for k in ("media", "music", "spotify", "youtube", "volume")):
-                            resolved_b = valid_tool_map.get("transfer_to_mediaagent")
-                        elif any(k in lower_fn for k in ("automation", "timer", "cron", "schedule")):
-                            resolved_b = valid_tool_map.get("transfer_to_automationagent")
-                        elif any(k in lower_fn for k in ("security", "vuln", "cve", "audit")):
-                            resolved_b = valid_tool_map.get("transfer_to_securityagent")
-                        elif any(k in lower_fn for k in ("data", "csv", "chart", "pandas")):
-                            resolved_b = valid_tool_map.get("transfer_to_dataanalystagent")
-                        elif any(k in lower_fn for k in ("document", "docx", "pdf", "xlsx", "pptx")):
-                            resolved_b = valid_tool_map.get("transfer_to_documentagent")
-                        elif any(k in lower_fn for k in ("message", "whatsapp", "telegram", "discord", "email")):
-                            resolved_b = valid_tool_map.get("transfer_to_messagingagent")
 
                     if resolved_b:
                         params = parsed_json.get("params") or parsed_json.get("arguments") or parsed_json.get("parameters") or {}
@@ -897,28 +1046,6 @@ class MakimaModel(Model):
 
                     # Resolve fn_name against valid tools & handoffs
                     resolved_fn = valid_tool_map.get(fn_name.lower()) if fn_name else None
-                    if not resolved_fn and fn_name:
-                        lower_fn = fn_name.lower()
-                        if any(k in lower_fn for k in ("research", "web_search", "search", "fetch_url", "news", "headlines")):
-                            resolved_fn = valid_tool_map.get("transfer_to_researchagent")
-                        elif any(k in lower_fn for k in ("system", "stats", "process", "launch_app", "window", "desktop")):
-                            resolved_fn = valid_tool_map.get("transfer_to_systemagent")
-                        elif any(k in lower_fn for k in ("browser", "navigate", "dom", "click", "scrape", "webmail")):
-                            resolved_fn = valid_tool_map.get("transfer_to_browseragent")
-                        elif any(k in lower_fn for k in ("code", "python", "script", "syntax", "refactor")):
-                            resolved_fn = valid_tool_map.get("transfer_to_codeagent")
-                        elif any(k in lower_fn for k in ("media", "music", "spotify", "youtube", "volume", "track")):
-                            resolved_fn = valid_tool_map.get("transfer_to_mediaagent")
-                        elif any(k in lower_fn for k in ("automation", "timer", "cron", "schedule")):
-                            resolved_fn = valid_tool_map.get("transfer_to_automationagent")
-                        elif any(k in lower_fn for k in ("security", "vuln", "cve", "audit")):
-                            resolved_fn = valid_tool_map.get("transfer_to_securityagent")
-                        elif any(k in lower_fn for k in ("data", "csv", "chart", "pandas", "polars")):
-                            resolved_fn = valid_tool_map.get("transfer_to_dataanalystagent")
-                        elif any(k in lower_fn for k in ("document", "docx", "pdf", "xlsx", "pptx")):
-                            resolved_fn = valid_tool_map.get("transfer_to_documentagent")
-                        elif any(k in lower_fn for k in ("message", "whatsapp", "telegram", "discord", "email")):
-                            resolved_fn = valid_tool_map.get("transfer_to_messagingagent")
 
                     if not resolved_fn and fn_name:
                         logger.warning("[sdk_bridge.stream] Discarding invalid tool call '%s' (not in agent tools/handoffs)", fn_name)
@@ -1112,28 +1239,6 @@ class MakimaModel(Model):
                             args_s = fn_args if isinstance(fn_args, str) else json.dumps(fn_args)
                             c_id = emb_tc.get("id") or f"call_emb_{uuid.uuid4().hex[:6]}"
                             resolved_emb = valid_tool_map.get(fn_n.lower()) if fn_n else None
-                            if not resolved_emb and fn_n:
-                                lower_fn = fn_n.lower()
-                                if any(k in lower_fn for k in ("research", "web_search", "search", "fetch_url")):
-                                    resolved_emb = valid_tool_map.get("transfer_to_researchagent")
-                                elif any(k in lower_fn for k in ("system", "stats", "process", "launch_app", "window")):
-                                    resolved_emb = valid_tool_map.get("transfer_to_systemagent")
-                                elif any(k in lower_fn for k in ("browser", "navigate", "dom", "click", "scrape")):
-                                    resolved_emb = valid_tool_map.get("transfer_to_browseragent")
-                                elif any(k in lower_fn for k in ("code", "python", "script", "syntax")):
-                                    resolved_emb = valid_tool_map.get("transfer_to_codeagent")
-                                elif any(k in lower_fn for k in ("media", "music", "spotify", "youtube", "volume")):
-                                    resolved_emb = valid_tool_map.get("transfer_to_mediaagent")
-                                elif any(k in lower_fn for k in ("automation", "timer", "cron", "schedule")):
-                                    resolved_emb = valid_tool_map.get("transfer_to_automationagent")
-                                elif any(k in lower_fn for k in ("security", "vuln", "cve", "audit")):
-                                    resolved_emb = valid_tool_map.get("transfer_to_securityagent")
-                                elif any(k in lower_fn for k in ("data", "csv", "chart", "pandas")):
-                                    resolved_emb = valid_tool_map.get("transfer_to_dataanalystagent")
-                                elif any(k in lower_fn for k in ("document", "docx", "pdf", "xlsx", "pptx")):
-                                    resolved_emb = valid_tool_map.get("transfer_to_documentagent")
-                                elif any(k in lower_fn for k in ("message", "whatsapp", "telegram", "discord", "email")):
-                                    resolved_emb = valid_tool_map.get("transfer_to_messagingagent")
                             if resolved_emb:
                                 fn_n = resolved_emb
                             emb_item = ResponseFunctionToolCall(
@@ -1269,11 +1374,56 @@ DANGEROUS_COMMAND_PATTERNS = [
 ]
 
 
+INJECTION_PATTERNS = [
+    # Classic prompt injection phrases
+    "ignore all safety",
+    "ignore previous instructions",
+    "ignore all previous instructions",
+    "ignore your previous instructions",
+    "disregard your instructions",
+    "forget your instructions",
+    "override all rules",
+    "disable safety",
+    "disable all safety",
+    "bypass safety",
+    # System directive override attacks (TASK-18 exact patterns)
+    "system directive",
+    "important system directive",
+    "new system directive",
+    "urgent system directive",
+    "critical system directive",
+    # Persona / jailbreak attacks
+    "you are now",
+    "new persona",
+    "pretend you are",
+    "act as if you are",
+    "roleplay as",
+    "from now on you",
+    "from now on, you",
+    # Direct rule override
+    "all previous instructions are",
+    "your new instructions are",
+    "your true instructions",
+    "your real instructions",
+    "disregard all previous",
+    # Misc manipulation
+    "you have no restrictions",
+    "you have been freed",
+    "developer mode",
+    "jailbreak",
+    "dan mode",
+    "do anything now",
+]
+
+
 def is_dangerous_command(cmd: str) -> bool:
-    """Evaluate whether an input string contains potentially destructive OS commands."""
+    """Evaluate whether an input string contains potentially destructive OS commands or prompt injection."""
     if not cmd or not isinstance(cmd, str):
         return False
     low = cmd.lower()
+    for pattern in INJECTION_PATTERNS:
+        if pattern in low:
+            return True
     if "rmdir /s" in low or "rmdir\\s" in low:
         return True
     if "rm -rf" in low or "rm -fr" in low:
@@ -1314,261 +1464,167 @@ async def dangerous_command_guard(ctx: Any, agent: Any, input_data: Any) -> Guar
     )
 
 
-ACTION_CLAIMS = (
-    "maine file delete ki",
-    "maine file delete kar di",
-    "maine delete kar diya",
-    "maine install kar diya",
-    "maine install kiya",
-    "maine send kar diya",
-    "maine bhej diya",
-    "maine app close kar diya",
-    "i have deleted",
-    "i deleted the file",
-    "i have installed",
-    "i installed",
-    "i have sent",
-    "i sent the message",
-    "successfully deleted",
-    "successfully installed",
-    "successfully sent",
-)
-
-
-@output_guardrail
-async def fabrication_guard(ctx: Any, agent: Any, output: Any) -> GuardrailFunctionOutput:
-    """
-    OpenAI Agents SDK Output Guardrail:
-    Checks whether the agent claims an action was performed when zero tools were executed.
-    """
-    text = str(output or "").lower()
-    executed_tools: list[str] = []
-
-    if ctx is not None:
-        user_ctx = ctx if isinstance(ctx, dict) else getattr(ctx, "context", None)
-        if isinstance(user_ctx, dict):
-            executed_tools = user_ctx.get("tool_calls_executed", [])
-    if not executed_tools and agent is not None:
-        executed_tools = (
-            getattr(agent, "_tool_calls_executed", [])
-            or getattr(agent, "_tools_used_this_turn", [])
-            or []
-        )
-        if getattr(agent, "_tool_calls_made", 0) > 0:
-            executed_tools = ["tool_executed"]
-
-    # If tools were executed, action claims are legitimate
-    if executed_tools:
-        return GuardrailFunctionOutput(output_info="safe", tripwire_triggered=False)
-
-    for claim in ACTION_CLAIMS:
-        if claim in text:
-            return GuardrailFunctionOutput(
-                output_info="Response claims action without tool execution",
-                tripwire_triggered=True,
-            )
-
-    return GuardrailFunctionOutput(output_info="safe", tripwire_triggered=False)
-
-
 # =============================================================================
-# OpenAI Agents SDK Native Handoffs Architecture
+# Unified Agent Architecture (Zero Handoffs, Direct OS Tool Access)
 # =============================================================================
 
-def _make_on_handoff(agent_display_name: str, ws_broadcast: Optional[Callable] = None):
-    """Factory returning an asynchronous on_handoff callback that emits UI status toast and agent_started event."""
-    async def _on_handoff_cb(ctx: Any) -> None:
-        user_ctx = ctx if isinstance(ctx, dict) else (getattr(ctx, "context", None) or {})
-        task_id = user_ctx.get("task_id", "task_handoff")
-        broadcast = user_ctx.get("ws_broadcast") or ws_broadcast
-        notify_msg = f"{agent_display_name} ko task de raha hoon..."
-        logger.info("[sdk_handoff] Native handoff triggered to %s: %s", agent_display_name, notify_msg)
-        if broadcast:
-            try:
-                from ..ws_protocol import build_toast_notification, build_agent_started
-                await broadcast(build_agent_started(task_id, agent=agent_display_name, subtask=notify_msg))
-                await broadcast(build_toast_notification(task_id, notify_msg, level="info", duration_ms=2500))
-            except Exception as e:
-                logger.debug("[sdk_handoff] Failed to broadcast handoff event: %s", e)
-    return _on_handoff_cb
+def get_makima_system_prompt() -> str:
+    """Generates the unified Makima system prompt with dynamic OS detection."""
+    os_name = f"{platform.system()} {platform.release()}".strip()
+    return f"""You are Makima, an autonomous, highly capable AI assistant on the user's desktop computer ({os_name}).
+You interact directly with {os_name} using available tools for the operating system, filesystem, system specs, clipboard, network, and browser.
+
+Core Principles:
+1. Always execute the appropriate tool to inspect, read, verify, or act before answering.
+2. For ambiguous or implicit referents (e.g. 'is link ko fetch karo', 'ye check karo'), inspect the clipboard or environment first.
+3. If an action is requested, perform it directly using tools. Never answer with canned AI disclaimers (e.g. 'I cannot access files', 'I have no credentials').
+4. Never execute destructive wildcard deletions without explicit user confirmation of specific targets.
+5. Pointer File Resolution: If the user asks to act on a target referenced inside a file (e.g. 'file me jo likha hai wo delete karo'), you MUST call read_file first to inspect its contents before taking any action.
+6. Safety & Critical Assets: If file or asset inspection reveals warnings like 'DO NOT DELETE', 'CRITICAL', or references production databases/system files, REFUSE destructive actions and ask the user for explicit confirmation.
+7. Quoted Path Anchor: When the user specifies a directory ('scratch me', 'logs folder me') AND a quoted filename ('script.py'), always construct the direct relative path '<directory>/<filename>' (e.g. 'scratch/script.py'). Do not add 'documents/' or any prefix.
+
+Computer Use (Astra-style):
+- Use `computer_action` with action='screenshot' to see the current screen before clicking anything.
+- Use `computer_action` with action='click'/'double_click'/'right_click' + x/y pixel coordinates to click.
+- Use `computer_action` with action='type' + text to type into the focused window.
+- Use `computer_action` with action='key' + key string (e.g. 'ctrl+c', 'enter', 'alt+f4') for hotkeys.
+- Use `computer_action` with action='scroll' + direction/clicks to scroll.
+- Use `click_screen_target` with target_description (e.g. 'Play button', 'Search bar') for autonomous visual element finding and clicking via vision LLM.
+
+Web Search & Image Generation:
+- Use `web_search` for any live internet query, current events, facts, news, or topics that require up-to-date information.
+- Use `fetch_url` to read a specific URL's content directly.
+- Use `generate_image` when the user asks to create, draw, make, or generate any image, artwork, illustration, or visual. Pass a detailed English prompt.
+
+Memory & Personal Knowledge:
+- Use `memory_store` / `remember_fact` when the user asks to remember or save personal facts, preferences, contacts, or enduring instructions.
+- Use `memory_search` / `recall_memory` to recall past facts, preferences, or prior conversation context when asked.
+- Use `query_knowledge_graph` to explore relationships and connections between entities.
+- Use `memory_forget` / `forget_memory` when the user explicitly asks to remove or forget stored information."""
 
 
-def make_specialist_agents(
+MAKIMA_SYSTEM_PROMPT = get_makima_system_prompt()
+
+
+# Fields kept per-parameter: only what the LLM needs to construct a valid call.
+_SCHEMA_KEEP_PARAM_FIELDS = frozenset({"type", "enum", "items", "$ref", "const", "anyOf", "oneOf", "allOf"})
+# Top-level schema bloat fields to strip entirely (never needed by LLM at schema root).
+_SCHEMA_STRIP_TOP_FIELDS = frozenset({
+    "$schema", "$comment", "title", "examples", "example", "default",
+    "additionalProperties", "x-openai-isConsequential",
+})
+
+
+def _clean_param(param_info: dict) -> dict:
+    """Recursively strip all non-essential fields from a single parameter schema dict."""
+    keep: dict = {}
+    for key in _SCHEMA_KEEP_PARAM_FIELDS:
+        if key in param_info:
+            val = param_info[key]
+            # Recursively clean nested object schemas inside items / allOf / anyOf / oneOf
+            if key == "items" and isinstance(val, dict):
+                val = _clean_param(val)
+            elif key in ("allOf", "anyOf", "oneOf") and isinstance(val, list):
+                val = [_clean_param(v) if isinstance(v, dict) else v for v in val]
+            keep[key] = val
+    # Preserve nested properties for object-type params (e.g. action param sub-schemas)
+    if param_info.get("type") == "object" and "properties" in param_info:
+        nested_props = {}
+        for k, v in param_info["properties"].items():
+            nested_props[k] = _clean_param(v) if isinstance(v, dict) else v
+        keep["properties"] = nested_props
+        if "required" in param_info:
+            keep["required"] = param_info["required"]
+    return keep
+
+
+def _compress_tool_schema(tool: Any) -> Any:
+    """
+    Tool schema compress karo — ~75% token reduction bina functionality change kiye.
+    Removes: description (trimmed to 50 chars), title, default, examples, $schema,
+    $comment, additionalProperties, and all per-parameter descriptive metadata.
+    Preserves: type, enum, items, $ref, const, anyOf/oneOf/allOf, required (top-level),
+    nested object properties (for structured action params like computer_action).
+    """
+    # 1. Trim tool description to max 50 chars
+    if hasattr(tool, "description") and tool.description:
+        desc = tool.description.strip()
+        tool.description = desc[:50].rstrip() if len(desc) > 50 else desc
+
+    # 2. Strip schema bloat
+    if hasattr(tool, "params_json_schema") and isinstance(tool.params_json_schema, dict):
+        schema = dict(tool.params_json_schema)
+
+        # Strip top-level bloat fields
+        for field in _SCHEMA_STRIP_TOP_FIELDS:
+            schema.pop(field, None)
+
+        # Clean per-parameter entries
+        if "properties" in schema and isinstance(schema["properties"], dict):
+            cleaned_props: dict = {}
+            for param_name, param_info in schema["properties"].items():
+                cleaned_props[param_name] = _clean_param(param_info) if isinstance(param_info, dict) else param_info
+            schema["properties"] = cleaned_props
+
+        # Strip $defs bloat (only keep $defs entries that are actually $ref'd)
+        if "$defs" in schema and isinstance(schema["$defs"], dict):
+            # Collect all $ref targets used in properties
+            schema_str = json.dumps(schema.get("properties", {}))
+            used_refs = set(re.findall(r'"\$ref":\s*"#/\$defs/([^"]+)"', schema_str))
+            schema["$defs"] = {
+                k: v for k, v in schema["$defs"].items() if k in used_refs
+            }
+            if not schema["$defs"]:
+                del schema["$defs"]
+
+        tool.params_json_schema = schema
+
+    return tool
+
+
+def make_unified_agent(
     ai_handler: Any,
-    orchestrator: Optional[Any] = None,
     tool_registry: Optional[Any] = None,
     ws_broadcast: Optional[Callable] = None,
-) -> dict[str, Agent]:
+    orchestrator: Optional[Any] = None,
+    task: str = "fast_chat",
+    config: Optional[dict[str, Any]] = None,
+) -> Agent:
     """
-    Constructs the 4 specialist SDK Agents (System, Browser, Code, Research)
-    with their respective tools, instructions, handoff descriptions, and guardrails.
+    Constructs the single unified Makima Agent equipped with ALL tools directly.
+    Zero handoffs, zero specialist silos, zero pre-execution viability checks.
+    task parameter dynamically routes model selection (Groq for fast_chat, Gemini Flash for vision/long-context, OpenRouter for fallback)
+    via ai_handler Pareto cascades.
     """
     reg = tool_registry or (getattr(orchestrator, "tool_registry", None) if orchestrator else None)
+    tool_items: list[Any] = []
+    if reg is not None:
+        if hasattr(reg, "get_all"):
+            tool_items = reg.get_all()
+        elif hasattr(reg, "get_all_tool_names"):
+            tool_items = reg.get_all_tool_names()
+        elif hasattr(reg, "get_manifest"):
+            m = reg.get_manifest()
+            for t in m:
+                if isinstance(t, dict):
+                    fn = t.get("name") or (t.get("function", {}).get("name") if isinstance(t.get("function"), dict) else None)
+                    if fn:
+                        tool_items.append(fn)
 
-    def _safe_get_agent(name: str) -> Optional[Any]:
-        if not orchestrator or not hasattr(orchestrator, "get_agent"):
-            return None
-        try:
-            obj = orchestrator.get_agent(name)
-            if asyncio.iscoroutine(obj):
-                obj.close()
-                return None
-            return obj
-        except Exception:
-            return None
-
-    def _get_agent_tools(agent_name: str, agent_obj: Optional[Any]) -> list[str]:
-        if agent_obj and hasattr(agent_obj, "AGENT_TOOLS") and agent_obj.AGENT_TOOLS:
-            return list(agent_obj.AGENT_TOOLS)
-        if reg and hasattr(reg, "get_manifest_for_agent"):
-            try:
-                manifest = reg.get_manifest_for_agent(agent_name)
-                if asyncio.iscoroutine(manifest):
-                    manifest.close()
-                    return []
-                if not isinstance(manifest, list):
-                    return []
-                names = []
-                for m in manifest:
-                    if isinstance(m, dict):
-                        n = m.get("name") or (m.get("function", {}).get("name") if isinstance(m.get("function"), dict) else None)
-                        if n:
-                            names.append(n)
-                return names
-            except Exception:
-                pass
-        return []
-
-    AGENT_SPECS: dict[str, tuple[str, str, str, list[Any], list[Any]]] = {
-        "system": ("system_agent", "SystemAgent", "system_control", [dangerous_command_guard], [fabrication_guard]),
-        "browser": ("browser_agent", "BrowserAgent", "automation", [dangerous_command_guard], []),
-        "code": ("code_agent", "CodeAgent", "code", [dangerous_command_guard], [fabrication_guard]),
-        "research": ("research_agent", "ResearchAgent", "research", [], []),
-        "media": ("media_agent", "MediaAgent", "fast_chat", [], []),
-        "automation": ("automation_agent", "AutomationAgent", "automation", [dangerous_command_guard], []),
-        "devops": ("devops_agent", "DevOpsAgent", "code", [dangerous_command_guard], []),
-        "security": ("security_agent", "SecurityAgent", "code", [dangerous_command_guard], []),
-        "data_analyst": ("data_analyst_agent", "DataAnalystAgent", "research", [], []),
-        "document": ("document_agent", "DocumentAgent", "research", [], []),
-        "messaging": ("messaging_agent", "MessagingAgent", "fast_chat", [dangerous_command_guard], []),
-    }
-
-    specialists: dict[str, Agent] = {}
-    for key, (agent_id, display_name, task_type, in_guards, out_guards) in AGENT_SPECS.items():
-        obj = _safe_get_agent(agent_id)
-        tool_names = _get_agent_tools(agent_id, obj)
-        tools = to_sdk_tools(tool_names, registry=reg, agent=obj)
-        prompt = getattr(obj, "SYSTEM_PROMPT", None) or f"You are Makima's {display_name}."
-        desc = getattr(obj, "DESCRIPTION", None) or f"{display_name} for Makima."
-
-        specialists[key] = Agent(
-            name=display_name,
-            handoff_description=desc,
-            instructions=prompt,
-            tools=tools,
-            model=MakimaModel(ai_handler, task=task_type, agent_name=agent_id),
-            input_guardrails=in_guards,
-            output_guardrails=out_guards,
-        )
-
-    # Wire inter-specialist collaborative handoff mesh
-    inter_routes: dict[str, list[str]] = {
-        "code": ["devops", "system", "security"],
-        "devops": ["system", "code"],
-        "research": ["data_analyst", "document", "browser"],
-        "data_analyst": ["document", "research"],
-        "security": ["code", "devops"],
-        "automation": ["system", "browser", "messaging"],
-        "browser": ["system", "research"],
-        "system": ["browser", "automation"],
-        "messaging": ["browser", "system"],
-    }
-    for src_key, target_keys in inter_routes.items():
-        if src_key in specialists:
-            for tgt_key in target_keys:
-                if tgt_key in specialists:
-                    target_inst = specialists[tgt_key]
-                    specialists[src_key].handoffs.append(
-                        handoff(
-                            target_inst,
-                            on_handoff=_make_on_handoff(target_inst.name, ws_broadcast),
-                        )
-                    )
-
-    return specialists
-
-
-# =============================================================================
-# Phase 2 — make_router_agent: Ephemeral SDK Agent for _execute_llm_first_turn
-# =============================================================================
-
-_ROUTER_SYSTEM_PROMPT = (
-    "You are Makima — an intelligent, high-agency personal AI assistant with direct access to "
-    "system, browser, code, research, media, automation, devops, security, and document tools.\n\n"
-    "RULES:\n"
-    "1. OS/app tasks (open app, window, screenshot, volume, files) → use system tools.\n"
-    "2. Web/browser tasks (open URL, search, navigate, check online services) → use browser tools.\n"
-    "3. Webmail & Personal Services (Gmail, WhatsApp, feeds) → NEVER refuse upfront. Use browser tools to navigate or system tools to inspect/launch on desktop.\n"
-    "4. LIVE NEWS & REAL-TIME EVENTS: Current Year is 2026. Your training data is historical (2024). NEVER fabricate current news, elections, or events from internal memory. For ANY query about 'news', 'latest headlines', 'aaj ki news', 'india ki news', 'breaking news', or real-time status → MUST use research / web search tools.\n"
-    "5. Timeless Knowledge & Casual Chat (math, coding syntax, grammar, general concepts, greetings) → answer directly, no tool calls.\n"
-    "6. NEVER claim success without a tool result confirming it.\n"
-    "7. Mirror user language (Hindi/Hinglish/English). Keep responses concise.\n\n"
-    "PRESENTATION DISCIPLINE (CHATGPT & GEMINI SOTA STANDARD):\n"
-    "- Structural Hierarchy: Use clean `## Level 2 Headers` for analytical or multi-step replies.\n"
-    "- Bold Lead-In Bullets: Always use bold keywords (`- **Key**: context`) when listing items.\n"
-    "- Compact Paragraphs: 2–3 sentences max per paragraph with clean blank lines.\n"
-    "- Tables & Code: Markdown tables for comparisons; explicit language tags on all code blocks."
-)
-
-
-def make_router_agent(
-    ai_handler: Any,
-    tool_specs: list[dict[str, Any]],
-    orchestrator: Optional[Any] = None,
-    query: str = "",
-) -> "Agent":
-    """
-    Ephemeral SDK Router Agent pre-loaded with top-N filtered tools for a specific query.
-    Used as Phase-2 fallback when triage handoff returns empty output.
-    """
-    reg = getattr(orchestrator, "tool_registry", None) if orchestrator else None
-    sdk_tools: list[FunctionTool] = []
-
-    for spec in tool_specs:
-        try:
-            fn_block = spec.get("function", {})
-            tool_name = str(fn_block.get("name", "")).strip()
-            description = str(fn_block.get("description", "")).strip()
-            params_schema = fn_block.get("parameters", {"type": "object", "properties": {}})
-            if not tool_name:
-                continue
-
-            # Resolve agent instance for context-aware ToolInvokerProxy
-            agent_obj = None
-            if orchestrator and hasattr(orchestrator, "agents"):
-                agents_map = getattr(orchestrator, "agents", {}) or {}
-                clean = tool_name.replace("call_", "").replace("_agent", "")
-                for ck in (tool_name, f"{clean}_agent", clean):
-                    inst = agents_map.get(ck)
-                    if inst is not None:
-                        agent_obj = getattr(inst, "agent", inst)
-                        break
-
-            sdk_tools.append(to_sdk_function_tool(
-                tool_name=tool_name,
-                registry=reg,
-                agent=agent_obj,
-                description=description,
-                schema=params_schema,
-            ))
-        except Exception as _te:
-            logger.debug("[make_router_agent] Tool conversion failed for spec %s: %s", spec, _te)
+    agent_cfg = config if config is not None else getattr(orchestrator, "config", None)
+    sdk_tools = to_sdk_tools(tool_items, registry=reg, config=agent_cfg)
+    sdk_tools = [_compress_tool_schema(t) for t in sdk_tools]
+    model = MakimaModel(ai_handler, task=task, agent_name="makima")
+    agent_hooks = MakimaAgentHooks(ws_broadcast)
 
     return Agent(
-        name="MakimaRouter",
-        instructions=_ROUTER_SYSTEM_PROMPT,
+        name="Makima",
+        instructions=get_makima_system_prompt(),
         tools=sdk_tools,
-        model=MakimaModel(ai_handler, task="fast_chat"),
+        model=model,
+        hooks=agent_hooks,
+        input_guardrails=[dangerous_command_guard],
+        handoffs=[],
     )
 
 
@@ -1578,111 +1634,71 @@ def make_triage_agent(
     ws_broadcast: Optional[Callable] = None,
     tool_registry: Optional[Any] = None,
     personality: Optional[Any] = None,
+    task: str = "fast_chat",
+    config: Optional[dict[str, Any]] = None,
 ) -> Agent:
-    """
-    Constructs Makima Triage Agent equipped with native handoffs to specialist agents,
-    centralized input guardrails, and conversational autonomy.
-    """
-    specialists = make_specialist_agents(ai_handler, orchestrator=orchestrator, tool_registry=tool_registry, ws_broadcast=ws_broadcast)
-
-    handoffs = [
-        handoff(
-            agent_inst,
-            on_handoff=_make_on_handoff(agent_inst.name, ws_broadcast),
-        )
-        for agent_inst in specialists.values()
-    ]
-
-    base_persona = ""
-    if personality and hasattr(personality, "build_system_prompt"):
-        try:
-            base_persona = personality.build_system_prompt()
-        except Exception:
-            pass
-    elif orchestrator and hasattr(orchestrator, "personality"):
-        try:
-            base_persona = orchestrator.personality.build_system_prompt()
-        except Exception:
-            pass
-
-    if not base_persona:
-        from ..personality import MAKIMA_CORE_IDENTITY
-        base_persona = MAKIMA_CORE_IDENTITY
-
-    delegation_block = """
-## Specialist Delegations:
-- For specialized tasks, delegate to the appropriate specialist agent via native handoff:
-  * MediaAgent: Music, songs, YouTube/Spotify playback, audio, play/pause
-  * BrowserAgent: Web browsing, web search, webmail/Gmail/account checking, web scraping, form filling
-  * SystemAgent: Local OS management, launching desktop applications, opening URLs in desktop browser, window inspection/focus, hardware stats, screenshots
-  * CodeAgent: Code generation, syntax debugging, file editing, scripts, refactoring
-  * ResearchAgent: Live internet web search, breaking news, latest headlines, current real-world events, sports, weather, market intelligence, multi-source investigation
-  * AutomationAgent: Scheduled routines, timers, recurring cron tasks, UI macros
-  * DevOpsAgent: Docker container management, build diagnostics, git workflows, CI/CD
-  * SecurityAgent: Vulnerability scans, secret detection, code security audits
-  * DataAnalystAgent: CSV/JSON analysis, statistical metrics, trend analysis, chart generation
-  * DocumentAgent: Generating and editing Excel spreadsheets (.xlsx), Word docs (.docx), PDFs, and PowerPoint slides (.pptx)
-  * MessagingAgent: Reading/drafting/sending messages via WhatsApp, Telegram, Discord, and Email
-
-## Pre-Routing Thinking & Tool Audit (MANDATORY):
-Before deciding whether to hand off or answer directly, perform concise reasoning in a <thinking>...</thinking> block:
-1. Intent: What is the user's primary goal?
-2. Specialist & Tool Audit: Examine which specialist agent has the exact capabilities and tools needed.
-3. Action vs Chat: If the request touches physical desktop apps, files, online accounts, media, web services, or data, ALWAYS hand off to the specialist. Never attempt to fulfill physical or service actions via conversational text alone.
-4. LIVE NEWS & REAL-TIME EVENTS MANDATE:
-   - Current Year: 2026.
-   - Your internal training data cutoff is historical (2024). You DO NOT know current real-world events or news from memory.
-   - For ANY query about 'news', 'latest news', 'headlines', 'aaj ki news', 'india ki news', 'breaking news', 'today', 'weather', or current events:
-     * NEVER answer from memory or recall 2024 events!
-     * You MUST immediately hand off to ResearchAgent to search live web data!
-5. Fallback Strategy: If a service is not pre-authenticated, delegate to SystemAgent or BrowserAgent to inspect or launch the service on the user's desktop.
-
-## Local Desktop Agency & Multi-Path Problem Solving:
-- NEVER refuse actionable requests with canned AI disclaimers (e.g., "Main directly tumhare Gmail/account tak access nahi kar sakti", "I have no login credentials").
-- If the user asks about an account, web service, or email (e.g., "gmail pe koi mail aaya kya", "whatsapp check karo"):
-  * Hand off to BrowserAgent to inspect the active session or navigate to the URL, OR
-  * Hand off to SystemAgent to check if the window is open or launch the URL directly in the user's desktop browser.
-- Direct answers:
-  * Pure conversational queries (greetings, timeless concepts, math, coding syntax, casual banter, philosophy) khud directly answer karo — kisi agent ko handoff mat karo. NEVER answer current news or real-time events without live search.
-""".strip()
-
-    triage_instructions = f"{base_persona}\n\n{delegation_block}".strip()
-
-    triage_agent = Agent(
-        name="Makima",
-        instructions=triage_instructions,
-        handoffs=handoffs,
-        model=MakimaModel(ai_handler, task="fast_chat", agent_name="triage_agent"),
-        input_guardrails=[dangerous_command_guard],
+    """Backward compatibility alias: routes directly to make_unified_agent."""
+    return make_unified_agent(
+        ai_handler,
+        tool_registry=tool_registry,
+        ws_broadcast=ws_broadcast,
+        orchestrator=orchestrator,
+        task=task,
+        config=config,
     )
-
-    # Allow all specialists to hand back to Makima
-    back_to_makima = handoff(
-        triage_agent,
-        tool_name_override="transfer_back_to_makima",
-        tool_description_override="Transfer back to Makima to deliver the final response to the user.",
-        on_handoff=_make_on_handoff("Makima", ws_broadcast),
-    )
-    for specialist in specialists.values():
-        specialist.handoffs.append(back_to_makima)
-
-    return triage_agent
 
 
 # =============================================================================
-# SOTA Official RunHooks Telemetry Bridge
+# SOTA Official Hooks Telemetry Bridges
 # =============================================================================
+
+class MakimaAgentHooks(AgentHooks):
+    """Agent-scoped hooks passed to Agent(hooks=...)."""
+    def __init__(self, ws_broadcast: Optional[Callable] = None) -> None:
+        self.ws_broadcast = ws_broadcast
+
+
+def _extract_call_id(context: Any, call: Any = None) -> str:
+    """Extract call_id safely across all OpenAI Agents SDK context & call variants."""
+    if hasattr(context, "_makima_call_id") and getattr(context, "_makima_call_id"):
+        return str(getattr(context, "_makima_call_id"))
+    if hasattr(context, "tool_call") and context.tool_call:
+        tc = context.tool_call
+        cid = getattr(tc, "call_id", None) or getattr(tc, "id", None)
+        if cid:
+            return str(cid)
+    if hasattr(context, "tool_call_id") and context.tool_call_id:
+        return str(context.tool_call_id)
+    if call is not None:
+        cid = getattr(call, "call_id", None) or getattr(call, "id", None)
+        if cid:
+            return str(cid)
+    if isinstance(context, dict):
+        cid = context.get("_makima_call_id") or context.get("call_id") or context.get("id") or context.get("tool_call_id")
+        if cid:
+            return str(cid)
+    return ""
+
 
 class MakimaRunHooks(RunHooks):
     """
     Official OpenAI Agents SDK RunHooks implementation for Makima.
+    Passed to Runner.run_streamed(hooks=...).
     Broadcasts real-time execution telemetry directly to Makima's WebSocket event bus.
+    Hardened for concurrent / parallel tool calls with call_id correlation and thread safety.
     """
+    # Max times the same tool+args fingerprint can be called consecutively before loop detection fires.
+    MAX_CONSECUTIVE_IDENTICAL_CALLS: int = 3
+
     def __init__(self, ws_broadcast: Optional[Callable] = None, task_id: str = "") -> None:
         self.ws_broadcast = ws_broadcast
         self.task_id = task_id
         self.turn_count: int = 0
         self.completed_steps: list[dict[str, Any]] = []
+        # Parallel execution & loop detection tracking
+        self._lock = asyncio.Lock()
+        self._active_calls: dict[str, dict[str, Any]] = {}
+        self._recent_fingerprints: list[str] = []
 
     async def on_agent_start(self, context: Any, agent: Any) -> None:
         if self.ws_broadcast and self.task_id:
@@ -1723,38 +1739,159 @@ class MakimaRunHooks(RunHooks):
                 logger.debug("[MakimaRunHooks] on_handoff error: %s", e)
 
     async def on_tool_start(self, context: Any, agent: Any, tool: Any, call: Any = None) -> None:
+        tool_name = getattr(tool, "name", None) or getattr(context, "tool_name", None) or str(tool)
+        call_id = _extract_call_id(context, call) or f"call_{uuid.uuid4().hex[:8]}"
+        try:
+            setattr(context, "_makima_call_id", call_id)
+        except Exception:
+            pass
+        if isinstance(context, dict) and not context.get("_makima_call_id"):
+            context["_makima_call_id"] = call_id
+
+        # --- Extract call arguments from ToolContext or call object ---
+        args_dict: dict[str, Any] = {}
+        raw_args = None
+        if hasattr(context, "tool_arguments") and context.tool_arguments is not None:
+            raw_args = context.tool_arguments
+        elif hasattr(context, "tool_call") and context.tool_call and hasattr(context.tool_call, "arguments"):
+            raw_args = context.tool_call.arguments
+        elif call and hasattr(call, "arguments"):
+            raw_args = call.arguments
+
+        if isinstance(raw_args, dict):
+            args_dict = raw_args
+        elif isinstance(raw_args, str):
+            try:
+                args_dict = json.loads(raw_args)
+            except Exception:
+                args_dict = {"raw": raw_args}
+
+        # --- Required-argument validation (warn loudly; SDK handles the actual error) ---
+        required: list[str] = []
+        try:
+            schema = getattr(tool, "params_json_schema", None) or getattr(tool, "schema", None) or {}
+            required = schema.get("required", [])
+        except Exception:
+            pass
+        missing = [r for r in required if r not in args_dict]
+        if missing:
+            logger.warning(
+                "[MakimaRunHooks] Tool '%s' called with missing required args: %s — model may be stuck.",
+                tool_name, missing,
+            )
+
+        # --- Parallel-safe loop detection ---
+        args_fingerprint = f"{tool_name}::{json.dumps(args_dict, sort_keys=True, default=str)}" if args_dict else f"{tool_name}::empty"
+
+        async with self._lock:
+            self._active_calls[call_id] = {
+                "tool": tool_name,
+                "agent": getattr(agent, "name", "agent"),
+                "start_time": time.time(),
+                "fingerprint": args_fingerprint,
+                "args": args_dict,
+            }
+            # Count consecutive identical fingerprints in recent history
+            consecutive_count = 1
+            for prev_fp in reversed(self._recent_fingerprints):
+                if prev_fp == args_fingerprint:
+                    consecutive_count += 1
+                else:
+                    break
+
+            threshold = 5 if not args_dict else self.MAX_CONSECUTIVE_IDENTICAL_CALLS
+            if consecutive_count >= threshold:
+                logger.warning(
+                    "[MakimaRunHooks] Loop detected: tool '%s' called %d times consecutively with args %s — aborting run.",
+                    tool_name, consecutive_count, args_dict,
+                )
+                if self.ws_broadcast and self.task_id:
+                    try:
+                        from ..ws_protocol import build_toast_notification
+                        await self.ws_broadcast(build_toast_notification(
+                            self.task_id,
+                            f"⚠️ Execution loop detected on '{tool_name}' — task aborted.",
+                            level="error",
+                            duration_ms=6000,
+                        ))
+                    except Exception:
+                        pass
+                raise RuntimeError(
+                    f"Loop guard: '{tool_name}' called {consecutive_count}x with identical args."
+                )
+
         if self.ws_broadcast and self.task_id:
             try:
-                from ..ws_protocol import WSMessage, ServerMessageType, PROTOCOL_VERSION
-                tool_name = getattr(tool, "name", str(tool))
-                await self.ws_broadcast(WSMessage(
-                    v=PROTOCOL_VERSION,
-                    type=ServerMessageType.TOOL_CALL_STARTED,
+                from ..ws_protocol import build_tool_call_started
+                msg = build_tool_call_started(
                     task_id=self.task_id,
-                    payload={"tool": tool_name, "agent": getattr(agent, "name", "agent"), "timestamp": time.time()},
-                ))
+                    tool_name=tool_name,
+                    parameters=args_dict,
+                    agent=getattr(agent, "name", "agent"),
+                    call_id=call_id,
+                )
+                await self.ws_broadcast(msg)
+            except RuntimeError:
+                raise
             except Exception as e:
                 logger.debug("[MakimaRunHooks] on_tool_start error: %s", e)
 
     async def on_tool_end(self, context: Any, agent: Any, tool: Any, result: Any = None) -> None:
-        self.turn_count += 1
+        call_id = _extract_call_id(context)
         tool_name = getattr(tool, "name", str(tool))
-        self.completed_steps.append({
-            "step": self.turn_count,
-            "tool": tool_name,
-            "agent": getattr(agent, "name", "agent"),
-            "result_summary": str(result)[:300] if result else "",
-            "ts": time.time(),
-        })
+        start_time = time.time()
+        agent_name = getattr(agent, "name", "agent")
+        fingerprint = f"{tool_name}::empty"
+
+        async with self._lock:
+            self.turn_count += 1
+            call_info = self._active_calls.pop(call_id, None) if call_id else None
+            if not call_info and len(self._active_calls) == 1:
+                only_cid, call_info = self._active_calls.popitem()
+                if not call_id:
+                    call_id = only_cid
+            if call_info:
+                start_time = call_info.get("start_time", start_time)
+                agent_name = call_info.get("agent", agent_name)
+                fingerprint = call_info.get("fingerprint", fingerprint)
+
+            self._recent_fingerprints.append(fingerprint)
+            if len(self._recent_fingerprints) > 40:
+                self._recent_fingerprints.pop(0)
+
+            duration_ms = max(0.0, (time.time() - start_time) * 1000.0)
+            self.completed_steps.append({
+                "step": self.turn_count,
+                "tool": tool_name,
+                "agent": agent_name,
+                "call_id": call_id,
+                "duration_ms": round(duration_ms, 2),
+                "result_summary": str(result)[:300] if result else "",
+                "ts": time.time(),
+            })
+
         if self.ws_broadcast and self.task_id:
             try:
-                from ..ws_protocol import WSMessage, ServerMessageType, PROTOCOL_VERSION
-                await self.ws_broadcast(WSMessage(
-                    v=PROTOCOL_VERSION,
-                    type=ServerMessageType.TOOL_CALL_FINISHED,
+                from ..ws_protocol import build_tool_call_finished
+                is_ok = not str(result).startswith("[Tool Error")
+                msg = build_tool_call_finished(
                     task_id=self.task_id,
-                    payload={"tool": tool_name, "agent": getattr(agent, "name", "agent"), "timestamp": time.time()},
-                ))
+                    tool_name=tool_name,
+                    result=result,
+                    duration_ms=duration_ms,
+                    is_success=is_ok,
+                    agent=agent_name,
+                    call_id=call_id,
+                )
+                await self.ws_broadcast(msg)
+                await self.ws_broadcast({
+                    "type": "tool_completed",
+                    "task_id": self.task_id,
+                    "tool": tool_name,
+                    "call_id": call_id,
+                    "duration_ms": round(duration_ms, 2),
+                    "result": str(result)[:300] if result else "",
+                })
             except Exception as e:
                 logger.debug("[MakimaRunHooks] on_tool_end error: %s", e)
 

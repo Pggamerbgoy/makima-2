@@ -27,112 +27,7 @@ from .tools.types import Tool, ToolCapability, ToolContext, ToolDefinition, Tool
 logger = logging.getLogger("makima.tool_registry")
 
 
-def is_tool_enabled_for_query(
-    tool_name: str,
-    query: str,
-    category: str = "general",
-    task_tags: Optional[list[str]] = None,
-) -> bool:
-    """
-    Dynamic category & intent-based tool enabling predicate (OpenAI Agents SDK pattern).
-    
-    Rules:
-      - Media tools: is_enabled only when query contains 'music/gaana/volume/song/play/spotify/youtube'
-      - Browser tools: is_enabled only when query contains 'browser/open/search/website/url'
-      - System tools: is_enabled when query contains 'open/kholo/launch/app/window/screenshot'
-      - Code tools: is_enabled when query contains 'code/python/script/bug/fix'
-      - MCP tools: filtered by domain (media MCP requires media keywords, etc.)
-    """
-    if not query:
-        return True
 
-    q_lower = query.lower()
-    t_name = tool_name.lower().replace("call_", "").strip()
-    tags = [t.lower() for t in (task_tags or [])]
-    cat = (category or "general").lower()
-
-    # If the user explicitly mentions the tool name, always enable it
-    if t_name in q_lower or t_name.replace("_", " ") in q_lower:
-        return True
-
-    # 1. System / Window / Filesystem Tools Filter
-    is_system_tool = (
-        cat in ("system", "window", "filesystem")
-        or t_name.startswith("system_")
-        or any(tag in ("system", "window", "file", "process", "power") for tag in tags)
-    )
-    if is_system_tool:
-        system_keywords = (
-            "open", "launch", "kholo", "chalao", "start", "app", "window", "close",
-            "band", "kill", "process", "screenshot", "screen", "clipboard", "clean",
-            "temp", "power", "restart", "shutdown", "sleep", "specs", "ram", "cpu",
-            "file", "folder", "copy", "move", "directory", "disk", "stats", "hardware",
-            "system", "memory", "computer", "pc", "laptop", "specifications", "status",
-            "performance", "battery", "usage", "load", "task", "monitor"
-        )
-        return any(kw in q_lower for kw in system_keywords)
-
-    # 2. Media Tools Filter (music / gaana / volume)
-    is_media_tool = (
-        cat == "media"
-        or t_name.startswith("media_")
-        or t_name in ("set_volume", "get_volume", "mute", "unmute")
-        or (cat not in ("system", "window", "filesystem", "code", "devops", "browser")
-            and any(tag in ("media", "music", "spotify", "youtube", "audio") for tag in tags))
-    )
-    if is_media_tool:
-        media_keywords = (
-            "music", "gaana", "gaane", "gana", "volume", "song", "songs", "play", "pause", "resume",
-            "track", "spotify", "youtube", "audio", "sound", "seek", "mute", "unmute",
-            "bja", "bjao", "bajao", "sunao", "sunwao", "chalao", "awaz", "awaaz", "next", "previous",
-            "playlist", "listen", "video", "yt", "singer", "artist"
-        )
-        return any(kw in q_lower for kw in media_keywords)
-
-    # 3. Browser Tools Filter (browser / open / search)
-    is_browser_tool = (
-        cat == "browser"
-        or t_name.startswith("browser_")
-        or any(tag in ("browser", "web", "scrape", "search") for tag in tags)
-    )
-    if is_browser_tool:
-        browser_keywords = (
-            "browser", "open", "search", "url", "website", "site", "web", "scrape",
-            "click", "google", "navigate", "chrome", "firefox", "edge", "brave", "kholo",
-            "dhoondo", "visit", "browse", "page", "youtube", "spotify", "music", "song",
-            "songs", "gaana", "gaane", "gana", "play", "bja", "bjao", "bajao", "sunao",
-            "video", "audio", "listen", "chalao"
-        )
-        return any(kw in q_lower for kw in browser_keywords)
-
-    # 4. Code / DevOps Tools Filter
-    is_code_tool = (
-        cat in ("code", "devops")
-        or any(tag in ("code", "dev", "git", "bash", "terminal") for tag in tags)
-    )
-    if is_code_tool:
-        code_keywords = (
-            "code", "python", "script", "file", "write", "bug", "refactor",
-            "fix", "test", "git", "bash", "run", "terminal", "docker", "likho"
-        )
-        return any(kw in q_lower for kw in code_keywords)
-
-    # 5. MCP Tools Filter
-    if cat == "mcp" or t_name.startswith("mcp_"):
-        # If it's a media-related MCP tool, apply media keywords
-        if any(tag in ("media", "music", "audio") for tag in tags) or "media" in t_name or "spotify" in t_name or "youtube" in t_name:
-            media_keywords = ("music", "gaana", "gana", "volume", "song", "play", "spotify", "youtube", "sound", "audio")
-            return any(kw in q_lower for kw in media_keywords)
-        # If it's a browser-related MCP tool, apply browser keywords
-        if any(tag in ("browser", "web") for tag in tags) or "browser" in t_name or "puppeteer" in t_name:
-            browser_keywords = ("browser", "open", "search", "url", "website", "site", "web")
-            return any(kw in q_lower for kw in browser_keywords)
-        # Otherwise enable if any tag or name token appears in query
-        name_tokens = t_name.replace("mcp_", "").split("_")
-        return any(tok in q_lower for tok in name_tokens if len(tok) > 3)
-
-    # General tools: enabled if tool name tokens match query
-    return any(tok in q_lower for tok in t_name.split("_") if len(tok) > 2)
 
 
 _BUILTIN_TOOL_CAPABILITIES: dict[str, Any] = {
@@ -178,6 +73,30 @@ _BUILTIN_TOOL_CAPABILITIES: dict[str, Any] = {
     "read_file": ToolCapability(
         domain="filesystem", operation="read", target_type="file",
         state_transition=("any", "any"), polarity="neutral"
+    ),
+    "delete_file": ToolCapability(
+        domain="filesystem", operation="delete", target_type="file",
+        state_transition=("exists", "deleted"), polarity="negative"
+    ),
+    "list_directory": ToolCapability(
+        domain="filesystem", operation="list", target_type="directory",
+        state_transition=("any", "any"), polarity="neutral"
+    ),
+    "search_files": ToolCapability(
+        domain="filesystem", operation="search", target_type="files",
+        state_transition=("any", "any"), polarity="neutral"
+    ),
+    "apply_patch": ToolCapability(
+        domain="filesystem", operation="patch", target_type="file",
+        state_transition=("unpatched", "patched"), polarity="affirmative"
+    ),
+    "mouse_scroll": ToolCapability(
+        domain="system", operation="scroll", target_type="screen",
+        state_transition=("any", "scrolled"), polarity="neutral"
+    ),
+    "http_request": ToolCapability(
+        domain="network", operation="request", target_type="api",
+        state_transition=("idle", "requested"), polarity="neutral"
     ),
     "set_volume": ToolCapability(
         domain="system", operation="set_volume", target_type="volume",
@@ -231,6 +150,11 @@ _BUILTIN_CRITICAL_PARAMETERS: dict[str, tuple[str, ...]] = {
     "create_pdf": ("md_filepath", "markdown_content", "html_content"),
     "write_file": ("path", "content"),
     "delete_file": ("path",),
+    "list_directory": ("path",),
+    "search_files": ("path", "pattern"),
+    "apply_patch": ("path", "search_content", "replacement_content"),
+    "http_request": ("url", "method"),
+    "mouse_scroll": ("clicks", "direction"),
     "move_file": ("src", "dst"),
     "copy_file": ("src", "dst"),
     "kill_process": ("pid", "process_name"),
@@ -240,7 +164,7 @@ _BUILTIN_CRITICAL_PARAMETERS: dict[str, tuple[str, ...]] = {
     "send_email": ("to", "body"),
     "play_media": ("query",),
     "set_volume": ("level",),
-    "launch_app": ("app_name",),
+    "launch_app": ("app_name", "app_path"),
 }
 
 
@@ -317,6 +241,11 @@ class ToolRegistry:
         self._manifest_cache: dict[str, list[dict]] = {}
         self._execution_runtime: Any = None
         self._unsafe_locks: dict[str, asyncio.Lock] = {}
+
+    @property
+    def tools(self) -> dict[str, ToolMeta]:
+        """Public accessor for registered tools dictionary."""
+        return self._tools
 
     def set_execution_runtime(self, runtime: Any) -> None:
         """Set the canonical ExecutionRuntime reference for tool dispatch."""
@@ -594,9 +523,15 @@ class ToolRegistry:
         """Return a mapping of all registered tool names to their metadata."""
         return dict(self._tools)
 
-    def get_all_tool_names(self) -> list[str]:
-        """Return a list of all registered tool names."""
+    def get_all_tool_names(self, enabled_only: bool = False) -> list[str]:
+        """Return a list of all registered tool names (or only enabled ones)."""
+        if enabled_only:
+            return [t.name for t in self._tools.values() if t.enabled]
         return list(self._tools.keys())
+
+    def get_enabled_tool_names(self) -> list[str]:
+        """Return a list of currently enabled tool names."""
+        return [t.name for t in self._tools.values() if t.enabled]
 
     def get_tools_for_agent(self, agent_name: str) -> list[ToolMeta]:
         norm_name = agent_name.replace("_agent", "")
@@ -626,29 +561,10 @@ class ToolRegistry:
         """Agent-filtered manifest."""
         return self._build_manifest(agent_name)
 
-    def get_tools_dynamic(self, query: str, max_tools: int = 25) -> list[ToolMeta]:
-        """
-        Dynamically filters registered tools for a given user query using category
-        intent rules (OpenAI Agents SDK pattern):
-          - Media tools: is_enabled when query contains 'music/gaana/volume/song/play'
-          - Browser tools: is_enabled when query contains 'browser/open/search/website/url'
-          - System tools: is_enabled when query contains 'open/app/window/screenshot'
-          - Code tools: is_enabled when query contains 'code/python/script'
-          - If query mentions tool name directly: always enabled
-        """
-        if not query:
-            return []
 
-        enabled_tools: list[ToolMeta] = []
-        for t in self._tools.values():
-            if not t.enabled:
-                continue
-            if is_tool_enabled_for_query(t.name, query, category=t.category, task_tags=t.task_tags):
-                enabled_tools.append(t)
-
-        # Sort by priority (lower number = higher priority)
-        enabled_tools.sort(key=lambda t: t.priority)
-        return enabled_tools[:max_tools]
+    def get_all(self) -> list[ToolMeta]:
+        """Return all registered tools sorted by priority (1=highest) so token-budget guards always pick core tools first."""
+        return sorted([t for t in self._tools.values() if t.enabled], key=lambda t: getattr(t, "priority", 5))
 
     @classmethod
     def coerce_value(cls, val: Any, expected_type: str) -> Any:
@@ -906,6 +822,9 @@ class ToolRegistry:
         calls: list[dict[str, Any]],
         timeout: float = 30.0,
     ) -> list[dict[str, Any]]:
+        if self._execution_runtime and hasattr(self._execution_runtime, "execute_tools_parallel"):
+            return await self._execution_runtime.execute_tools_parallel(calls)
+
         async def _run_one(call: dict) -> dict:
             name = call.get("name", "")
             params = call.get("params", {})

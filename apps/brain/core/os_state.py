@@ -2,9 +2,7 @@
 Makima v8.0 — OSWorldState
 Singleton cache of live OS state: process list, open windows, CPU trend, last actions.
 TTL-based refresh prevents redundant OS scans on every tool call.
-Imported by SystemAgent, MemoryAgent, and any future agent that needs OS context.
-Research basis: OSWorld/WindowsAgentArena (ICML 2024) — agent failures traced
-to missing world-state context; StateAct (arXiv 2410.02810) — TTL caching pattern.
+Relocated to apps/brain/core/os_state.py to decouple from legacy agents directory.
 """
 from __future__ import annotations
 
@@ -54,11 +52,16 @@ class OSWorldState:
         self._window_cache: list[str] = []
         self._window_cache_ts: float = 0.0
 
+        self._window_metadata_cache: list[dict[str, Any]] = []
+        self._window_metadata_cache_ts: float = 0.0
+        self.WINDOW_METADATA_TTL: float = 1.0  # 1.0s TTL cache for rich window scan
+
         self._cpu_trend: deque[float] = deque(maxlen=self.MAX_CPU_SAMPLES)
         self._last_actions: deque[str] = deque(maxlen=self.MAX_ACTIONS)
         self._window_transitions: deque[tuple[float, str]] = deque(maxlen=120)
         self._last_fg_window: str = ""
         self._last_fg_time: float = time.monotonic()
+        self._clipboard_history: deque[dict[str, Any]] = deque(maxlen=5)
         self._lock = asyncio.Lock()
 
     # ── Process cache ─────────────────────────────────────────────────────────
@@ -173,10 +176,97 @@ class OSWorldState:
         """Return count of open visible windows synchronously."""
         return len(self.get_open_windows_sync())
 
+    async def get_open_window_metadata(
+        self, force: bool = False, active_only: bool = True
+    ) -> list[dict[str, Any]]:
+        """Return cached rich window list (HWND, title, pid, process_name); refresh if TTL expired."""
+        now = time.monotonic()
+        if (
+            not force
+            and (now - self._window_metadata_cache_ts) < self.WINDOW_METADATA_TTL
+            and self._window_metadata_cache
+        ):
+            return [dict(w) for w in self._window_metadata_cache]
+
+        async with self._lock:
+            if (
+                not force
+                and (time.monotonic() - self._window_metadata_cache_ts) < self.WINDOW_METADATA_TTL
+                and self._window_metadata_cache
+            ):
+                return [dict(w) for w in self._window_metadata_cache]
+
+            if not win32gui:
+                self._window_metadata_cache = []
+                return []
+
+            def _scan() -> list[dict[str, Any]]:
+                try:
+                    import win32con
+                    import win32process
+                except ImportError:
+                    win32con = win32process = None
+
+                results: list[dict[str, Any]] = []
+                fg_hwnd = win32gui.GetForegroundWindow() if win32gui else 0
+
+                def _enum_cb(hwnd: int, _: Any) -> bool:
+                    try:
+                        if not win32gui.IsWindowVisible(hwnd):
+                            return True
+                        title = win32gui.GetWindowText(hwnd).strip()
+                        if not title:
+                            return True
+
+                        if active_only:
+                            if title in ("Program Manager", "Default IME", "MSCTFIME UI"):
+                                return True
+                            if win32con and hasattr(win32con, "WS_EX_TOOLWINDOW") and isinstance(win32con.WS_EX_TOOLWINDOW, int):
+                                style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+                                if isinstance(style, int) and (style & win32con.WS_EX_TOOLWINDOW):
+                                    return True
+
+                        p_name = ""
+                        pid = 0
+                        if win32process:
+                            try:
+                                _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                                if psutil and pid > 0:
+                                    try:
+                                        p_name = psutil.Process(pid).name()
+                                    except Exception:
+                                        p_name = ""
+                            except Exception:
+                                pass
+
+                        is_active = (hwnd == fg_hwnd)
+                        results.append({
+                            "hwnd": hwnd,
+                            "title": title,
+                            "process_name": p_name,
+                            "pid": pid,
+                            "is_active": is_active,
+                        })
+                    except Exception:
+                        pass
+                    return True
+
+                try:
+                    win32gui.EnumWindows(_enum_cb, None)
+                except Exception as e:
+                    logger.debug("[os_state] EnumWindows scan error: %s", e)
+                return results
+
+            self._window_metadata_cache = await asyncio.to_thread(_scan)
+            self._window_metadata_cache_ts = time.monotonic()
+            return [dict(w) for w in self._window_metadata_cache]
+
     def invalidate_windows(self) -> None:
-        """Force next get_open_windows() to re-scan. Call after manage_window."""
+        """Force next get_open_windows() to re-scan. Call after manage_window or launch_app."""
         self._window_cache = []
         self._window_cache_ts = 0.0
+        self._window_metadata_cache = []
+        self._window_metadata_cache_ts = 0.0
 
     def invalidate_window_cache(self) -> None:
         """Alias for invalidate_windows."""
@@ -290,7 +380,6 @@ class OSWorldState:
         """Probe live Windows Core Audio sessions to find the process currently playing audio."""
         def _audio_probe() -> Optional[str]:
             try:
-                # Use pycaw / AudioUtilities for IAudioSessionManager2
                 from pycaw.pycaw import AudioUtilities
                 sessions = AudioUtilities.GetAllSessions()
                 for session in sessions:
@@ -301,7 +390,6 @@ class OSWorldState:
             except Exception:
                 pass
 
-            # Fallback heuristic: check active media process names via psutil
             if psutil:
                 for proc in psutil.process_iter(['name']):
                     try:
@@ -380,6 +468,68 @@ class OSWorldState:
             return pct
         except Exception:
             return None
+
+    # ── Clipboard history & proactive state ───────────────────────────────────
+
+    def record_clipboard(self, text: str, source: str = "user") -> None:
+        """Record non-empty copied text into rolling history buffer."""
+        if not text or not isinstance(text, str):
+            return
+        clean = text.strip()
+        if not clean or clean == "[Clipboard is empty]" or clean.startswith("Failed to") or clean.startswith("Error"):
+            return
+        if self._clipboard_history and self._clipboard_history[-1].get("text") == clean:
+            return
+        self._clipboard_history.append({
+            "text": clean,
+            "timestamp": time.time(),
+            "source": source,
+            "length": len(clean),
+        })
+
+    def get_latest_clipboard_history(self) -> Optional[dict[str, Any]]:
+        """Return the most recent non-empty clipboard record from rolling history."""
+        return dict(self._clipboard_history[-1]) if self._clipboard_history else None
+
+    def get_clipboard_text(self, fallback_history: bool = True) -> str:
+        """
+        Safely retrieve current Windows system clipboard text.
+        If current clipboard is empty and fallback_history is True,
+        returns the most recent non-empty text from rolling history.
+        """
+        current_text = ""
+        try:
+            import win32clipboard
+            win32clipboard.OpenClipboard()
+            try:
+                if win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_UNICODETEXT):
+                    current_text = win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT) or ""
+                elif win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_TEXT):
+                    raw = win32clipboard.GetClipboardData(win32clipboard.CF_TEXT)
+                    if isinstance(raw, bytes):
+                        current_text = raw.decode("utf-8", errors="replace")
+                    else:
+                        current_text = str(raw or "")
+            finally:
+                win32clipboard.CloseClipboard()
+        except Exception:
+            pass
+
+        if not current_text:
+            try:
+                import pyperclip
+                current_text = pyperclip.paste() or ""
+            except Exception:
+                pass
+
+        if current_text and current_text.strip():
+            self.record_clipboard(current_text, source="system")
+            return current_text
+
+        if fallback_history and self._clipboard_history:
+            return self._clipboard_history[-1]["text"]
+
+        return "[Clipboard is empty]"
 
 
 def get_os_state() -> OSWorldState:

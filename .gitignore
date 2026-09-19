@@ -289,3 +289,11 @@ apps/ui/dist/
 # Python .env — NEVER commit real keys
 .env
 !.env.example
+
+# Scratch & Local Diagnostic Scripts
+_*.py
+calc_primes_sum.py
+fetch_sections.py
+list_files.py
+list_scratch_files.py
+show_readme.py

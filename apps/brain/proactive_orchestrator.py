@@ -327,7 +327,7 @@ class ProactiveOrchestrator:
                     return True
 
             # 3. Active Build / Terminal Error in foreground window
-            from .agents.os_state import get_os_state
+            from .core.os_state import get_os_state
             fg_win = get_os_state().get_foreground_window().lower()
             if any(k in fg_win for k in ("build fail", "syntaxerror", "compilation error", "exception in")):
                 dedup_key = f"causal_build_err_{hashlib.md5(fg_win.encode()).hexdigest()[:8]}"
@@ -551,7 +551,7 @@ class ProactiveOrchestrator:
     async def _request_confirmation(self, description: str, rationale: str) -> bool:
         """Raise the standard ACTION_CONFIRM_REQUEST card and wait on BaseAgent's resolver."""
         try:
-            from .agents.base_agent import BaseAgent
+            from .core.confirmations import ActionConfirmationManager as BaseAgent
             from . import ws_protocol
         except Exception as e:
             logger.error("Confirmation infra unavailable: %s", e)

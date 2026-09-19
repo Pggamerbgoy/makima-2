@@ -105,57 +105,34 @@ class AppBootstrap:
             S.MEMORY_FORGET, self._init_memory_forget, deps=[S.AI_HANDLER, S.MEMORY],
         )
 
-        # ── Wave 4: Execution & Learning (Depends on Tools, AI, Memory) ──────
-        self._register_node(
-            S.REFLEXION_ENGINE, self._init_reflexion_engine,
-            deps=[S.AI_HANDLER, S.MEMORY],
-            aliases=[S.LEARNING_ENGINE, S.LEARNING_COORD, S.LEARNING],
-        )
+        # ── Wave 4: Execution (Depends on Tools, AI, Memory) ────────────────
         self._register_node(
             S.EXECUTION_RUNTIME, self._init_execution_runtime, deps=[S.TOOL_REGISTRY],
         )
-        self._register_node(
-            S.SAGA_RECOVERY, self._init_saga_recovery,
-            deps=[S.TOOL_REGISTRY, S.EXECUTION_RUNTIME],
-            aliases=[S.RECOVERY_MANAGER],
-        )
 
-        # ── Wave 5: Skill Library & Swarm Orchestrator ────────────────────────
+        # ── Wave 5: Skill Library ─────────────────────────────────────────────
         self._register_node(
             S.SKILL_LIBRARY, self._init_skill_library,
             deps=[S.TOOL_REGISTRY, S.EXECUTION_RUNTIME, S.MEMORY, S.AI_HANDLER],
         )
-        self._register_node(
-            S.ORCHESTRATOR, self._init_orchestrator,
-            deps=[
-                S.AI_HANDLER, S.MEMORY, S.TOOL_REGISTRY,
-                S.EXECUTION_RUNTIME, S.SAGA_RECOVERY,
-                S.REFLEXION_ENGINE,
-            ],
-            critical=True,
-        )
 
-        # ── Wave 6: Core Engines (Task Manager, Durable Tasks, Thought Planner) ──
+        # ── Wave 6: Core Engines (Task Manager, Durable Tasks, Orchestration) ─
         self._register_node(
             S.TASK_MANAGER, self._init_task_manager,
         )
         self._register_node(
             S.DURABLE_TASKS, self._init_durable_task_engine,
-            deps=[S.ORCHESTRATOR, S.TASK_MANAGER],
-        )
-        self._register_node(
-            S.THOUGHT_PLANNER, self._init_thought_planner,
-            deps=[S.AI_HANDLER, S.TOOL_REGISTRY],
+            deps=[S.TASK_MANAGER],
         )
         self._register_node(
             S.ORCH_ENGINE, self._init_orchestration_engine,
             deps=[
-                S.AI_HANDLER, S.ORCHESTRATOR, S.MEMORY,
-                S.TASK_MANAGER, S.REFLEXION_ENGINE, S.SKILL_LIBRARY,
-                S.DURABLE_TASKS, S.THOUGHT_PLANNER,
+                S.AI_HANDLER, S.MEMORY,
+                S.TASK_MANAGER, S.SKILL_LIBRARY,
+                S.DURABLE_TASKS, S.TOOL_REGISTRY,
             ],
             critical=True,
-            aliases=[S.COMMAND_ROUTER, S.ROUTER],
+            aliases=[S.COMMAND_ROUTER, S.ROUTER, S.ORCHESTRATOR],
         )
 
         # ── Wave 7: Voice & Platform Services (Depends on Orch Engine) ───────
@@ -167,7 +144,7 @@ class AppBootstrap:
         )
         self._register_node(
             S.PROACTIVE, self._init_proactive_orchestrator,
-            deps=[S.AI_HANDLER, S.ORCHESTRATOR, S.ORCH_ENGINE, S.DURABLE_TASKS],
+            deps=[S.AI_HANDLER, S.ORCH_ENGINE, S.DURABLE_TASKS],
         )
 
     async def initialize_services(self) -> ServiceRegistry:
@@ -349,7 +326,9 @@ class AppBootstrap:
             import asyncio as _asyncio
             try:
                 loop = _asyncio.get_running_loop()
-                loop.create_task(register_mcp_tools(tool_registry, mcp_servers_config))
+                mcp_task = loop.create_task(register_mcp_tools(tool_registry, mcp_servers_config))
+                self._background_tasks.add(mcp_task)
+                mcp_task.add_done_callback(self._background_tasks.discard)
                 logger.info("Scheduled MCP tool registration for %d server(s)", len(mcp_servers_config))
             except RuntimeError:
                 # No running loop during sync bootstrap — skip; MCP tools won't be available
@@ -371,63 +350,14 @@ class AppBootstrap:
             eternal_memory=self.services.get(S.MEMORY),
         )
 
-    async def _init_reflexion_engine(self) -> Any:
-        from ..reflexion_engine import ReflexionEngine
-        engine = ReflexionEngine(
-            eternal_memory=self.services.get(S.MEMORY),
-            ai_handler=self.services.get(S.AI_HANDLER),
-        )
-        await engine.start()
-        return engine
-
     def _init_execution_runtime(self) -> Any:
         from .execution_runtime import ExecutionRuntime
-        ref_eng = self.services.get(S.REFLEXION_ENGINE)
         return ExecutionRuntime(
             tool_registry=self.services.get(S.TOOL_REGISTRY),
-            learning_coordinator=ref_eng,
+            learning_coordinator=None,
             guardrails=None,
             saga_recovery=None,
         )
-
-    def _init_saga_recovery(self) -> Any:
-        from .saga_recovery_engine import SagaRecoveryEngine
-        exec_rt = self.services.get(S.EXECUTION_RUNTIME)
-        tool_reg = self.services.get(S.TOOL_REGISTRY)
-        saga_engine = SagaRecoveryEngine(
-            tool_registry=tool_reg,
-            execution_runtime=exec_rt,
-        )
-        if exec_rt:
-            exec_rt.saga_recovery = saga_engine
-            exec_rt.recovery_manager = saga_engine
-        return saga_engine
-
-    def _init_orchestrator(self) -> Any:
-        from .kernel import NextGenOrchestrator
-        ref_eng = self.services.get(S.REFLEXION_ENGINE)
-        orchestrator = NextGenOrchestrator(
-            ai_handler=self.services.get(S.AI_HANDLER),
-            memory=self.services.get(S.MEMORY),
-            tool_registry=self.services.get(S.TOOL_REGISTRY),
-            ws_broadcast=self.ws_broadcast,
-            config=self.config,
-            learning_engine=ref_eng,
-            learning_coordinator=ref_eng,
-            guardrails=None,
-        )
-        orchestrator.reflexion_engine = ref_eng
-        # Cross-wire canonical runtime references
-        exec_rt = self.services.get(S.EXECUTION_RUNTIME)
-        saga_rec = self.services.get(S.SAGA_RECOVERY)
-        orchestrator.execution_runtime = exec_rt
-        orchestrator.saga_recovery = saga_rec
-        orchestrator.recovery_manager = saga_rec
-        if exec_rt:
-            exec_rt.kernel = orchestrator
-            exec_rt.learning_coordinator = ref_eng
-
-        return orchestrator
 
     def _init_task_manager(self) -> Any:
         from .task_manager import TaskManager
@@ -446,47 +376,32 @@ class AppBootstrap:
 
     def _init_durable_task_engine(self) -> Any:
         from .durable_task_engine import DurableTaskEngine
-        orch = self.services.get(S.ORCHESTRATOR)
+        from .persistence import EventStore
         tm = self.services.get(S.TASK_MANAGER)
-        if orch and hasattr(orch, "durable_task_engine") and orch.durable_task_engine:
-            dte = orch.durable_task_engine
-            dte._task_manager = tm
-            return dte
-        event_store = getattr(orch, "event_store", None)
-        if not event_store:
-            from .persistence import EventStore
-            event_db_path = self.config.get("KERNEL_EVENTS_DB", "~/.makima/kernel_events.db")
-            event_store = EventStore(event_db_path)
+        event_db_path = self.config.get("KERNEL_EVENTS_DB", "~/.makima/kernel_events.db")
+        event_store = EventStore(event_db_path)
         return DurableTaskEngine(event_store=event_store, task_manager=tm)
-
-    def _init_thought_planner(self) -> Any:
-        from .thought_planner import ThoughtPlanner
-        return ThoughtPlanner(
-            ai_handler=self.services.get(S.AI_HANDLER),
-            tool_registry=self.services.get(S.TOOL_REGISTRY),
-        )
 
     def _init_orchestration_engine(self) -> Any:
         from .orchestration_engine import OrchestrationEngine
-        ref_eng = self.services.get(S.REFLEXION_ENGINE)
         skill_lib = self.services.get(S.SKILL_LIBRARY)
         orch = OrchestrationEngine(
             ai_handler=self.services.get(S.AI_HANDLER),
-            agent_orchestrator=self.services.get(S.ORCHESTRATOR),
+            agent_orchestrator=None,
             eternal_memory=self.services.get(S.MEMORY),
             context_budget=None,
             screen_reader=None,
             clipboard_handler=None,
             ws_broadcast=self.ws_broadcast,
-            learning_coordinator=ref_eng,
-            learning_engine=ref_eng,
-            reflexion_engine=ref_eng,
+            learning_coordinator=None,
+            learning_engine=None,
+            reflexion_engine=None,
             skill_library=skill_lib,
             task_manager=self.services.get(S.TASK_MANAGER),
+            tool_registry=self.services.get(S.TOOL_REGISTRY),
             durable_task_engine=self.services.get(S.DURABLE_TASKS),
-            thought_planner=self.services.get(S.THOUGHT_PLANNER),
+            config=self.config,
         )
-        orch.reflexion_engine = ref_eng
         orch.skill_library = skill_lib
         return orch
 
@@ -537,7 +452,7 @@ class AppBootstrap:
             ws_broadcast=self.ws_broadcast,
             ai_handler=self.services.get(S.AI_HANDLER),
             learning_engine=None,
-            kernel=self.services.get(S.ORCHESTRATOR),
+            kernel=None,
             orchestration_engine=self.services.get(S.ORCH_ENGINE),
             durable_task_engine=self.services.get(S.DURABLE_TASKS),
         )
@@ -548,12 +463,12 @@ class AppBootstrap:
 
     def is_ready(self) -> bool:
         """Return True if all critical core services are active and registered."""
-        critical = [S.AI_HANDLER, S.ORCHESTRATOR, S.ORCH_ENGINE, S.TOOL_REGISTRY]
+        critical = [S.AI_HANDLER, S.ORCH_ENGINE, S.TOOL_REGISTRY]
         return all(self.services.get(name) is not None for name in critical)
 
     def get_services_health(self) -> Dict[str, Any]:
         """Return a comprehensive health map of all registered services."""
-        critical = [S.AI_HANDLER, S.ORCHESTRATOR, S.ORCH_ENGINE, S.TOOL_REGISTRY, S.MEMORY]
+        critical = [S.AI_HANDLER, S.ORCH_ENGINE, S.TOOL_REGISTRY, S.MEMORY]
         health: Dict[str, Any] = {
             "ready": self.is_ready(),
             "total_services": len(list(self.services.keys())),
@@ -570,7 +485,7 @@ class AppBootstrap:
 
     def _validate_critical_services(self) -> None:
         """Assert that essential services are available. Raise RuntimeError for missing ones."""
-        critical = [S.AI_HANDLER, S.ORCHESTRATOR, S.ORCH_ENGINE]
+        critical = [S.AI_HANDLER, S.ORCH_ENGINE]
         missing = [name for name in critical if self.services.get(name) is None]
         if missing:
             msg = (
@@ -598,6 +513,9 @@ class AppBootstrap:
     async def shutdown_services(self) -> None:
         """Graceful reverse shutdown sequence."""
         logger.info("Starting AppBootstrap graceful shutdown...")
+        for task in list(self._background_tasks):
+            if not task.done():
+                task.cancel()
         loop = asyncio.get_running_loop()
         for cb in reversed(self._stop_callbacks):
             try:

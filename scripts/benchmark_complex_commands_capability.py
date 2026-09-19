@@ -16,7 +16,12 @@ from typing import Any, Dict, List, Optional
 # Ensure project root is in sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from apps.brain.core.orchestration_engine import OrchestrationEngine, Intent, SubIntent
+from apps.brain.core.orchestration_engine import OrchestrationEngine
+try:
+    from apps.brain.core.orchestration_engine import Intent, SubIntent
+except ImportError:
+    class Intent: pass
+    class SubIntent: pass
 from apps.brain.core.kernel import NextGenOrchestrator
 from apps.brain.ai_handler import AIHandler
 from apps.brain.tool_registry import ToolRegistry

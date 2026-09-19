@@ -265,7 +265,7 @@ class DurableTaskEngine:
                 "checkpoint_id": cid,
                 "turn_count": turn_count,
                 "status": status,
-                "remaining_steps_count": len(remaining_steps),
+                "remaining_steps_count": len(c_remaining),
             },
         )
 
@@ -273,16 +273,16 @@ class DurableTaskEngine:
             checkpoint_id=cid,
             task_id=task_id,
             task_name=c_name,
-            original_prompt=prompt,
-            completed_steps=completed_steps,
-            remaining_steps=remaining_steps,
+            original_prompt=actual_prompt,
+            completed_steps=c_completed,
+            remaining_steps=c_remaining,
             context_snapshot=clean_context,
             turn_count=turn_count,
             max_turns=max_turns,
             status=status,
             created_at=created_at,
             updated_at=now,
-            resume_after=resume_after,
+            resume_after=actual_resume,
         )
         logger.info(
             "[DurableTaskEngine] Checkpointed task %s (id=%s, turns=%d/%d, status=%s)",

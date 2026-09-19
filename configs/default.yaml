@@ -89,7 +89,7 @@ llm:
     qwen_flash:
       enabled: true
       api_key_env: DASHSCOPE_API_KEY
-      model: qwen3.8-flash
+      model: qwen3.8-27b
       latency_tier: fast
       host: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
       context_limit: 128000
@@ -160,7 +160,7 @@ llm:
     groq:
       enabled: true
       api_key_env: GROQ_API_KEY
-      model: llama-3.3-70b-versatile
+      model: openai/gpt-oss-120b
       latency_tier: fast
       host: https://api.groq.com/openai/v1
       context_limit: 128000
@@ -182,6 +182,7 @@ llm:
       circuit_breaker:
         max_failures: 5
         cooldown_s: 10
+      max_tools: 50
     openai:
       enabled: true
       api_key_env: OPENAI_API_KEY
@@ -210,7 +211,7 @@ llm:
     groq_qwen:
       enabled: false
       api_key_env: MAKIMA_GROQ_KEY
-      model: llama-3.3-70b-versatile
+      model: qwen/qwen3.8-27b
       latency_tier: fast
       host: https://api.groq.com/openai/v1
       context_limit: 128000
@@ -224,7 +225,7 @@ llm:
     groq_fast:
       enabled: true
       api_key_env: GROQ_API_KEY
-      model: llama-3.1-8b-instant
+      model: openai/gpt-oss-120b
       host: https://api.groq.com/openai/v1
       context_limit: 128000
       tasks:
@@ -239,10 +240,11 @@ llm:
       circuit_breaker:
         max_failures: 10
         cooldown_s: 10
+      max_tools: 128
     openrouter:
       enabled: true
       api_key_env: OPENROUTER_API_KEY
-      model: meta-llama/llama-3.3-70b-instruct:free
+      model: openrouter/free
       host: https://openrouter.ai/api/v1
       context_limit: 128000
       tasks:
@@ -456,6 +458,11 @@ ollama:
   max_restart_attempts: 3
 privacy:
   mode: false
+agent:
+  max_turns: 25
+  canonical_tools: []        # empty = use ALL tools from registry
+  tool_budget_tokens: 3500   # token limit for tool schemas (~3.5KB compressed footprint)
+
 agents:
   models:
     system_agent: auto

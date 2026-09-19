@@ -6,7 +6,7 @@
     }
   },
   "general": {
-    "llmProvider": "qwen_flash",
+    "llmProvider": "groq",
     "model": "",
     "persona": "general",
     "wsUrl": "ws://127.0.0.1:8080/ws",

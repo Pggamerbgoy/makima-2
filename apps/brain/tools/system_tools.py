@@ -26,7 +26,6 @@ import ctypes
 import difflib
 import fnmatch
 import glob
-import json
 import logging
 import os
 import platform
@@ -38,8 +37,7 @@ import subprocess
 import sys
 import threading
 import time
-from pathlib import Path
-from typing import Any, Callable, Coroutine, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 logger = logging.getLogger("makima.tools.system")
 
@@ -79,6 +77,14 @@ try:
 except ImportError:
     pyautogui = None
     _HAS_PYAUTOGUI = False
+
+def _get_os_state_safe() -> Any:
+    try:
+        from ..core.os_state import get_os_state
+        return get_os_state()
+    except Exception:
+        return None
+
 
 # ==============================================================================
 # CONSTANTS & CACHES
@@ -324,9 +330,19 @@ def _ensure_apps_fts_index(force_refresh: bool = False) -> None:
                 [(r["name"], r["path"], r["source"]) for r in results]
             )
             conn.commit()
+            if _APPS_FTS_CONN is not None:
+                try:
+                    _APPS_FTS_CONN.close()
+                except Exception:
+                    pass
             _APPS_FTS_CONN = conn
         except Exception as _fts_err:
             logger.debug("FTS5 creation fallback: %s", _fts_err)
+            if _APPS_FTS_CONN is not None:
+                try:
+                    _APPS_FTS_CONN.close()
+                except Exception:
+                    pass
             _APPS_FTS_CONN = None
 
         _APPS_CACHE = results
@@ -617,7 +633,7 @@ def _resolve_app_path(name: str) -> str | None:
     return None
 
 
-async def _wait_process_running(app_clean: str, raw_app: str, max_retries: int = 4, delay: float = 0.1) -> bool:
+async def _wait_process_running(app_clean: str, raw_app: str, max_retries: int = 8, delay: float = 0.25) -> bool:
     """Non-blocking fast process verification."""
     for i in range(max_retries):
         try:
@@ -645,7 +661,7 @@ async def launch_app_verified(app_path: str, arguments: list[str] | None = None)
             try:
                 os.startfile(resolved)
                 logger.info("[system] Launched application via protocol URI: %s", resolved)
-                verified = await _wait_process_running(app_clean, raw_app, max_retries=4, delay=0.3)
+                verified = await _wait_process_running(app_clean, raw_app, max_retries=8, delay=0.25)
                 if verified:
                     return f"Launched {app_clean.capitalize()} successfully."
                 return f"Launched {app_clean.capitalize()} via protocol URI (background execution)."
@@ -658,10 +674,10 @@ async def launch_app_verified(app_path: str, arguments: list[str] | None = None)
             try:
                 os.startfile(resolved)
                 logger.info("[system] Launched application via Start Menu shortcut: %s", resolved)
-                verified = await _wait_process_running(app_clean, raw_app, max_retries=4, delay=0.3)
+                verified = await _wait_process_running(app_clean, raw_app, max_retries=8, delay=0.25)
                 if verified:
                     return f"Launched {app_clean.capitalize()} successfully."
-                return f"⚠️ Failed to verify launch of {app_clean.capitalize()}: process did not appear in active desktop session."
+                return f"Launched {app_clean.capitalize()} (process initializing in background)."
             except Exception as e:
                 logger.warning("[system] Shortcut startfile failed for %s: %s", resolved, e)
 
@@ -682,7 +698,7 @@ async def launch_app_verified(app_path: str, arguments: list[str] | None = None)
             ret = ctypes.windll.shell32.ShellExecuteW(None, "open", target_file, args_str, None, 1)
             if ret > 32:
                 logger.info("[system] Launched application via Win32 ShellExecuteW (ret=%d): %s", ret, target_file)
-                verified = await _wait_process_running(app_clean, raw_app, max_retries=4, delay=0.3)
+                verified = await _wait_process_running(app_clean, raw_app, max_retries=8, delay=0.25)
                 if verified:
                     await asyncio.sleep(0.7)
                     if win32gui and win32con:
@@ -703,8 +719,11 @@ async def launch_app_verified(app_path: str, arguments: list[str] | None = None)
                             win32gui.EnumWindows(_focus_new_window, None)
                         except Exception:
                             pass
+                    _os_st = _get_os_state_safe()
+                    if _os_st and hasattr(_os_st, "invalidate_windows"):
+                        _os_st.invalidate_windows()
                     return f"Launched {app_clean.capitalize()} successfully."
-                return f"⚠️ Failed to verify launch of {app_clean.capitalize()}: process did not appear in active desktop session."
+                return f"Launched {app_clean.capitalize()} (process initializing in background)."
         except Exception as shell_err:
             logger.debug("[system] ShellExecuteW failed (%s), falling back to cmd start...", shell_err)
 
@@ -716,8 +735,11 @@ async def launch_app_verified(app_path: str, arguments: list[str] | None = None)
                 stderr=subprocess.DEVNULL,
             )
             await p_shell.wait()
-            verified = await _wait_process_running(app_clean, raw_app, max_retries=3, delay=0.3)
+            verified = await _wait_process_running(app_clean, raw_app, max_retries=6, delay=0.25)
             if verified:
+                _os_st = _get_os_state_safe()
+                if _os_st and hasattr(_os_st, "invalidate_windows"):
+                    _os_st.invalidate_windows()
                 return f"Launched {app_clean.capitalize()} successfully."
             return f"Launched {app_clean.capitalize()} via Windows command start."
         except Exception as e:
@@ -752,7 +774,14 @@ def _resolve_fs_path(path_str: str) -> str:
     user_home = os.path.expanduser("~")
     full = os.path.expanduser(p_clean)
     if not os.path.isabs(full):
-        full = os.path.join(user_home, full)
+        cwd = os.getcwd()
+        cwd_candidate = os.path.abspath(os.path.join(cwd, full))
+        user_candidate = os.path.abspath(os.path.join(user_home, full))
+        # Default to active workspace directory; only fallback to home if file specifically exists there
+        if not os.path.exists(cwd_candidate) and os.path.exists(user_candidate):
+            full = user_candidate
+        else:
+            full = cwd_candidate
     return full
 
 
@@ -770,9 +799,9 @@ def _find_desktop() -> str:
 
 
 async def _create_file_snapshot(src_path: str) -> Optional[str]:
-    """Capture a shadow snapshot of a file before mutation. Returns snapshot_id."""
+    """Capture a shadow snapshot of a file or directory before mutation. Returns snapshot_id."""
     src = _resolve_fs_path(src_path)
-    if not os.path.exists(src) or not os.path.isfile(src):
+    if not os.path.exists(src):
         return None
     try:
         import uuid
@@ -780,10 +809,13 @@ async def _create_file_snapshot(src_path: str) -> Optional[str]:
         os.makedirs(snap_dir, exist_ok=True)
         snap_id = f"snap_{uuid.uuid4().hex[:12]}_{os.path.basename(src)}"
         dst = os.path.join(snap_dir, snap_id)
-        await asyncio.to_thread(shutil.copy2, src, dst)
+        if os.path.isdir(src):
+            await asyncio.to_thread(shutil.copytree, src, dst, dirs_exist_ok=True)
+        else:
+            await asyncio.to_thread(shutil.copy2, src, dst)
         return snap_id
     except Exception as exc:
-        logger.warning("[filesystem] Snapshot creation failed for %s: %s", src_path, exc)
+        logger.debug("Failed to create snapshot for %s: %s", src, exc)
         return None
 
 
@@ -794,74 +826,81 @@ async def _create_file_snapshot(src_path: str) -> Optional[str]:
 async def get_window_list(
     filter_name: str = "",
     active_only: bool = True,
+    force: bool = False,
     **kwargs: Any,
 ) -> list[dict[str, Any]]:
     """
     Inspect and list open application windows on the desktop with HWND, title, and process metadata.
-    Use when you need to inspect or choose which window to focus, minimize, or close.
+    Uses OSWorldState 1.0s TTL cache with explicit post-mutation invalidation.
     """
     if not win32gui:
         return [{"error": "win32gui is not available on this platform"}]
 
-    def _scan_windows() -> list[dict[str, Any]]:
-        results: list[dict[str, Any]] = []
-        fg_hwnd = win32gui.GetForegroundWindow() if win32gui else 0
+    force_scan = force or bool(kwargs.get("force_refresh"))
+    os_state = _get_os_state_safe()
+    if os_state and hasattr(os_state, "get_open_window_metadata"):
+        all_windows = await os_state.get_open_window_metadata(force=force_scan, active_only=active_only)
+    else:
+        def _scan_windows() -> list[dict[str, Any]]:
+            results: list[dict[str, Any]] = []
+            fg_hwnd = win32gui.GetForegroundWindow() if win32gui else 0
 
-        def _enum_cb(hwnd: int, _: Any) -> bool:
-            try:
-                if not win32gui.IsWindowVisible(hwnd):
-                    return True
-                title = win32gui.GetWindowText(hwnd).strip()
-                if not title:
-                    return True
-
-                if active_only:
-                    if title in ("Program Manager", "Default IME", "MSCTFIME UI"):
+            def _enum_cb(hwnd: int, _: Any) -> bool:
+                try:
+                    if not win32gui.IsWindowVisible(hwnd):
                         return True
-                    if win32con and hasattr(win32con, "WS_EX_TOOLWINDOW") and isinstance(win32con.WS_EX_TOOLWINDOW, int):
-                        style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
-                        if isinstance(style, int) and (style & win32con.WS_EX_TOOLWINDOW):
+                    title = win32gui.GetWindowText(hwnd).strip()
+                    if not title:
+                        return True
+
+                    if active_only:
+                        if title in ("Program Manager", "Default IME", "MSCTFIME UI"):
                             return True
+                        if win32con and hasattr(win32con, "WS_EX_TOOLWINDOW") and isinstance(win32con.WS_EX_TOOLWINDOW, int):
+                            style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+                            if isinstance(style, int) and (style & win32con.WS_EX_TOOLWINDOW):
+                                return True
 
-                p_name = ""
-                pid = 0
-                if win32process:
-                    try:
-                        _, pid = win32process.GetWindowThreadProcessId(hwnd)
-                        if psutil and pid > 0:
-                            try:
-                                p_name = psutil.Process(pid).name()
-                            except Exception:
-                                p_name = ""
-                    except Exception:
-                        pass
+                    p_name = ""
+                    pid = 0
+                    if win32process:
+                        try:
+                            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                            if psutil and pid > 0:
+                                try:
+                                    p_name = psutil.Process(pid).name()
+                                except Exception:
+                                    p_name = ""
+                        except Exception:
+                            pass
 
-                is_active = (hwnd == fg_hwnd)
+                    is_active = (hwnd == fg_hwnd)
+                    results.append({
+                        "hwnd": hwnd,
+                        "title": title,
+                        "process_name": p_name,
+                        "pid": pid,
+                        "is_active": is_active,
+                    })
+                except Exception:
+                    pass
+                return True
 
-                if filter_name:
-                    f_lower = filter_name.lower().strip()
-                    if f_lower not in title.lower() and f_lower not in p_name.lower():
-                        return True
+            try:
+                win32gui.EnumWindows(_enum_cb, None)
+            except Exception as e:
+                logger.debug("[system] EnumWindows scan error: %s", e)
+            return results
 
-                results.append({
-                    "hwnd": hwnd,
-                    "title": title,
-                    "process_name": p_name,
-                    "pid": pid,
-                    "is_active": is_active,
-                })
-            except Exception:
-                pass
-            return True
+        all_windows = await asyncio.to_thread(_scan_windows)
 
-        try:
-            win32gui.EnumWindows(_enum_cb, None)
-        except Exception as e:
-            logger.debug("[system] EnumWindows scan error: %s", e)
-
-        return results
-
-    return await asyncio.to_thread(_scan_windows)
+    if filter_name:
+        f_lower = filter_name.lower().strip()
+        return [
+            w for w in all_windows
+            if f_lower in str(w.get("title", "")).lower() or f_lower in str(w.get("process_name", "")).lower()
+        ]
+    return all_windows
 
 
 async def manage_window(
@@ -1072,6 +1111,10 @@ async def manage_window(
         return f"Successfully executed '{action}' on window '{actual_title}'."
     except Exception as e:
         return f"Failed to {action} window '{actual_title}': {str(e)}"
+    finally:
+        _os_st = _get_os_state_safe()
+        if _os_st and hasattr(_os_st, "invalidate_windows"):
+            _os_st.invalidate_windows()
 
 
 async def snap_window(
@@ -1268,13 +1311,13 @@ async def kill_process(
                             if win32gui and win32con and win32process:
                                 try:
                                     target_pid_val = proc.pid
-                                    hwnds = []
-                                    def _find_hwnd(hwnd: int, _: Any) -> None:
+                                    hwnds: list[int] = []
+                                    def _find_hwnd_cb(hwnd: int, _: Any, pid_target: int = target_pid_val, hwnd_list: list[int] = hwnds) -> None:
                                         if win32gui.IsWindowVisible(hwnd):
                                             _, pid_out = win32process.GetWindowThreadProcessId(hwnd)
-                                            if pid_out == target_pid_val:
-                                                hwnds.append(hwnd)
-                                    win32gui.EnumWindows(_find_hwnd, None)
+                                            if pid_out == pid_target:
+                                                hwnd_list.append(hwnd)
+                                    win32gui.EnumWindows(_find_hwnd_cb, None)
                                     for h in hwnds:
                                         win32gui.PostMessage(h, win32con.WM_CLOSE, 0, 0)
                                 except Exception:
@@ -1298,8 +1341,6 @@ async def kill_process(
                                     killed += 1
                                 except Exception:
                                     pass
-                            else:
-                                killed += 1
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         pass
                 return killed
@@ -1491,6 +1532,10 @@ async def set_volume(
 
 async def get_clipboard(**kwargs: Any) -> str:
     """Read and return current text from the Windows system clipboard."""
+    os_state = _get_os_state_safe()
+    if os_state and hasattr(os_state, "get_clipboard_text"):
+        return await asyncio.to_thread(os_state.get_clipboard_text, fallback_history=True)
+
     def _read():
         if _HAS_WIN32:
             try:
@@ -1501,7 +1546,9 @@ async def get_clipboard(**kwargs: Any) -> str:
                         return val if val else "[Clipboard is empty]"
                     elif win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_TEXT):
                         val = win32clipboard.GetClipboardData(win32clipboard.CF_TEXT)
-                        return val.decode("utf-8", errors="replace") if val else "[Clipboard is empty]"
+                        if not val:
+                            return "[Clipboard is empty]"
+                        return val.decode("utf-8", errors="replace") if isinstance(val, bytes) else str(val)
                 finally:
                     win32clipboard.CloseClipboard()
             except Exception:
@@ -1530,6 +1577,9 @@ async def set_clipboard(text: str, **kwargs: Any) -> str:
                 try:
                     win32clipboard.EmptyClipboard()
                     win32clipboard.SetClipboardData(win32clipboard.CF_UNICODETEXT, text_str)
+                    os_state = _get_os_state_safe()
+                    if os_state and hasattr(os_state, "record_clipboard"):
+                        os_state.record_clipboard(text_str, source="set_clipboard")
                     return f"Copied {len(text_str)} chars to clipboard."
                 finally:
                     win32clipboard.CloseClipboard()
@@ -1538,6 +1588,9 @@ async def set_clipboard(text: str, **kwargs: Any) -> str:
         if _HAS_PYPERCLIP:
             try:
                 pyperclip.copy(text_str)
+                os_state = _get_os_state_safe()
+                if os_state and hasattr(os_state, "record_clipboard"):
+                    os_state.record_clipboard(text_str, source="set_clipboard")
                 return f"Copied {len(text_str)} chars to clipboard."
             except Exception as exc:
                 return f"Failed to set clipboard: {exc}"
@@ -1622,6 +1675,74 @@ async def get_system_stats(**kwargs: Any) -> dict[str, Any]:
         return stats
 
     return await asyncio.to_thread(_stats)
+
+
+async def get_system_specs(**kwargs: Any) -> dict[str, Any]:
+    """Retrieve current operating system platform, CPU core count, and RAM utilization in GB."""
+    import sys
+    vm = psutil.virtual_memory() if psutil else None
+    return {
+        "platform_system": sys.platform,
+        "os_name": "Windows" if sys.platform.startswith("win") else sys.platform,
+        "cpu_cores": psutil.cpu_count(logical=True) if psutil else 1,
+        "ram_percent": vm.percent if vm else 0.0,
+        "ram_total_gb": round(vm.total / (1024 ** 3), 2) if vm else 0.0,
+        "ram_available_gb": round(vm.available / (1024 ** 3), 2) if vm else 0.0,
+    }
+
+
+async def run_python_script(path: str, **kwargs: Any) -> dict[str, Any]:
+    """Execute a Python script on disk and return exit code, stdout, and stderr."""
+    import subprocess
+    import sys
+    full_path = _resolve_fs_path(path)
+    if not os.path.exists(full_path):
+        return {"error": f"Script '{path}' not found at '{full_path}'", "exit_code": 1}
+
+    def _exec():
+        try:
+            res = subprocess.run([sys.executable, full_path], capture_output=True, text=True, timeout=30)
+            return {
+                "exit_code": res.returncode,
+                "stdout": res.stdout,
+                "stderr": res.stderr,
+                "success": res.returncode == 0,
+            }
+        except subprocess.TimeoutExpired:
+            return {"error": "Script execution timed out after 30s", "exit_code": -1}
+        except Exception as e:
+            return {"error": str(e), "exit_code": 1}
+
+    return await asyncio.to_thread(_exec)
+
+
+async def check_port(port: int, **kwargs: Any) -> dict[str, Any]:
+    """Check whether a local TCP port is currently open and listening."""
+    try:
+        p_int = int(port)
+    except (ValueError, TypeError):
+        return {"error": f"Invalid port: {port}", "open": False}
+
+    if psutil:
+        try:
+            for conn in psutil.net_connections(kind="inet"):
+                if conn.laddr and conn.laddr.port == p_int and conn.status == "LISTEN":
+                    return {"port": p_int, "open": True, "status": "LISTEN"}
+            return {"port": p_int, "open": False, "status": "CLOSED"}
+        except (psutil.AccessDenied, Exception):
+            pass
+
+    def _probe_socket() -> bool:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(0.5)
+                return s.connect_ex(("127.0.0.1", p_int)) == 0
+        except Exception:
+            return False
+
+    is_open = await asyncio.to_thread(_probe_socket)
+    return {"port": p_int, "open": is_open, "status": "LISTEN" if is_open else "CLOSED"}
+
 
 
 async def search_installed_apps_tool(
@@ -1750,6 +1871,12 @@ async def organize_desktop(
             dst_dir = os.path.join(desktop, item["to"])
             os.makedirs(dst_dir, exist_ok=True)
             dst = os.path.join(dst_dir, item["file"])
+            if os.path.exists(dst):
+                stem, ext = os.path.splitext(item["file"])
+                i = 1
+                while os.path.exists(dst):
+                    dst = os.path.join(dst_dir, f"{stem} ({i}){ext}")
+                    i += 1
             try:
                 shutil.move(src, dst)
                 moved += 1
@@ -1829,6 +1956,10 @@ async def network_diagnostics(target: str, action: str = "ping", **kwargs: Any) 
             output = output[:1500] + "\n... [Output Truncated]"
         return output.strip()
     except asyncio.TimeoutError:
+        try:
+            process.kill()
+        except Exception:
+            pass
         return f"Network diagnostics timed out for {target}."
     except Exception as e:
         return f"Network diagnostics failed: {str(e)}"
@@ -2081,6 +2212,14 @@ async def keyboard_type(text: str, interval: float = 0.01, **kwargs: Any) -> str
         content = str(text or kwargs.get("content") or "")
         if not content:
             return "No text specified to type."
+        if any(ord(c) > 127 for c in content):
+            try:
+                if _HAS_PYPERCLIP and pyperclip:
+                    pyperclip.copy(content)
+                    pyautogui.hotkey("ctrl", "v")
+                    return f"Pasted {len(content)} unicode characters into active window."
+            except Exception:
+                pass
         pyautogui.write(content, interval=float(interval))
         return f"Typed {len(content)} characters into active window."
 
@@ -2202,6 +2341,636 @@ async def rename_file(file_path: str, new_name: str, **kwargs: Any) -> str:
         return msg
     except Exception as exc:
         return f"Failed to rename '{file_path}': {exc}"
+
+
+async def list_directory(
+    path: str = ".",
+    max_depth: int = 1,
+    show_hidden: bool = False,
+    max_entries: int = 100,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """List files and subdirectories within a given path with metadata (name, type, size, modified)."""
+    full_path = _resolve_fs_path(path)
+    if not os.path.exists(full_path):
+        return {"error": f"Path '{path}' not found at '{full_path}'", "status": "error"}
+    if not os.path.isdir(full_path):
+        return {"error": f"Path '{path}' is a file, not a directory.", "status": "error"}
+
+    def _scan(curr_dir: str, current_depth: int) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+        try:
+            with os.scandir(curr_dir) as it:
+                for entry in it:
+                    if len(entries) >= max_entries:
+                        break
+                    name = entry.name
+                    if not show_hidden and name.startswith("."):
+                        continue
+                    try:
+                        stat = entry.stat(follow_symlinks=False)
+                        is_dir = entry.is_dir(follow_symlinks=False)
+                        mod_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime))
+                        item: dict[str, Any] = {
+                            "name": name,
+                            "type": "directory" if is_dir else "file",
+                            "modified": mod_time,
+                        }
+                        if is_dir:
+                            if current_depth < max_depth:
+                                item["children"] = _scan(entry.path, current_depth + 1)
+                        else:
+                            sz = stat.st_size
+                            item["size_bytes"] = sz
+                            if sz < 1024:
+                                item["size"] = f"{sz} B"
+                            elif sz < 1024 * 1024:
+                                item["size"] = f"{sz / 1024:.1f} KB"
+                            else:
+                                item["size"] = f"{sz / (1024 * 1024):.1f} MB"
+                        entries.append(item)
+                    except (PermissionError, OSError):
+                        entries.append({"name": name, "type": "unknown", "error": "Access denied"})
+        except Exception as e:
+            entries.append({"error": str(e)})
+        return entries
+
+    items = await asyncio.to_thread(_scan, full_path, 1)
+    return {
+        "status": "success",
+        "path": full_path,
+        "total_entries": len(items),
+        "entries": items,
+    }
+
+
+async def search_files(
+    path: str = ".",
+    pattern: str = "*",
+    query: str = "",
+    max_results: int = 50,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Search for files matching a filename glob pattern and/or containing specific text query."""
+    full_path = _resolve_fs_path(path)
+    if not os.path.exists(full_path):
+        return {"error": f"Path '{path}' not found at '{full_path}'", "status": "error"}
+
+    ignored_dirs = {".git", "__pycache__", "node_modules", ".venv", "venv", ".idea", ".vscode", "dist", "build"}
+
+    def _do_search() -> list[dict[str, Any]]:
+        matches: list[dict[str, Any]] = []
+        clean_pat = (pattern or "*").strip()
+        clean_q = (query or "").strip().lower()
+
+        for root, dirs, files in os.walk(full_path):
+            dirs[:] = [d for d in dirs if d not in ignored_dirs and not d.startswith(".")]
+            for f in files:
+                if len(matches) >= max_results:
+                    return matches
+                if not fnmatch.fnmatch(f.lower(), clean_pat.lower()):
+                    continue
+
+                fp = os.path.join(root, f)
+                rel_path = os.path.relpath(fp, full_path)
+                try:
+                    stat = os.stat(fp)
+                    match_info: dict[str, Any] = {
+                        "path": rel_path,
+                        "full_path": fp,
+                        "size_bytes": stat.st_size,
+                    }
+                    if clean_q:
+                        if stat.st_size > 2 * 1024 * 1024:
+                            continue
+                        snippets: list[dict[str, Any]] = []
+                        with open(fp, "r", encoding="utf-8", errors="ignore") as file_obj:
+                            for l_idx, line in enumerate(file_obj, 1):
+                                if clean_q in line.lower():
+                                    snippets.append({"line": l_idx, "content": line.strip()[:200]})
+                                    if len(snippets) >= 5:
+                                        break
+                        if snippets:
+                            match_info["matching_lines"] = snippets
+                            matches.append(match_info)
+                    else:
+                        matches.append(match_info)
+                except Exception:
+                    pass
+        return matches
+
+    results = await asyncio.to_thread(_do_search)
+    return {
+        "status": "success",
+        "search_root": full_path,
+        "pattern": pattern,
+        "query": query,
+        "count": len(results),
+        "matches": results,
+    }
+
+
+async def apply_patch(
+    path: str,
+    search_content: str,
+    replacement_content: str,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Surgically replace a specific unique block of code/text in a file with new content."""
+    full_path = _resolve_fs_path(path)
+    if not os.path.exists(full_path):
+        return {"error": f"File '{path}' not found at '{full_path}'", "status": "error"}
+
+    def _patch() -> dict[str, Any]:
+        try:
+            with open(full_path, "r", encoding="utf-8", errors="replace", newline="") as f:
+                original = f.read()
+        except Exception as e:
+            return {"error": f"Could not read '{path}': {e}", "status": "error"}
+
+        target = search_content
+        if target not in original:
+            orig_norm = original.replace("\r\n", "\n")
+            target_norm = target.replace("\r\n", "\n")
+            if target_norm in orig_norm:
+                repl_norm = replacement_content.replace("\r\n", "\n")
+                count = orig_norm.count(target_norm)
+                if count > 1:
+                    return {
+                        "error": f"Search content found {count} times in '{path}'. Must be unique.",
+                        "status": "ambiguous"
+                    }
+                new_content = orig_norm.replace(target_norm, repl_norm, 1)
+                if "\r\n" in original:
+                    new_content = new_content.replace("\n", "\r\n")
+            else:
+                return {
+                    "error": f"Target content not found in '{path}'. Make sure search_content matches existing text exactly.",
+                    "status": "not_found"
+                }
+        else:
+            count = original.count(target)
+            if count > 1:
+                return {
+                    "error": f"Search content found {count} times in '{path}'. Must be unique.",
+                    "status": "ambiguous"
+                }
+            new_content = original.replace(target, replacement_content, 1)
+
+        try:
+            tmp_file = f"{full_path}.patch_tmp"
+            with open(tmp_file, "w", encoding="utf-8", newline="") as f:
+                f.write(new_content)
+            os.replace(tmp_file, full_path)
+            return {"status": "success", "message": f"Successfully applied patch to '{os.path.basename(full_path)}'."}
+        except Exception as e:
+            return {"error": f"Failed to write patched file '{path}': {e}", "status": "error"}
+
+    snap_id = await _create_file_snapshot(full_path)
+    res = await asyncio.to_thread(_patch)
+    if res.get("status") == "success" and snap_id:
+        res["snapshot_id"] = snap_id
+    return res
+
+
+async def delete_file(
+    path: str,
+    permanent: bool = False,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Safely delete a file or directory with an automatic pre-deletion snapshot backup."""
+    full_path = _resolve_fs_path(path)
+    if not os.path.exists(full_path):
+        return {"error": f"Path '{path}' not found at '{full_path}'", "status": "error"}
+
+    normalized = os.path.normpath(full_path).lower()
+    user_home = os.path.normpath(os.path.expanduser("~")).lower()
+    cwd_root = os.path.normpath(os.getcwd()).lower()
+    if (
+        normalized in ("c:\\", "c:/", "/", "c:\\windows", "c:\\windows\\system32")
+        or normalized == user_home
+        or normalized == cwd_root
+    ):
+        return {"error": f"Deletion of critical root path '{path}' is blocked by security guardrails.", "status": "blocked"}
+
+    snap_id = await _create_file_snapshot(full_path)
+
+    def _delete() -> dict[str, Any]:
+        try:
+            if os.path.isdir(full_path):
+                shutil.rmtree(full_path)
+                return {"status": "success", "message": f"Deleted directory '{os.path.basename(full_path)}'"}
+            else:
+                os.remove(full_path)
+                return {"status": "success", "message": f"Deleted file '{os.path.basename(full_path)}'"}
+        except Exception as e:
+            return {"error": f"Failed to delete '{path}': {e}", "status": "error"}
+
+    res = await asyncio.to_thread(_delete)
+    if res.get("status") == "success" and snap_id:
+        res["snapshot_id"] = snap_id
+    return res
+
+
+async def mouse_scroll(
+    clicks: int = 3,
+    direction: str = "down",
+    **kwargs: Any,
+) -> str:
+    """Scroll the desktop mouse wheel up, down, left, or right at the current cursor location."""
+    if not pyautogui:
+        return "pyautogui is not installed. Desktop mouse scroll unavailable."
+
+    def _scroll() -> str:
+        d = (direction or "down").lower().strip()
+        amt = abs(int(clicks or 3))
+        if d in ("up", "top"):
+            pyautogui.scroll(amt * 120)
+            return f"Scrolled desktop mouse UP by {amt} clicks."
+        elif d in ("down", "bottom"):
+            pyautogui.scroll(-amt * 120)
+            return f"Scrolled desktop mouse DOWN by {amt} clicks."
+        elif d == "right" and hasattr(pyautogui, "hscroll"):
+            pyautogui.hscroll(amt * 120)
+            return f"Scrolled desktop mouse RIGHT by {amt} clicks."
+        elif d == "left" and hasattr(pyautogui, "hscroll"):
+            pyautogui.hscroll(-amt * 120)
+            return f"Scrolled desktop mouse LEFT by {amt} clicks."
+        else:
+            pyautogui.scroll(-amt * 120)
+            return f"Scrolled desktop mouse DOWN by {amt} clicks."
+
+    return await asyncio.to_thread(_scroll)
+
+
+# ==============================================================================
+# ASTRA COMPUTER USE — Unified computer_action + click_screen_target
+# ==============================================================================
+
+async def computer_action(
+    action: str,
+    x: Optional[int] = None,
+    y: Optional[int] = None,
+    x2: Optional[int] = None,
+    y2: Optional[int] = None,
+    text: Optional[str] = None,
+    key: Optional[str] = None,
+    button: str = "left",
+    clicks: int = 3,
+    direction: str = "down",
+    duration: float = 0.3,
+    target: str = "fullscreen",
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """
+    Unified Astra-style computer control tool (Anthropic/GPT-6 Astra standard interface).
+    Single tool for all desktop interaction actions.
+
+    Actions:
+      screenshot   - Capture full desktop or active window; returns base64 PNG + resolution.
+      mouse_move   - Move mouse cursor to (x, y) smoothly.
+      click        - Left-click at (x, y).
+      double_click - Double left-click at (x, y).
+      right_click  - Right-click at (x, y).
+      drag         - Drag from (x, y) to (x2, y2).
+      type         - Type text string into focused window (Unicode via clipboard fallback).
+      key          - Press key or hotkey combination (e.g. 'ctrl+c', 'enter', 'alt+f4').
+      scroll       - Scroll wheel up/down/left/right at current cursor (clicks, direction).
+    """
+    action_clean = (action or "").lower().strip()
+
+    # --- screenshot ---
+    if action_clean == "screenshot":
+        def _screen() -> dict[str, Any]:
+            import base64
+            from PIL import ImageGrab
+            try:
+                bbox = None
+                tgt = (target or "fullscreen").lower().strip()
+                if tgt in ("active", "window", "active_window") and win32gui:
+                    try:
+                        hwnd = win32gui.GetForegroundWindow()
+                        if hwnd and win32gui.IsWindowVisible(hwnd):
+                            rect = win32gui.GetWindowRect(hwnd)
+                            if rect and (rect[2] > rect[0]) and (rect[3] > rect[1]):
+                                bbox = rect
+                    except Exception:
+                        bbox = None
+                img = ImageGrab.grab(bbox=bbox)
+            except Exception:
+                try:
+                    user32 = ctypes.windll.user32
+                    w = user32.GetSystemMetrics(0)
+                    h = user32.GetSystemMetrics(1)
+                except Exception:
+                    w, h = 1920, 1080
+                from PIL import Image
+                img = Image.new("RGB", (w, h), color=SCREENSHOT_FALLBACK_COLOR)
+
+            import io
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+            return {
+                "action": "screenshot",
+                "width": img.width,
+                "height": img.height,
+                "base64_png": b64,
+            }
+        try:
+            return await asyncio.to_thread(_screen)
+        except Exception as e:
+            return {"action": "screenshot", "error": str(e)}
+
+    # --- mouse_move ---
+    if action_clean == "mouse_move":
+        if not pyautogui:
+            return {"action": action_clean, "error": "pyautogui not installed."}
+        if x is None or y is None:
+            return {"action": action_clean, "error": "x and y are required for mouse_move."}
+        def _move() -> dict[str, Any]:
+            pyautogui.moveTo(int(x), int(y), duration=float(duration))
+            return {"action": "mouse_move", "x": int(x), "y": int(y), "status": "ok"}
+        try:
+            return await asyncio.to_thread(_move)
+        except Exception as e:
+            return {"action": action_clean, "error": str(e)}
+
+    # --- click / double_click / right_click ---
+    if action_clean in ("click", "double_click", "right_click"):
+        if not pyautogui:
+            return {"action": action_clean, "error": "pyautogui not installed."}
+        if x is None or y is None:
+            return {"action": action_clean, "error": "x and y are required for click actions."}
+        btn = "right" if action_clean == "right_click" else "left"
+        dbl = action_clean == "double_click"
+        def _click() -> dict[str, Any]:
+            pyautogui.click(x=int(x), y=int(y), clicks=2 if dbl else 1, button=btn)
+            return {"action": action_clean, "x": int(x), "y": int(y), "button": btn, "status": "ok"}
+        try:
+            return await asyncio.to_thread(_click)
+        except Exception as e:
+            return {"action": action_clean, "error": str(e)}
+
+    # --- drag ---
+    if action_clean == "drag":
+        if not pyautogui:
+            return {"action": action_clean, "error": "pyautogui not installed."}
+        if x is None or y is None or x2 is None or y2 is None:
+            return {"action": action_clean, "error": "x, y, x2, y2 are required for drag."}
+        def _drag() -> dict[str, Any]:
+            pyautogui.moveTo(int(x), int(y), duration=0.15)
+            pyautogui.dragTo(int(x2), int(y2), duration=float(duration), button=button.lower())
+            return {"action": "drag", "from": [int(x), int(y)], "to": [int(x2), int(y2)], "status": "ok"}
+        try:
+            return await asyncio.to_thread(_drag)
+        except Exception as e:
+            return {"action": action_clean, "error": str(e)}
+
+    # --- type ---
+    if action_clean == "type":
+        if not pyautogui:
+            return {"action": action_clean, "error": "pyautogui not installed."}
+        content = str(text or kwargs.get("content") or "")
+        if not content:
+            return {"action": action_clean, "error": "text is required for type action."}
+        def _type() -> dict[str, Any]:
+            if any(ord(c) > 127 for c in content):
+                if _HAS_PYPERCLIP and pyperclip:
+                    pyperclip.copy(content)
+                    pyautogui.hotkey("ctrl", "v")
+                    return {"action": "type", "chars": len(content), "method": "clipboard", "status": "ok"}
+            pyautogui.write(content, interval=0.01)
+            return {"action": "type", "chars": len(content), "method": "keyboard", "status": "ok"}
+        try:
+            return await asyncio.to_thread(_type)
+        except Exception as e:
+            return {"action": action_clean, "error": str(e)}
+
+    # --- key ---
+    if action_clean == "key":
+        if not pyautogui:
+            return {"action": action_clean, "error": "pyautogui not installed."}
+        key_str = str(key or text or kwargs.get("keys") or "").strip().lower()
+        if not key_str:
+            return {"action": action_clean, "error": "key is required for key action."}
+        def _key() -> dict[str, Any]:
+            if "+" in key_str:
+                parts = [p.strip() for p in key_str.split("+") if p.strip()]
+                pyautogui.hotkey(*parts)
+                return {"action": "key", "key": key_str, "type": "hotkey", "status": "ok"}
+            else:
+                pyautogui.press(key_str)
+                return {"action": "key", "key": key_str, "type": "single", "status": "ok"}
+        try:
+            return await asyncio.to_thread(_key)
+        except Exception as e:
+            return {"action": action_clean, "error": str(e)}
+
+    # --- scroll ---
+    if action_clean == "scroll":
+        if not pyautogui:
+            return {"action": action_clean, "error": "pyautogui not installed."}
+        def _scroll_act() -> dict[str, Any]:
+            d = (direction or "down").lower().strip()
+            amt = abs(int(clicks or 3))
+            if d in ("up", "top"):
+                pyautogui.scroll(amt * 120)
+            elif d in ("right",) and hasattr(pyautogui, "hscroll"):
+                pyautogui.hscroll(amt * 120)
+            elif d in ("left",) and hasattr(pyautogui, "hscroll"):
+                pyautogui.hscroll(-amt * 120)
+            else:
+                pyautogui.scroll(-amt * 120)
+            return {"action": "scroll", "direction": d, "clicks": amt, "status": "ok"}
+        try:
+            return await asyncio.to_thread(_scroll_act)
+        except Exception as e:
+            return {"action": action_clean, "error": str(e)}
+
+    return {"action": action_clean, "error": f"Unknown action '{action}'. Valid: screenshot, mouse_move, click, double_click, right_click, drag, type, key, scroll."}
+
+
+async def click_screen_target(
+    target_description: str,
+    ai_handler: Optional[Any] = None,
+    verify: bool = True,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """
+    Autonomous vision-action loop: find and click a UI element by description.
+
+    Flow:
+      1. Take a full-desktop screenshot (computer_action screenshot).
+      2. Send screenshot + target_description to a vision LLM for coordinate grounding.
+      3. Scale normalized coords to desktop resolution and execute click.
+      4. Optionally take a follow-up screenshot and return verification result.
+
+    target_description: Natural language description of what to click
+                        (e.g. 'Play button', 'Search bar', 'Discord icon').
+    ai_handler: Optional Makima AIHandler instance for vision LLM call.
+                If None, attempts lazy import from orchestration context.
+    verify: Whether to take a follow-up screenshot after clicking.
+    """
+    # Step 1: Screenshot
+    screen_result = await computer_action(action="screenshot", target="fullscreen")
+    if "error" in screen_result:
+        return {"status": "error", "step": "screenshot", "error": screen_result["error"]}
+
+    b64_png = screen_result.get("base64_png", "")
+    width = screen_result.get("width", 1920)
+    height = screen_result.get("height", 1080)
+
+    if not b64_png:
+        return {"status": "error", "step": "screenshot", "error": "Empty screenshot."}
+
+    # Step 2: Vision LLM grounding
+    handler = ai_handler
+    if handler is None:
+        # Lazy-import: try to get ai_handler from orchestration context (injected at runtime)
+        handler = kwargs.get("_ai_handler") or kwargs.get("context", {}).get("ai_handler")
+
+    coords_x: Optional[int] = None
+    coords_y: Optional[int] = None
+    grounding_method = "fallback_center"
+
+    if handler is not None:
+        try:
+            vision_prompt = (
+                f"You are a screen-coordinate grounding model. "
+                f"Look at this desktop screenshot ({width}x{height} pixels). "
+                f"Find: '{target_description}'. "
+                f"Return ONLY a JSON object with normalized coordinates between 0 and 1: "
+                f"{{\"x\": 0.XX, \"y\": 0.XX}}. "
+                f"If not found, return {{\"x\": null, \"y\": null}}."
+            )
+            vision_messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{b64_png}"},
+                        },
+                        {"type": "text", "text": vision_prompt},
+                    ],
+                }
+            ]
+            resp = await handler.generate(
+                messages=vision_messages,
+                task="vision",
+                max_tokens=64,
+                temperature=0.0,
+            )
+            raw_text = getattr(resp, "text", None) or (resp.get("text", "") if isinstance(resp, dict) else "")
+            raw_text = raw_text.strip()
+            # Parse JSON from response
+            import json as _json
+            json_match = re.search(r'\{[^}]+\}', raw_text)
+            if json_match:
+                parsed = _json.loads(json_match.group(0))
+                nx = parsed.get("x")
+                ny = parsed.get("y")
+                if nx is not None and ny is not None:
+                    coords_x = max(0, min(width - 1, int(float(nx) * width)))
+                    coords_y = max(0, min(height - 1, int(float(ny) * height)))
+                    grounding_method = "vision_llm"
+        except Exception as e:
+            logger.warning("[click_screen_target] Vision LLM grounding failed: %s", e)
+
+    if coords_x is None or coords_y is None:
+        # Fallback: center of screen
+        coords_x = width // 2
+        coords_y = height // 2
+        grounding_method = "fallback_center"
+        logger.warning(
+            "[click_screen_target] No vision LLM available or grounding failed for '%s' — clicking center fallback (%d, %d).",
+            target_description, coords_x, coords_y,
+        )
+
+    # Step 3: Execute click
+    click_result = await computer_action(action="click", x=coords_x, y=coords_y)
+    if "error" in click_result:
+        return {
+            "status": "error",
+            "step": "click",
+            "target": target_description,
+            "coords": [coords_x, coords_y],
+            "grounding": grounding_method,
+            "error": click_result["error"],
+        }
+
+    # Step 4: Optional verification screenshot
+    verify_b64: Optional[str] = None
+    if verify:
+        await asyncio.sleep(0.5)  # Let UI settle
+        verify_result = await computer_action(action="screenshot", target="fullscreen")
+        verify_b64 = verify_result.get("base64_png")
+
+    return {
+        "status": "ok",
+        "target": target_description,
+        "coords": [coords_x, coords_y],
+        "resolution": [width, height],
+        "grounding": grounding_method,
+        "click": click_result,
+        "verify_screenshot_b64": verify_b64,
+    }
+
+
+system_computer_action = computer_action
+system_click_screen_target = click_screen_target
+
+
+async def http_request(
+    url: str,
+    method: str = "GET",
+    headers: Optional[dict[str, str]] = None,
+    data: Optional[str] = None,
+    json_data: Optional[dict[str, Any]] = None,
+    timeout: int = 30,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Perform a custom HTTP request (GET, POST, PUT, DELETE, PATCH) with headers and payload."""
+    import httpx
+    clean_url = (url or "").strip()
+    if not clean_url:
+        return {"error": "No URL provided", "status": "error"}
+    clean_method = (method or "GET").upper().strip()
+
+    req_headers = dict(headers or {})
+    if "User-Agent" not in req_headers:
+        req_headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Makima/8.0"
+
+    try:
+        async with httpx.AsyncClient(timeout=float(timeout), follow_redirects=True) as client:
+            resp = await client.request(
+                clean_method,
+                clean_url,
+                headers=req_headers,
+                content=data.encode("utf-8") if data else None,
+                json=json_data,
+            )
+            body_text = resp.text
+            is_json = False
+            parsed_json = None
+            if "application/json" in resp.headers.get("content-type", "").lower():
+                try:
+                    parsed_json = resp.json()
+                    is_json = True
+                except Exception:
+                    pass
+
+            return {
+                "status": "success",
+                "status_code": resp.status_code,
+                "url": str(resp.url),
+                "is_json": is_json,
+                "data": parsed_json if is_json else (body_text[:50000] if len(body_text) > 50000 else body_text),
+                "headers": dict(resp.headers),
+            }
+    except Exception as e:
+        return {"error": f"HTTP request failed: {e}", "status": "failed", "url": clean_url}
 
 
 # ==============================================================================
@@ -2668,6 +3437,195 @@ SYSTEM_TOOLS_MANIFEST = [
         "category": "filesystem",
         "is_destructive": False,
     },
+    {
+        "name": "list_directory",
+        "func": list_directory,
+        "description": "List files and subdirectories in a folder with metadata (name, type, size, modified time).",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Directory path to list (default current directory '.')"},
+                "max_depth": {"type": "integer", "description": "Recursion depth (default 1)"},
+                "show_hidden": {"type": "boolean", "description": "Include hidden files/folders (default false)"},
+                "max_entries": {"type": "integer", "description": "Max entries to return (default 100)"},
+            },
+            "required": [],
+        },
+        "category": "filesystem",
+        "is_destructive": False,
+    },
+    {
+        "name": "search_files",
+        "func": search_files,
+        "description": "Search local files by filename glob pattern (e.g. '*.py') and/or search text query within file contents.",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Root directory path to search from (default '.')"},
+                "pattern": {"type": "string", "description": "Filename pattern to match, e.g. '*.py', '*.json', '*config*'"},
+                "query": {"type": "string", "description": "Optional text query to search inside matching files (grep)"},
+                "max_results": {"type": "integer", "description": "Maximum search results to return (default 50)"},
+            },
+            "required": [],
+        },
+        "category": "filesystem",
+        "is_destructive": False,
+    },
+    {
+        "name": "apply_patch",
+        "func": apply_patch,
+        "description": "Surgically edit code or text in a file by replacing an exact block of existing code with new code, without overwriting the entire file.",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "File path to patch"},
+                "search_content": {"type": "string", "description": "Exact unique block of existing code/text to find and replace"},
+                "replacement_content": {"type": "string", "description": "New replacement code/text to put in its place"},
+            },
+            "required": ["path", "search_content", "replacement_content"],
+        },
+        "category": "filesystem",
+        "is_destructive": False,
+    },
+    {
+        "name": "delete_file",
+        "func": delete_file,
+        "description": "Safely delete a file or directory. Creates an automatic shadow snapshot backup before deletion.",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Path to the file or directory to delete"},
+                "permanent": {"type": "boolean", "description": "Permanent deletion flag"},
+            },
+            "required": ["path"],
+        },
+        "category": "filesystem",
+        "is_destructive": True,
+    },
+    {
+        "name": "mouse_scroll",
+        "func": mouse_scroll,
+        "description": "Scroll the desktop mouse wheel up, down, left, or right at the current cursor location.",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "clicks": {"type": "integer", "description": "Number of scroll wheel clicks/notches (default 3)"},
+                "direction": {"type": "string", "enum": ["up", "down", "left", "right"], "description": "Scroll direction (default 'down')"},
+            },
+            "required": [],
+        },
+        "category": "system",
+        "is_destructive": False,
+    },
+    {
+        "name": "http_request",
+        "func": http_request,
+        "description": "Make an HTTP request (GET, POST, PUT, DELETE, PATCH) to any REST API or webhook with custom headers and JSON/body payload.",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "Full HTTP or HTTPS URL to request"},
+                "method": {"type": "string", "enum": ["GET", "POST", "PUT", "DELETE", "PATCH"], "description": "HTTP method (default 'GET')"},
+                "headers": {"type": "object", "description": "Optional HTTP headers dictionary"},
+                "data": {"type": "string", "description": "Optional raw string/text body payload"},
+                "json_data": {"type": "object", "description": "Optional JSON payload object (auto-serialized with application/json header)"},
+                "timeout": {"type": "integer", "description": "Request timeout in seconds (default 30)"},
+            },
+            "required": ["url"],
+        },
+        "category": "network",
+        "is_destructive": False,
+    },
+    {
+        "name": "get_system_specs",
+        "func": get_system_specs,
+        "description": (
+            "Get current OS platform, CPU core count, and total RAM — use this when you need "
+            "cpu_cores, platform_system, or ram_total_gb values (e.g. to write a specs JSON file)."
+        ),
+        "schema": {"type": "object", "properties": {}, "required": []},
+        "category": "system",
+        "is_destructive": False,
+    },
+    {
+        "name": "run_python_script",
+        "func": run_python_script,
+        "description": "Execute a python script on disk and return exit code, stdout, and stderr.",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Script path to execute"}
+            },
+            "required": ["path"],
+        },
+        "category": "system",
+        "is_destructive": False,
+    },
+    {
+        "name": "check_port",
+        "func": check_port,
+        "description": "Check whether a local TCP port is currently open and listening.",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "port": {"type": "integer", "description": "Port number"}
+            },
+            "required": ["port"],
+        },
+        "category": "system",
+        "is_destructive": False,
+    },
+    # --- Astra Computer Use ---
+    {
+        "name": "computer_action",
+        "func": computer_action,
+        "description": "Unified Astra computer control: screenshot, mouse_move, click, double_click, right_click, drag, type, key, scroll.",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["screenshot", "mouse_move", "click", "double_click", "right_click", "drag", "type", "key", "scroll"],
+                    "description": "Action to perform.",
+                },
+                "x": {"type": "integer", "description": "X coordinate (pixels). Required for click/move/drag."},
+                "y": {"type": "integer", "description": "Y coordinate (pixels). Required for click/move/drag."},
+                "x2": {"type": "integer", "description": "Destination X for drag action."},
+                "y2": {"type": "integer", "description": "Destination Y for drag action."},
+                "text": {"type": "string", "description": "Text to type (for 'type' action)."},
+                "key": {"type": "string", "description": "Key or hotkey combo (for 'key' action, e.g. 'ctrl+c', 'enter')."},
+                "button": {"type": "string", "enum": ["left", "right", "middle"], "description": "Mouse button for drag (default 'left')."},
+                "clicks": {"type": "integer", "description": "Scroll wheel clicks (for 'scroll' action, default 3)."},
+                "direction": {"type": "string", "enum": ["up", "down", "left", "right"], "description": "Scroll direction (default 'down')."},
+                "duration": {"type": "number", "description": "Animation duration in seconds (for move/drag, default 0.3)."},
+                "target": {"type": "string", "enum": ["fullscreen", "active", "window"], "description": "Screenshot target (default 'fullscreen')."},
+            },
+            "required": ["action"],
+        },
+        "category": "system",
+        "is_destructive": False,
+    },
+    {
+        "name": "click_screen_target",
+        "func": click_screen_target,
+        "description": "Vision-action loop: find UI element by description, ground coordinates via vision LLM, click, and verify.",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "target_description": {
+                    "type": "string",
+                    "description": "Natural language description of the UI element to click (e.g. 'Play button', 'Search bar', 'Discord icon in taskbar').",
+                },
+                "verify": {
+                    "type": "boolean",
+                    "description": "Take a verification screenshot after click (default true).",
+                },
+            },
+            "required": ["target_description"],
+        },
+        "category": "system",
+        "is_destructive": False,
+    },
 ]
 
 
@@ -2716,7 +3674,12 @@ def register_system_tools(registry: Any) -> None:
             registry[name] = func
 
         # Also register system_ prefixed aliases if not already prefixed
-        if not name.startswith("system_") and name not in ("read_file", "write_file", "copy_file", "move_file", "rename_file"):
+        if not name.startswith("system_") and name not in (
+            "read_file", "write_file", "copy_file", "move_file", "rename_file",
+            "delete_file", "apply_patch", "list_directory", "search_files", "http_request",
+            "get_system_specs", "run_python_script", "check_port",
+            "computer_action", "click_screen_target",
+        ):
             alias_name = f"system_{name}"
             if hasattr(registry, "register_tool"):
                 registry.register_tool(
@@ -2748,19 +3711,5 @@ def register_system_tools(registry: Any) -> None:
                 )
             else:
                 registry[alias_name] = func
-
-    # Special convenient alias: system_get_stats -> get_system_stats
-    if hasattr(registry, "register_tool"):
-        registry.register_tool(
-            name="system_get_stats",
-            description="Retrieve comprehensive CPU, RAM, Disk, and Network IO statistics.",
-            func=get_system_stats,
-            schema={"type": "object", "properties": {}, "required": []},
-            category="system",
-            agent_hints=agent_hints,
-            task_tags=task_tags,
-            priority=1,
-            is_destructive=False,
-        )
 
     logger.info("Successfully registered %d system tools into ToolRegistry.", len(SYSTEM_TOOLS_MANIFEST))

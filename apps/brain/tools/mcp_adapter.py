@@ -13,6 +13,11 @@ import json
 import logging
 from typing import Any, Optional
 
+try:
+    import httpx
+except ImportError:
+    httpx = None  # type: ignore[assignment]
+
 from .types import Tool, ToolDefinition, ToolPolicy
 
 logger = logging.getLogger("makima.tools.mcp")
@@ -211,10 +216,125 @@ class AsyncMcpMultiplexer:
 McpStdioClient = AsyncMcpMultiplexer
 
 
+class AsyncMcpHttpClient:
+    """
+    HTTP / SSE client for remote Model Context Protocol (MCP) servers.
+    Connects to external MCP servers over HTTP POST and SSE streams.
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        headers: Optional[dict[str, str]] = None,
+        timeout_s: float = 30.0,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.headers = headers or {}
+        self.timeout_s = timeout_s
+        self._client: Optional[Any] = None
+        self._request_counter: int = 0
+        self._session_endpoint: Optional[str] = None
+        self._initialized: bool = False
+        self._write_lock = asyncio.Lock()
+
+    async def start(self) -> None:
+        """Initialize HTTP connection pool."""
+        if httpx is None:
+            raise RuntimeError("httpx is required for AsyncMcpHttpClient")
+        if self._client is None or getattr(self._client, "is_closed", True):
+            req_headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+                **self.headers,
+            }
+            self._client = httpx.AsyncClient(
+                headers=req_headers,
+                timeout=httpx.Timeout(self.timeout_s),
+            )
+            self._initialized = False
+
+    async def stop(self) -> None:
+        """Close connection pool."""
+        if self._client and not getattr(self._client, "is_closed", True):
+            await self._client.aclose()
+        self._client = None
+        self._initialized = False
+
+    async def call_method(
+        self,
+        method: str,
+        params: Optional[dict[str, Any]] = None,
+        timeout_s: float = 30.0,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Dispatch JSON-RPC method over HTTP transport."""
+        timeout = kwargs.get("timeout", timeout_s)
+        if self._client is None or getattr(self._client, "is_closed", True):
+            await self.start()
+
+        if not self._initialized and method != "initialize":
+            try:
+                await self._send_raw_method("initialize", {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {"tools": {}},
+                    "clientInfo": {"name": "MakimaBrain", "version": "8.1"},
+                }, timeout=timeout)
+                self._initialized = True
+            except Exception as init_err:
+                logger.warning("MCP HTTP re-initialize failed: %s", init_err)
+
+        if method == "initialize":
+            self._initialized = True
+
+        return await self._send_raw_method(method, params, timeout=timeout)
+
+    async def _send_raw_method(
+        self,
+        method: str,
+        params: Optional[dict[str, Any]] = None,
+        *,
+        timeout: float = 30.0,
+    ) -> dict[str, Any]:
+        async with self._write_lock:
+            self._request_counter += 1
+            req_id = self._request_counter
+
+        packet = {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "method": method,
+            "params": params or {},
+        }
+
+        url = self._session_endpoint or self.base_url
+        if self._client is None:
+            raise RuntimeError("MCP HTTP client is not started")
+
+        try:
+            resp = await self._client.post(url, json=packet, timeout=timeout)
+            resp.raise_for_status()
+            data = resp.json()
+
+            if "error" in data:
+                err = data["error"]
+                code = err.get("code") if isinstance(err, dict) else "unknown"
+                msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+                raise RuntimeError(f"MCP HTTP RPC Error ({code}): {msg}")
+
+            return data.get("result", {})
+        except Exception as err:
+            if httpx and isinstance(err, httpx.TimeoutException):
+                raise TimeoutError(f"MCP HTTP method '{method}' (id={req_id}) timed out after {timeout}s")
+            raise
+
+
+AsyncMcpSseClient = AsyncMcpHttpClient
+
+
 class McpToolAdapter:
     """Discovers tools from an MCP client and registers them into Makima's ToolRegistry."""
 
-    def __init__(self, client: AsyncMcpMultiplexer | McpStdioClient, prefix: str = "mcp") -> None:
+    def __init__(self, client: AsyncMcpMultiplexer | McpStdioClient | AsyncMcpHttpClient, prefix: str = "mcp") -> None:
         self.client = client
         self.prefix = prefix
 
@@ -302,5 +422,7 @@ class McpToolAdapter:
 __all__ = [
     "AsyncMcpMultiplexer",
     "McpStdioClient",
+    "AsyncMcpHttpClient",
+    "AsyncMcpSseClient",
     "McpToolAdapter",
 ]

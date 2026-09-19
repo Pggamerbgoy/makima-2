@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
 
@@ -58,7 +58,7 @@ class ExecutionMetrics:
     total_guardrail_hits: int = 0
     total_tokens: int = 0
     total_tool_calls: int = 0
-    durations_ms: list[float] = None
+    durations_ms: list[float] = field(default_factory=list)
 
     def __post_init__(self):
         if self.durations_ms is None:

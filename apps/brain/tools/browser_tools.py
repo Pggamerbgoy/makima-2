@@ -43,6 +43,16 @@ logger = logging.getLogger("makima.tools.browser")
 # Global Controller Hook & Singleton Lifecycle
 # ---------------------------------------------------------------------------
 _custom_browser_controller: Optional[Any] = None
+_shared_bc: Optional[Any] = None
+_bc_lock: Optional[asyncio.Lock] = None
+_bc_refcount: int = 0
+
+
+def _get_bc_lock() -> asyncio.Lock:
+    global _bc_lock
+    if _bc_lock is None:
+        _bc_lock = asyncio.Lock()
+    return _bc_lock
 
 
 def set_browser_controller(controller: Optional[Any]) -> None:
@@ -53,37 +63,48 @@ def set_browser_controller(controller: Optional[Any]) -> None:
 
 def get_browser_controller() -> Optional[Any]:
     """Retrieve the currently injected or active BrowserController if available."""
-    global _custom_browser_controller
+    global _custom_browser_controller, _shared_bc
     if _custom_browser_controller is not None:
         return _custom_browser_controller
-    try:
-        from ..agents.browser_agent import BrowserAgent
-        return BrowserAgent._shared_bc
-    except Exception:
-        return None
+    return _shared_bc
 
 
 async def get_or_create_browser_controller(config: Optional[dict] = None) -> Any:
     """
     Get or create the shared BrowserController singleton with thread-safe lock.
     """
-    global _custom_browser_controller
+    global _custom_browser_controller, _shared_bc, _bc_refcount
     if _custom_browser_controller is not None:
         return _custom_browser_controller
 
-    from ..agents.browser_agent import BrowserAgent
-    async with BrowserAgent._bc_lock:
-        if BrowserAgent._shared_bc is None:
+    lock = _get_bc_lock()
+    async with lock:
+        if _shared_bc is None:
             from ..browser_controller import BrowserController
-            BrowserAgent._shared_bc = BrowserController(
+            _shared_bc = BrowserController(
                 config=config or {},
                 ai_handler=None,
                 ws_broadcast=None,
             )
-            await BrowserAgent._shared_bc.start()
-            BrowserAgent._bc_refcount = 1
+            await _shared_bc.start()
+            _bc_refcount = 1
             logger.info("browser_tools: initialized shared BrowserController singleton")
-        return BrowserAgent._shared_bc
+        return _shared_bc
+
+
+async def stop_browser_controller() -> None:
+    """Shut down and cleanup shared BrowserController singleton."""
+    global _shared_bc, _bc_refcount
+    lock = _get_bc_lock()
+    async with lock:
+        if _shared_bc is not None:
+            try:
+                await _shared_bc.stop()
+            except Exception as e:
+                logger.warning("Error stopping shared browser controller: %s", e)
+            finally:
+                _shared_bc = None
+                _bc_refcount = 0
 
 
 async def _dispatch_bc(method_name: str, **kwargs: Any) -> Any:

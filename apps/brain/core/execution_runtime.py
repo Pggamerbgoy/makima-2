@@ -17,7 +17,6 @@ import uuid
 from typing import Any, Callable, Optional, Union
 
 from .contracts import Action, ActionExecutionContext, ExecutionResult, Task, MEDIA_KEYWORDS
-from ..core.invariant_verifier import InvariantVerifier, VerificationResult
 
 logger = logging.getLogger("execution_runtime")
 
@@ -35,13 +34,8 @@ DOMAIN_TIMEOUT_DEFAULTS: dict[str, float] = {
 
 
 def _resolve_filesystem_engine() -> Any:
-    """Lazy resolver for FilesystemEngine singleton to avoid cyclic/re-imports."""
-    try:
-        from ..agents.filesystem_engine import get_filesystem_engine
-        return get_filesystem_engine()
-    except Exception as exc:
-        logger.debug("[execution_runtime] FilesystemEngine unavailable: %s", exc)
-        return None
+    """Legacy resolver stub (FilesystemEngine deprecated)."""
+    return None
 
 
 def _resolve_world_state() -> Any:
@@ -54,6 +48,16 @@ def _resolve_world_state() -> Any:
         return None
 
 
+def _resolve_event_store() -> Any:
+    """Lazy resolver for EventStore persistence."""
+    try:
+        from .persistence import EventStore
+        return EventStore("~/.makima/kernel_events.db")
+    except Exception as exc:
+        logger.debug("[execution_runtime] EventStore unavailable: %s", exc)
+        return None
+
+
 class ExecutionRuntime:
     """
     Canonical transactional runtime for physical action execution in Makima OS.
@@ -61,28 +65,81 @@ class ExecutionRuntime:
     """
     _resolve_filesystem_engine = staticmethod(_resolve_filesystem_engine)
     _resolve_world_state = staticmethod(_resolve_world_state)
+    _resolve_event_store = staticmethod(_resolve_event_store)
 
     def __init__(
         self,
         tool_registry: Any = None,
-        invariant_verifier: Optional[InvariantVerifier] = None,
+        invariant_verifier: Optional[Any] = None,
         learning_coordinator: Any = None,
         guardrails: Any = None,
         recovery_manager: Any = None,
         saga_recovery: Any = None,
         kernel: Any = None,
+        event_store: Any = None,
     ) -> None:
         self.tool_registry = tool_registry
         if self.tool_registry and hasattr(self.tool_registry, "set_execution_runtime"):
             self.tool_registry.set_execution_runtime(self)
-        self.verifier = invariant_verifier or InvariantVerifier()
+        self.verifier = invariant_verifier
         self.learning_coordinator = learning_coordinator
         self.reflexion_engine = learning_coordinator
         self.guardrails = guardrails
         self.saga_recovery = saga_recovery or recovery_manager
         self.recovery_manager = self.saga_recovery
         self.kernel = kernel
+        self.event_store = event_store or getattr(kernel, "event_store", None)
         self._background_tasks: set[asyncio.Task] = set()
+
+    def _get_event_store(self) -> Any:
+        if self.event_store is None:
+            self.event_store = self._resolve_event_store()
+        return self.event_store
+
+    def _record_incident_in_store(
+        self,
+        action: Action,
+        res_obj: ExecutionResult,
+        ctx: Optional[ActionExecutionContext] = None,
+    ) -> None:
+        """Persist SAGA incident into EventStore (~/.makima/kernel_events.db)."""
+        store = self._get_event_store()
+        if store and hasattr(store, "append_sync"):
+            try:
+                store.append_sync(
+                    event_type="saga_incident",
+                    task_id=action.task_id,
+                    agent_name=getattr(ctx, "agent_name", "") or getattr(action, "agent_name", "") or "execution_runtime",
+                    payload={
+                        "action_id": action.action_id,
+                        "capability": action.capability_name,
+                        "tool_name": action.capability_name,
+                        "parameters": getattr(action, "parameters", {}),
+                        "error": res_obj.error or "Execution failed",
+                        "evidence_tier": res_obj.evidence_tier,
+                        "duration_ms": res_obj.duration_ms,
+                        "rollback_performed": getattr(res_obj, "rollback_performed", False),
+                        "compensation_tool": getattr(ctx, "compensation_tool", None),
+                        "compensation_params": getattr(ctx, "compensation_params", {}),
+                        "timestamp": time.time(),
+                    },
+                )
+                if getattr(res_obj, "rollback_performed", False):
+                    store.append_sync(
+                        event_type="saga_compensation",
+                        task_id=action.task_id,
+                        agent_name="execution_runtime",
+                        payload={
+                            "action_id": action.action_id,
+                            "failed_capability": action.capability_name,
+                            "compensation_tool": getattr(ctx, "compensation_tool", None),
+                            "compensation_params": getattr(ctx, "compensation_params", {}),
+                            "snapshot_id": getattr(ctx, "snapshot_id", None),
+                            "timestamp": time.time(),
+                        },
+                    )
+            except Exception as store_err:
+                logger.debug("[execution_runtime] Failed to persist saga incident: %s", store_err)
 
     def _determine_timeout(self, action: Action, tool_meta: Any = None) -> float:
         """Calculate the timeout deadline for the given Action."""
@@ -105,19 +162,50 @@ class ExecutionRuntime:
         # 3. Tool name / capability domain heuristic
         cap = (action.capability_name or "").lower()
         if any(k in cap for k in ("browser", "scrape", "navigate", "page", "cdp")):
-            return DOMAIN_TIMEOUT_DEFAULTS["browser"]
-        if any(k in cap for k in ("docker", "deploy", "build", "ci", "git_clone")):
-            return DOMAIN_TIMEOUT_DEFAULTS["devops"]
-        if any(k in cap for k in MEDIA_KEYWORDS):
-            return DOMAIN_TIMEOUT_DEFAULTS["media"]
-        if any(k in cap for k in ("security", "audit", "vuln")):
-            return DOMAIN_TIMEOUT_DEFAULTS["security"]
-        if any(k in cap for k in ("msg", "whatsapp", "telegram", "email", "discord")):
-            return DOMAIN_TIMEOUT_DEFAULTS["comm"]
-        if any(k in cap for k in ("file", "window", "process", "desktop", "os", "clipboard")):
-            return DOMAIN_TIMEOUT_DEFAULTS["system"]
+            base_timeout = DOMAIN_TIMEOUT_DEFAULTS["browser"]
+        elif any(k in cap for k in ("docker", "deploy", "build", "ci", "git_clone")):
+            base_timeout = DOMAIN_TIMEOUT_DEFAULTS["devops"]
+        elif any(k in cap for k in MEDIA_KEYWORDS):
+            base_timeout = DOMAIN_TIMEOUT_DEFAULTS["media"]
+        elif any(k in cap for k in ("security", "audit", "vuln")):
+            base_timeout = DOMAIN_TIMEOUT_DEFAULTS["security"]
+        elif any(k in cap for k in ("msg", "whatsapp", "telegram", "email", "discord")):
+            base_timeout = DOMAIN_TIMEOUT_DEFAULTS["comm"]
+        elif any(k in cap for k in ("file", "window", "process", "desktop", "os", "clipboard")):
+            base_timeout = DOMAIN_TIMEOUT_DEFAULTS["system"]
+        else:
+            base_timeout = DOMAIN_TIMEOUT_DEFAULTS["default"]
 
-        return DOMAIN_TIMEOUT_DEFAULTS["default"]
+        # 4. Adaptive Timeout Recovery via SAGA Incident Learning
+        tool_name = action.capability_name
+        store = self._get_event_store()
+        if store and hasattr(store, "get_failure_patterns_sync"):
+            try:
+                patterns = store.get_failure_patterns_sync(lookback_seconds=1800.0, min_failures=2)
+                tool_pattern = patterns.get(tool_name)
+                if tool_pattern and tool_pattern.get("dominant_issue") == "TIMEOUT":
+                    scale = float(tool_pattern.get("recommended_timeout_scale", 1.5))
+                    adaptive_timeout = min(base_timeout * scale, 120.0)
+                    logger.info(
+                        "[execution_runtime] Adaptive Timeout applied to '%s': %.1fs -> %.1fs (based on %d recent timeouts)",
+                        tool_name, base_timeout, adaptive_timeout, tool_pattern.get("failure_count", 0),
+                    )
+                    return adaptive_timeout
+            except Exception as pat_err:
+                logger.debug("Failed to calculate adaptive timeout: %s", pat_err)
+
+        return base_timeout
+
+    def get_tool_incident_summary(self, tool_name: str) -> Optional[dict[str, Any]]:
+        """Query EventStore to get diagnostic pattern summary for a specific tool."""
+        store = self._get_event_store()
+        if store and hasattr(store, "get_failure_patterns_sync"):
+            try:
+                patterns = store.get_failure_patterns_sync(lookback_seconds=3600.0, min_failures=1)
+                return patterns.get(tool_name)
+            except Exception:
+                return None
+        return None
 
     COMMON_PARAM_ALIASES: dict[str, list[str]] = {
         "path": ["file_path", "filepath", "target_path", "filename", "file", "target_file", "path_str", "targetpath"],
@@ -134,6 +222,8 @@ class ExecutionRuntime:
         "source_path": ["src", "src_path", "source", "source_file"],
         "target_folder_or_path": ["dst", "dest", "destination", "target", "destination_path", "target_path"],
         "selector": ["css_selector", "xpath_selector", "target", "element"],
+        "app_name": ["app_path", "target", "app", "application", "name"],
+        "app_path": ["app_name", "target", "app", "application", "name"],
     }
 
     FILE_TOOLS: frozenset[str] = frozenset({
@@ -416,7 +506,7 @@ class ExecutionRuntime:
                         action.capability_name,
                         reason,
                     )
-                    return ExecutionResult(
+                    res_obj = ExecutionResult(
                         execution_id=exec_id,
                         action_id=action.action_id,
                         task_id=action.task_id,
@@ -425,6 +515,8 @@ class ExecutionRuntime:
                         duration_ms=duration_ms,
                         error=f"Permission denied: {reason}",
                     )
+                    self._record_incident_in_store(action, res_obj, ctx)
+                    return res_obj
             except Exception as guard_err:
                 logger.warning("[execution_runtime] Guardrail check error: %s", guard_err)
 
@@ -471,6 +563,7 @@ class ExecutionRuntime:
                 duration_ms=duration_ms,
                 error=f"Invalid parameters for tool '{tool_name}': {validation_error}",
             )
+            self._record_incident_in_store(action, res_obj, ctx)
             if getattr(self, "saga_recovery", None):
                 recovery = await self.saga_recovery.handle_failure(
                     action, res_obj, ctx
@@ -617,47 +710,39 @@ class ExecutionRuntime:
             except Exception as state_err:
                 logger.debug("[execution_runtime] Post-state capture error: %s", state_err)
 
-        # ── 8. Invariant Verification & Saga Auto-Compensation ────────────────
-        verification: VerificationResult
+        # ── 8. Verification ──────────────────────────────────────────────────
         if is_timeout:
-            verification = VerificationResult(
-                status="TIMEOUT",
-                reason=tool_error or "Execution timed out",
-                expected_state=action.expected_state,
-                observed_state=post_state,
-                confidence=0.0,
-            )
+            v_status = "TIMEOUT"
+            v_reason = tool_error or "Execution timed out"
+            v_confidence = 0.0
         elif tool_error:
-            verification = VerificationResult(
-                status="VERIFIED_FAILURE",
-                reason=tool_error,
-                expected_state=action.expected_state,
-                observed_state=post_state,
-                confidence=0.0,
-            )
-        else:
+            v_status = "VERIFIED_FAILURE"
+            v_reason = tool_error
+            v_confidence = 0.0
+        elif self.verifier and hasattr(self.verifier, "verify"):
             try:
-                verification = await self.verifier.verify(
-                    tool_name=tool_name,
-                    params=params,
-                    tool_result=raw_output,
-                )
+                verif = await self.verifier.verify(tool_name=tool_name, params=params, tool_result=raw_output)
+                v_status = getattr(verif, "status", "VERIFIED_SUCCESS")
+                v_reason = getattr(verif, "reason", "")
+                v_confidence = getattr(verif, "confidence", 1.0)
             except Exception as verif_err:
-                logger.warning("[execution_runtime] Invariant verification error: %s", verif_err)
-                verification = VerificationResult(
-                    status="UNVERIFIABLE",
-                    reason=f"Verification fallback: {verif_err}",
-                    confidence=0.5,
-                )
+                logger.warning("[execution_runtime] Verifier error: %s", verif_err)
+                v_status = "UNVERIFIABLE"
+                v_reason = str(verif_err)
+                v_confidence = 0.5
+        else:
+            v_status = "VERIFIED_SUCCESS"
+            v_reason = ""
+            v_confidence = 1.0
 
-        ctx.verification_passed = verification.status in ("VERIFIED_SUCCESS", "UNVERIFIABLE")
-        ctx.verification_status = verification.status
-        ctx.verification_confidence = getattr(verification, "confidence", 1.0 if verification.status == "VERIFIED_SUCCESS" else 0.5)
+        ctx.verification_passed = v_status in ("VERIFIED_SUCCESS", "UNVERIFIABLE")
+        ctx.verification_status = v_status
+        ctx.verification_confidence = v_confidence
         duration_ms = (time.perf_counter() - t0) * 1000
-        if verification.status == "VERIFIED_FAILURE" and not tool_error:
-            tool_error = f"[Physical Verification Failed]: {verification.reason}"
+        if v_status == "VERIFIED_FAILURE" and not tool_error:
+            tool_error = f"[Physical Verification Failed]: {v_reason}"
         is_success = ctx.verification_passed and not tool_error and not is_timeout
-        is_verified = (verification.status == "VERIFIED_SUCCESS") and is_success
+        is_verified = (v_status == "VERIFIED_SUCCESS") and is_success
         rollback_done = False
 
         # Saga Rollback on failure
@@ -698,7 +783,7 @@ class ExecutionRuntime:
 
                     if restored_ok:
                         tool_error = (
-                            f"Invariant verification failed: {verification.reason} "
+                            f"Invariant verification failed: {v_reason} "
                             f"[Auto-compensated: Rollback verified]"
                         )
                         logger.info(
@@ -708,7 +793,7 @@ class ExecutionRuntime:
                         )
                     else:
                         tool_error = (
-                            f"Invariant verification failed: {verification.reason} "
+                            f"Invariant verification failed: {v_reason} "
                             f"[Rollback failed: {restored_err}]"
                         )
                         logger.critical(
@@ -742,8 +827,8 @@ class ExecutionRuntime:
                     "agent_name": getattr(ctx, "agent_name", "") or getattr(action, "agent_name", "") or "",
                     "is_success": is_success,
                     "duration_ms": duration_ms,
-                    "error": tool_error or (verification.reason if not is_success else None),
-                    "error_text": tool_error or (verification.reason if not is_success else ""),
+                    "error": tool_error or (v_reason if not is_success else None),
+                    "error_text": tool_error or (v_reason if not is_success else ""),
                     "params": params,
                     "timestamp": time.time(),
                 }
@@ -765,7 +850,7 @@ class ExecutionRuntime:
                 logger.debug("[execution_runtime] Kernel telemetry error: %s", kern_err)
 
         # ── 10. Assemble Result & Recovery Strategy ───────────────────────────
-        evidence_tier_val = "TIMEOUT" if is_timeout else getattr(verification, "status", "UNVERIFIABLE")
+        evidence_tier_val = "TIMEOUT" if is_timeout else (v_status or "UNVERIFIABLE")
         artifacts = self._extract_artifacts(tool_name, params, raw_output)
         ctx.artifacts = artifacts
 
@@ -779,12 +864,50 @@ class ExecutionRuntime:
             is_verified=is_verified,
             evidence_tier=evidence_tier_val,
             duration_ms=duration_ms,
-            error=tool_error or (verification.reason if not is_success else None),
+            error=tool_error or (v_reason if not is_success else None),
             rollback_performed=rollback_done,
             artifacts=artifacts,
         )
 
         if not is_success:
+            store = self._get_event_store()
+            if store and hasattr(store, "append_sync"):
+                try:
+                    store.append_sync(
+                        event_type="saga_incident",
+                        task_id=action.task_id,
+                        agent_name=getattr(ctx, "agent_name", "") or getattr(action, "agent_name", "") or "execution_runtime",
+                        payload={
+                            "action_id": action.action_id,
+                            "capability": tool_name,
+                            "tool_name": tool_name,
+                            "parameters": params,
+                            "error": tool_error or (v_reason if not is_success else "Execution failed"),
+                            "evidence_tier": evidence_tier_val,
+                            "duration_ms": duration_ms,
+                            "rollback_performed": rollback_done,
+                            "compensation_tool": ctx.compensation_tool,
+                            "compensation_params": ctx.compensation_params,
+                            "timestamp": time.time(),
+                        },
+                    )
+                    if rollback_done:
+                        store.append_sync(
+                            event_type="saga_compensation",
+                            task_id=action.task_id,
+                            agent_name="execution_runtime",
+                            payload={
+                                "action_id": action.action_id,
+                                "failed_capability": tool_name,
+                                "compensation_tool": ctx.compensation_tool,
+                                "compensation_params": ctx.compensation_params,
+                                "snapshot_id": ctx.snapshot_id,
+                                "timestamp": time.time(),
+                            },
+                        )
+                except Exception as store_err:
+                    logger.debug("[execution_runtime] Failed to persist saga incident: %s", store_err)
+
             if getattr(self, "saga_recovery", None):
                 recovery = await self.saga_recovery.handle_failure(
                     action, res_obj, ctx
@@ -835,3 +958,107 @@ class ExecutionRuntime:
         if isinstance(res.tool_output, (dict, list)):
             return json.dumps(res.tool_output, default=str)
         return str(res.tool_output if res.tool_output is not None else "")
+
+    async def execute_actions_parallel(
+        self,
+        actions: list[Action],
+        context: Optional[ActionExecutionContext] = None,
+        max_concurrency: int = 4,
+    ) -> list[ExecutionResult]:
+        """
+        Execute multiple Actions concurrently with transactional safety partitioning.
+        - Non-destructive (read-only) actions are executed concurrently via asyncio.gather bounded by semaphore.
+        - Destructive / mutating actions are executed sequentially in order to preserve state machine invariants.
+        """
+        if not actions:
+            return []
+
+        sem = asyncio.Semaphore(max(1, max_concurrency))
+
+        async def _safe_exec(act: Action) -> ExecutionResult:
+            async with sem:
+                try:
+                    return await self.execute_action(act, context=context)
+                except Exception as exc:
+                    logger.error("[ExecutionRuntime] Error in parallel action %s (%s): %s", act.action_id, act.capability_name, exc)
+                    return ExecutionResult(
+                        execution_id=f"exec_err_{uuid.uuid4().hex[:8]}",
+                        action_id=act.action_id,
+                        task_id=act.task_id,
+                        is_verified=False,
+                        evidence_tier="UNHANDLED_EXCEPTION",
+                        error=str(exc),
+                    )
+
+        results: list[ExecutionResult] = []
+        current_parallel_batch: list[Action] = []
+
+        for action in actions:
+            is_destructive = getattr(action, "is_destructive", False)
+            if self.tool_registry and hasattr(self.tool_registry, "tools"):
+                tool_def = self.tool_registry.tools.get(action.capability_name)
+                if tool_def and getattr(tool_def, "is_destructive", False):
+                    is_destructive = True
+
+            if is_destructive:
+                if current_parallel_batch:
+                    batch_res = await asyncio.gather(*[_safe_exec(a) for a in current_parallel_batch])
+                    results.extend(batch_res)
+                    current_parallel_batch = []
+                res = await _safe_exec(action)
+                results.append(res)
+            else:
+                current_parallel_batch.append(action)
+
+        if current_parallel_batch:
+            batch_res = await asyncio.gather(*[_safe_exec(a) for a in current_parallel_batch])
+            results.extend(batch_res)
+
+        return results
+
+    async def execute_tools_parallel(
+        self,
+        calls: list[dict[str, Any]],
+        context: Any = None,
+        task_id: Optional[str] = None,
+        max_concurrency: int = 4,
+    ) -> list[dict[str, Any]]:
+        """
+        Convenience method to execute multiple tool calls concurrently and return structured outputs.
+        """
+        if not calls:
+            return []
+
+        actions = []
+        t_id = task_id or getattr(context, "task_id", "") or "default_task"
+        for call in calls:
+            name = call.get("name", "")
+            params = dict(call.get("params", {}))
+            act = Action(
+                action_id=call.get("call_id") or f"act_{uuid.uuid4().hex[:8]}",
+                task_id=t_id,
+                capability_name=name,
+                parameters=params,
+            )
+            actions.append(act)
+
+        act_context = context if isinstance(context, ActionExecutionContext) else None
+        results = await self.execute_actions_parallel(actions, context=act_context, max_concurrency=max_concurrency)
+
+        outputs = []
+        for call, res in zip(calls, results):
+            call_id = call.get("call_id", res.action_id)
+            name = call.get("name", "")
+            raw_out = res.tool_output
+            if not res.is_verified and res.error:
+                raw_out = f"Error executing tool {name}: {res.error}"
+            outputs.append({
+                "call_id": call_id,
+                "name": name,
+                "success": res.is_success and res.is_verified,
+                "result": raw_out,
+                "error": res.error if not res.is_verified else None,
+                "duration_ms": res.duration_ms,
+            })
+        return outputs
+
