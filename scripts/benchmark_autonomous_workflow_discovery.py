@@ -1412,7 +1412,7 @@ async def evaluate_single_model_on_suite(
     effective_key = api_key or OPENROUTER_KEY
     headers = {"Authorization": f"Bearer {effective_key}", "Content-Type": "application/json"}
 
-    async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
+    async with httpx.AsyncClient(timeout=60.0) as client:
         for tc in suite:
             print(f"\n--- Task [{tc.task_id}] {tc.category} ---")
             print(f"Goal: \"{tc.high_level_goal}\"")

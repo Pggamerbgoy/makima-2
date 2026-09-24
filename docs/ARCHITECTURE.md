@@ -6,7 +6,6 @@
 Makima is a desktop AI assistant split into a Python brain, a native Rust overlay, and React UIs. The active production chat surface is `apps/chat_ui`; the native overlay is `apps/native_overlay`.
 - `apps/brain/`: The core Python orchestrator, AI handler, agents (Commander, Browser), and native tools.
 - `apps/chat_ui/`: The active React/Vite ChatGPT/Gemini-style chat UI with provider selection, multimodal composer, media cards, and local library.
-- `apps/ui/`: Legacy Tauri shell retained only for compatibility/build history; it is not the active overlay runtime.
 - `apps/native_overlay/`: Rust + Slint native Windows quick-command/voice overlay. It has no React or WebView dependency and connects directly to the local `/ws` endpoint.
 - `configs/`: Centralized configuration (YAML) managing LLM backends, context budgets, thresholds, and module toggles.
 
@@ -14,7 +13,7 @@ Makima is a desktop AI assistant split into a Python brain, a native Rust overla
 - **Frontend**: React 19, TypeScript, Vite, React Router, Lucide-react.
 - **Native quick surface**: Rust + Slint; native window, tray menu, global hotkeys, compact notification/reply bar, and expanded quick-chat view.
 - **Backend (Brain)**: Python (Playwright for browser, gRPC for native services like audio/whisper/screen).
-- **Design System**: Custom CSS (`design-system.css`) using 'Obsidian Violet' palette, glassmorphism, and raw CSS variables.
+- **Design System**: Single `apps/chat_ui/src/index.css` using 'Obsidian Violet' palette, glassmorphism, and CSS custom properties.
 
 ## 3. Entry Points & Data Flow
 1. **Startup**: The user launches the standalone Vite chat UI (`apps/chat_ui`) and optionally the native overlay (`apps/native_overlay`).
@@ -27,7 +26,7 @@ Makima is a desktop AI assistant split into a Python brain, a native Rust overla
 - **EternalMemory WAL SQLite & Auto-Initialization**: SQLite runs in WAL mode (`PRAGMA journal_mode=WAL`) with a 30s busy timeout (`PRAGMA busy_timeout=30000`). Database reads use thread-safe short-lived connections in executors, while `save_turn` automatically ensures tables exist even before `start()` is invoked.
 - **Audio Bleed Ducking Protection**: `SpeechOrchestrator` maintains an active media/TTS lock (`_media_playing` / `_tts_playing` via `set_media_playing`) that ducks and warns on microphone capture during background audio playback.
 - **Win32 API Resilience**: `WindowManager` wraps `win32gui.EnumWindows` callbacks with explicit return codes (`return True`) and `try/except` guards to prevent Win32 Error 122 (`ERROR_INSUFFICIENT_BUFFER`) on Windows 11.
-- **Fallback IPC**: `tauriEngine.ts` implements safe fallbacks for web-only mode (when `__TAURI_INTERNALS__` is absent), allowing UI dev without the Rust backend.
+- **Web-only fallback**: The chat UI runs in a browser against the local brain over HTTP/WS; no Tauri IPC bridge is required for the active surface.
 - **Process Management**: Rust uses `std::sync::Mutex` to track the Python child process, ensuring only one instance of the engine runs at a time.
 - **Styling**: Utility classes combined with semantic component classes (`.btn`, `.card`, `.glass`) and native CSS custom properties.
 

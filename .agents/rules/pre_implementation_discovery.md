@@ -17,7 +17,7 @@ Writing new code or creating new files without first thoroughly searching the pr
 Whenever a feature, fix, module, tool, or capability is requested:
 
 1. **Step 1: Global Semantic & Exact Code Search**:
-   - Run `grep_search` across `apps/brain/`, `apps/ui/`, `configs/`, `native/`, and scripts for relevant keywords, class names, function names, and capability descriptors.
+   - Run `grep_search` across `apps/brain/`, `apps/chat_ui/`, `configs/`, `native/`, and scripts for relevant keywords, class names, function names, and capability descriptors.
    - Use `list_dir` to inspect relevant subsystem folders (e.g. `core/`, `agents/`, `tools/`, `utils/`) to see existing module boundaries.
 
 2. **Step 2: Existing Implementation & Pattern Audit**:

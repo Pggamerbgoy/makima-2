@@ -22,7 +22,7 @@ Claude Opus 4.8 is an elite reasoning model with a 1M context window. With a wee
 ## 2. The 4 Golden Rules of Token Conservation
 
 ### Rule 1: Always Use `-p` (Plan Mode) Before Coding
-Before making modifications to `apps/brain` or `apps/ui`, ask Claude for a concise plan:
+Before making modifications to `apps/brain` or `apps/chat_ui`, ask Claude for a concise plan:
 ```powershell
 claude -p "In apps/brain/window_manager.py, give me a 3-bullet plan to fix window focus tracking without changing code."
 ```

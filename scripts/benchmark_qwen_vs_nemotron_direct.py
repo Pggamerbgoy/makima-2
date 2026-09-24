@@ -76,7 +76,7 @@ async def run_direct_model_eval(model_label: str, model_id: str) -> dict:
         "Content-Type": "application/json"
     }
 
-    async with httpx.AsyncClient(timeout=45.0, verify=False) as client:
+    async with httpx.AsyncClient(timeout=45.0) as client:
         for task in WORKFLOW_TASKS:
             t_start = time.perf_counter()
             messages = [

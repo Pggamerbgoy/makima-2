@@ -81,3 +81,57 @@ Integrity mode: development
 - [ ] No regression in WebSocket message dispatch or existing agent tools.
 - [ ] Full repository test suite passes.
 
+## 2026-09-19T17:02:16Z
+
+Systematic engineering remediation of the remaining 11 architectural, operational, and subsystem wiring gaps across Makima OS, ensuring zero regression across tool execution, SAGA safety, and memory persistence.
+
+Working directory: c:\code\makima
+Integrity mode: development
+
+## Requirements
+
+### R1. Uncap SDK Tool Budget (Phase 2)
+Restore all 53 omitted tools by setting `agent.tool_budget_tokens: 0` in `configs/default.yaml` and default fallback in `apps/brain/core/sdk_bridge.py`. Ensure all 121 registered tools (WhatsApp, Undo, Memory, Documents, Media, Calendar, DevOps, Security) are converted to SDK tools without truncation.
+
+### R2. Wire Feedback Loop & Clean Confirmation Logic (Phases 3 & 4)
+Wire WebSocket `ClientMessageType.FEEDBACK` in `apps/brain/main.py` directly to `preference_engine.record_feedback(approved=False)` and remove references to deleted `reflexion_engine`. Clean up dangling `messaging` variable in message approvals/rejections and route via `ActionConfirmationManager`.
+
+### R3. Implement Standalone Reminder Tools via DurableTaskEngine (Phase 5)
+Create `apps/brain/tools/reminder_tools.py` exposing `set_reminder`, `list_reminders`, and `cancel_reminder` tools backed by `DurableTaskEngine.schedule_resume`. Register in `tool_loader.py` and wire `/api/automation/schedule` and `/api/automation/routines` in `main.py`.
+
+### R4. Reactivate PersonalityEngine (Phase 6)
+Instantiate and wire `PersonalityEngine` (571 lines of emotional state modeling) in `app_bootstrap.py` Wave 4. Inject into `OrchestrationEngine` and incorporate emotion directives into the agent system prompt and WebSocket state.
+
+### R5. Implement Action-Level Guardrails & Polish Subsystems (Phases 7–12)
+Implement `SystemActionGuardrail` with `check_action()` preventing destructive root file deletions and command injection in `ExecutionRuntime`. Relax tool description cutoff in `_compress_tool_schema` (250 chars). Propagate focus profiles to `ProactiveOrchestrator`. Connect real security tools to `/api/security/audit`. Register tool alias `play_media`.
+
+## Acceptance Criteria
+
+### Tool Availability & SAGA Safety
+- [ ] `to_sdk_tools()` converts at least 120 unique tools without dropping any tool.
+- [ ] Mutating tools (`write_file`, `delete_file`, `organize_desktop`) continue to record snapshots in `ExecutionRuntime._undo_stack`.
+
+### Feature Verification
+- [ ] WebSocket `FEEDBACK` message with negative rating invokes `preference_engine.record_feedback(approved=False)`.
+- [ ] `set_reminder` creates durable resume record in SQLite event store and is queryable via `list_reminders`.
+- [ ] `PersonalityEngine` updates emotion state and injects tone instructions into the orchestration prompt.
+- [ ] `ExecutionRuntime` rejects dangerous root operations via `SystemActionGuardrail`.
+
+### Regressions & Clean Code
+- [ ] Full existing pytest suite (`pytest tests/`) passes with 100% success rate.
+- [ ] Code strictly follows zero-duplication rules and manual line-by-line inspection standards.
+
+## Follow-up — 2026-09-19T17:10:14Z
+
+CRITICAL ARCHITECTURAL DIRECTIVE FROM USER:
+DO NOT touch, recreate, or implement any guardrails for ExecutionRuntime!
+In the unified architecture (commit 00bc794), all guardrails are natively handled by OpenAI Agents SDK via `@input_guardrail dangerous_command_guard`, `InputGuardrailTripwireTriggered` in `sdk_bridge.py`, and domain tools in `system_tools.py`.
+ExecutionRuntime receiving `guardrails=None` in `app_bootstrap.py` is 100% INTENTIONAL by design to avoid duplicating guardrails outside the SDK.
+Do NOT create any SystemActionGuardrail or re-introduce legacy guardrails.
+
+Focus exclusively on:
+1. Uncapping `tool_budget_tokens: 0` in `configs/default.yaml` and `apps/brain/core/sdk_bridge.py` (restoring the 53 dropped tools).
+2. Wiring WebSocket `ClientMessageType.FEEDBACK` to `preference_engine.record_feedback(approved=False)` and cleaning legacy messaging references.
+3. Adding standalone `reminder_tools.py` using `DurableTaskEngine.schedule_resume`.
+4. Wiring `PersonalityEngine` in `app_bootstrap.py`.
+5. Relaxing description cutoff in `_compress_tool_schema` (250 chars) and registering `play_media` alias.

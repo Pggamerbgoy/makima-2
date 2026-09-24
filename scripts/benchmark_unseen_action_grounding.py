@@ -149,7 +149,7 @@ async def run_unseen_benchmark():
     results = []
     t_start_all = time.perf_counter()
 
-    async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+    async with httpx.AsyncClient(timeout=30.0) as client:
         for item in UNSEEN_GROUNDING_DATASET:
             t_start = time.perf_counter()
             raw_msg = item["input"]

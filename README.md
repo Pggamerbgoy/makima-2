@@ -39,10 +39,10 @@
   - HNSW vector index for instant semantic memory lookup.
   - State checkpointer with atomic SQLite WAL durability.
 
-- 🖥️ **Sleek Tauri Desktop UI**:
-  - Responsive dark-mode interface built with React & TypeScript.
+- 🖥️ **Chat UI (`apps/chat_ui`)**:
+  - Responsive dark-mode interface built with React & TypeScript + Vite.
   - Real-time WebSocket event bridge (`ws://127.0.0.1:8080/ws`).
-  - Overlay floating window mode & Control Center.
+  - Provider selection, multimodal composer, media cards, local library.
 
 ---
 
@@ -52,7 +52,7 @@
 makima/
 ├── apps/
 │   ├── brain/             # Python Multi-Agent Core Engine & WebSockets
-│   └── ui/                # Tauri + React + TypeScript Desktop Interface
+│   └── chat_ui/            # Active React + Vite chat interface (WS to brain)
 ├── crates/
 │   └── makima-core/       # Rust native backend (Vector Index & Triple Store)
 ├── native/                # C++ native OS bridges (Screen, Audio, Clipboard)

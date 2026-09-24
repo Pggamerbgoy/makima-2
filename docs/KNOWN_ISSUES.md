@@ -10,14 +10,22 @@ Tracking minor non-blocking edge cases and routing adjustments identified during
 
 ---
 
-### 2. SystemAgent Database Connection Resource Warning
-- **Symptom**: `ResourceWarning: unclosed database in <sqlite3.Connection object>` emitted during `SystemAgent._register_tools_with_registry`.
-- **Root Cause**: Ad-hoc sqlite connection opened in tool registration helper without context manager `with sqlite3.connect(...) as conn:`.
-- **Planned Fix**: Wrap sqlite connections in `SystemAgent` inside context managers or persistent connection pool.
+### 2. SystemAgent Database Connection Resource Warning (RESOLVED ✅)
+- **Status**: Fixed. Original `SystemAgent` module was retired; remaining unclosed sqlite was the module-level `_APPS_FTS_CONN` in `system_tools.py` plus `DurableTaskEngine` holding an open `EventStore`.
+- **Changes**: Added `close_apps_fts()` (atexit + bootstrap stop-hook) and `DurableTaskEngine.stop()` now closes the shared `EventStore` connection.
 
 ---
 
-### 3. Subprocess Transport Closed Pipe Warning on Shutdown
-- **Symptom**: `ValueError: I/O operation on closed pipe` warning logged during graceful shutdown in `BaseSubprocessTransport.__del__`.
-- **Root Cause**: Python 3.14 Proactor Event Loop garbage-collecting child process handles before async loop fully terminates.
-- **Planned Fix**: Explicitly await process termination in `shutdown_services()` before closing loop.
+### 3. Subprocess Transport Closed Pipe Warning on Shutdown (RESOLVED ✅)
+- **Status**: Fixed. Root cause was Proactor child-process handles GC'd before loop teardown / kill path not reaping process.
+- **Changes**: `AppBootstrap.shutdown_services()` now gathers cancelled background tasks, runs stop hooks, then yields the loop (`asyncio.sleep(0)` + drain) before close. `AsyncMcpMultiplexer.stop()` awaits `process.wait()` after `kill()`.
+
+---
+
+### 4. SkillLibrary exec re-verification (RESOLVED)
+- **Status**: `_execute_steps_safely` now re-runs `verify_skill_safety` before every `exec`, so skills loaded from SQLite cannot bypass the AST firewall used only at synthesis time.
+
+---
+
+### 5. Finance / Calendar / Notification store persistence (RESOLVED)
+- **Status**: All three stores now persist atomically under `~/.makima/` (`finance_expenses.json`, `calendar_events.json`, `notifications.json`) with datetime round-tripping.
