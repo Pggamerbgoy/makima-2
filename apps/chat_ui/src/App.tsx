@@ -56,8 +56,15 @@ const DEFAULT_SETTINGS: AppSettings = {
   },
 };
 
-const WELCOME_PHRASES = [
-  'code likho, bugs bhagao.',
+const daypartGreeting = (() => {
+  const h = new Date().getHours();
+  if (h >= 5 && h < 12) return 'Good morning — kya banayein aaj?';
+  if (h >= 12 && h < 17) return 'Good afternoon — how can I help?';
+  if (h >= 17 && h < 22) return 'Good evening — kya chal raha hai?';
+  return 'Late night — batao, kya karna hai?';
+})();
+
+const WELCOME_PHRASES = [  'code likho, bugs bhagao.',
   'system sambhalo, ek command me.',
   'web chhano, sources ke saath.',
   'report likho, canvas me kholo.',
@@ -1640,7 +1647,7 @@ export const App: React.FC = () => {
                 <div className="welcome-avatar-icon welcome-rise" style={{ animationDelay: '0ms' }}>
                   <Sparkles size={26} />
                 </div>
-                <h1 className="welcome-headline welcome-rise" style={{ animationDelay: '60ms' }}>How can I help you today?</h1>
+                <h1 className="welcome-headline welcome-rise" style={{ animationDelay: '60ms' }}>{daypartGreeting}</h1>
                 <p className="welcome-subtitle welcome-rise" style={{ animationDelay: '120ms' }}>
                   Ask me anything to write code, search the web, automate local system actions, or brainstorm ideas.
                 </p>
