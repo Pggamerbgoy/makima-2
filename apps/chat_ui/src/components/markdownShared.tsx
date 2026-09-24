@@ -20,6 +20,34 @@ export const LazyMermaid: React.FC<{ chart: string; subType?: string }> = ({ cha
   </Suspense>
 );
 
+export const SafeImage: React.FC<{
+  src: string;
+  alt?: string;
+  onImageClick?: (src: string) => void;
+  style?: React.CSSProperties;
+}> = ({ src, alt, onImageClick, style }) => {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <span className="media-card-error">Image failed to load.</span>;
+  return (
+    <img
+      src={src}
+      alt={alt || 'Image'}
+      loading="lazy"
+      decoding="async"
+      onError={() => setFailed(true)}
+      onClick={onImageClick ? () => onImageClick(src) : undefined}
+      style={{
+        maxWidth: '100%',
+        borderRadius: '12px',
+        cursor: onImageClick ? 'pointer' : 'default',
+        margin: '8px 0',
+        display: 'block',
+        ...style,
+      }}
+    />
+  );
+};
+
 export const extractTextFromReactNode = (node: any): string => {
   if (node === null || node === undefined) return '';
   if (typeof node === 'string') return node;
@@ -212,26 +240,10 @@ export const buildCanvasMarkdownComponents = ({ onOpenCanvas, onImageClick }: Ca
       </code>
     );
   },
-  img({ src, alt, ...props }: any) {
+  img({ src, alt }: any) {
     const safeSrc = getSafeHttpUrl(typeof src === 'string' ? src : undefined);
     if (!safeSrc) return <span className="media-card-error">Image preview unavailable.</span>;
-    return (
-      <img
-        src={safeSrc}
-        alt={alt || 'Image'}
-        loading="lazy"
-        decoding="async"
-        onClick={onImageClick ? () => onImageClick(src) : undefined}
-        style={{
-          maxWidth: '100%',
-          borderRadius: '12px',
-          cursor: onImageClick ? 'pointer' : 'default',
-          margin: '8px 0',
-          display: 'block',
-        }}
-        {...props}
-      />
-    );
+    return <SafeImage src={safeSrc} alt={alt} onImageClick={onImageClick} />;
   },
   a({ href, children, ...props }: any) {
     const safeHref = getSafeHttpUrl(href);

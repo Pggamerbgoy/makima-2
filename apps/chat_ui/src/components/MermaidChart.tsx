@@ -42,41 +42,64 @@ export function normalizeMermaidChart(chart: string, subType?: string): string {
   let text = (chart || '').trim();
   if (!text) return text;
 
-  // 1. If subType was on fence line (e.g. ```mermaid timeline)
+  // 1. If subType was on fence line (e.g. ```mermaid timeline).
+  //    A bare direction after ```mermaid graph joins up: "TD\n..." -> "graph TD\n...".
   if (subType && !text.toLowerCase().startsWith(subType.toLowerCase())) {
-    text = `${subType}\n${text}`;
+    const first = text.split('\n')[0].trim();
+    if (/^graph$/i.test(subType) && /^(TD|LR|RL|BT|TB)\b/i.test(first)) {
+      text = `graph ${text}`;
+    } else {
+      text = `${subType}\n${text}`;
+    }
   }
 
-  // 2. Check if first word is a known directive
+  // Auto-heal for flowchart-family syntax: broken "|>" connectors and
+  // unclosed node brackets like ["Start --> B. Runs BEFORE directive
+  // detection so it never gets skipped by an early return.
+  const healFlowchart = (t: string): string =>
+    t
+      .replace(/\|>/g, ' --> ')
+      .replace(/\["([^"\]\n]+?)\s*(-->|---|==>)/g, '["$1"] --> ');
+
+  // 2. Known directive at the top — heal flowchart-family content as-is.
   const firstLine = text.split('\n')[0].trim().toLowerCase();
-  const hasDirective = MERMAID_DIRECTIVES.some(d => firstLine.startsWith(d));
-
-  if (!hasDirective) {
-    // Check if it's a timeline format (e.g. "1990s: ...", "2000s: ...")
-    const isTimelineLike = /^\d{2,4}s?\s*:/m.test(text);
-    if (isTimelineLike) {
-      const normalizedLines = text.split('\n').map(line => {
-        const trimmed = line.trim();
-        if (/^\d{2,4}s?\s*:/.test(trimmed)) {
-          const colonIdx = trimmed.indexOf(':');
-          const time = trimmed.substring(0, colonIdx).trim();
-          const desc = trimmed.substring(colonIdx + 1).trim();
-          return `    ${time} : ${desc}`;
+  if (MERMAID_DIRECTIVES.some((d) => firstLine.startsWith(d))) {
+    if (firstLine === 'timeline') {
+      // Indent bare "1990s : event" body lines; leave title/blank lines alone.
+      const lines = text.split('\n');
+      const body = lines.slice(1).map((line) => {
+        if (/^\d{2,4}s?\s*:/.test(line)) {
+          const colonIdx = line.indexOf(':');
+          return `    ${line.substring(0, colonIdx).trim()} : ${line.substring(colonIdx + 1).trim()}`;
         }
-        return `    ${trimmed}`;
-      }).join('\n');
-      return `timeline\n${normalizedLines}`;
+        return line;
+      });
+      return [lines[0], ...body].join('\n');
     }
-
-    // Check if it's a graph/flowchart format (e.g. A --> B)
-    if (/-->|---|==>|subgraph|\|>/.test(text)) {
-      return `graph TD\n${text}`;
-    }
+    return /^(graph|flowchart)\b/.test(firstLine) ? healFlowchart(text) : text;
   }
 
-  // Auto-heal malformed connectors & unclosed node brackets
-  text = text.replace(/\|>/g, ' --> ');
-  text = text.replace(/\["([^"\]\n]+)(?:\s*(?:-->|---|==>))/g, '["$1"] --> ');
+  // 3. Timeline-like content (e.g. "1990s: ...") — no flowchart healing inside prose.
+  if (/^\d{2,4}s?\s*:/m.test(text)) {
+    const normalizedLines = text.split('\n').map((line) => {
+      const trimmed = line.trim();
+      if (/^\d{2,4}s?\s*:/.test(trimmed)) {
+        const colonIdx = trimmed.indexOf(':');
+        const time = trimmed.substring(0, colonIdx).trim();
+        const desc = trimmed.substring(colonIdx + 1).trim();
+        return `    ${time} : ${desc}`;
+      }
+      return `    ${trimmed}`;
+    }).join('\n');
+    return `timeline\n${normalizedLines}`;
+  }
+
+  // 4. Graph-ish content (edges) or a bare direction line ("TD\n...") — heal + wrap.
+  if (/-->|---|==>|subgraph|\|>/.test(text) || /^(TD|LR|RL|BT|TB)\b/i.test(text.split('\n')[0].trim())) {
+    const healed = healFlowchart(text);
+    const bareDirection = /^(TD|LR|RL|BT|TB)\b/i.test(healed.split('\n')[0].trim());
+    return bareDirection ? `graph ${healed}` : `graph TD\n${healed}`;
+  }
 
   return text;
 }

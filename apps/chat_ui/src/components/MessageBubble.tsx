@@ -15,7 +15,7 @@ import { MediaStrip } from './MediaCard';
 import { AgentActivityTimeline } from './AgentActivityTimeline';
 import { MilestoneChecklist } from './MilestoneChecklist';
 import { ActionConfirmationCard } from './ActionConfirmationCard';
-import { MarkdownTable, MarkdownErrorBoundary, extractTextFromReactNode, LazyMermaid } from './markdownShared';
+import { MarkdownTable, MarkdownErrorBoundary, extractTextFromReactNode, LazyMermaid, SafeImage } from './markdownShared';
 
 const getSafeUrl = (value: string | undefined): string | null => {
   if (!value) return null;
@@ -328,24 +328,15 @@ export const MessageBubbleImpl: React.FC<MessageBubbleProps> = ({
                       </code>
                     );
                   },
-                  img({ src, alt, ...props }: any) {
+                  img({ src, alt }: any) {
                     const safeSrc = getSafeUrl(src);
                     if (!safeSrc) return <span className="media-card-error">Image preview unavailable.</span>;
                     return (
-                      <img
+                      <SafeImage
                         src={safeSrc}
-                        alt={alt || 'Image'}
-                        loading="lazy"
-                        decoding="async"
-                        onClick={() => setSelectedImage(src)}
-                        style={{
-                          maxWidth: '100%',
-                          borderRadius: '12px',
-                          cursor: 'pointer',
-                          margin: '8px 0',
-                          boxShadow: '0 4px 16px rgba(0, 0, 0, 0.3)',
-                        }}
-                        {...props}
+                        alt={alt}
+                        onImageClick={() => setSelectedImage(src)}
+                        style={{ cursor: 'pointer', boxShadow: '0 4px 16px rgba(0, 0, 0, 0.3)' }}
                       />
                     );
                   },
