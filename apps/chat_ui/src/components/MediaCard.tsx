@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Copy, Download, FileText, Image as ImageIcon, Music2, Share2, Video } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { Copy, Download, FileText, Image as ImageIcon, Music2, Pause, Play, Share2, Video } from 'lucide-react';
 import type { MediaItem } from '../types/chat';
 import { ImageViewerModal } from './ImageViewerModal';
 
@@ -28,7 +28,7 @@ export const MediaCard: React.FC<{ item: MediaItem }> = ({ item }) => {
 
   const share = async () => {
     if (navigator.share) await navigator.share({ title: item.title || 'Makima media', url: item.url }).catch(() => undefined);
-    else await navigator.clipboard?.writeText(item.url);
+    else await navigator.clipboard?.writeText(item.url).catch(() => undefined);
   };
 
   const copyImage = async () => {
@@ -50,7 +50,11 @@ export const MediaCard: React.FC<{ item: MediaItem }> = ({ item }) => {
     <div className="media-card">
       <div className="media-card-header">
         <span className="media-card-title">{kindIcon(item.type)} {item.title || item.type}</span>
-        <span className="media-card-status">{item.status === 'processing' ? 'Processing…' : item.mimeType || item.type}</span>
+        {item.status === 'processing' ? (
+          <span className="thinking-dots" aria-label="Processing"><i /><i /><i /></span>
+        ) : (
+          <span className="media-card-status">{item.mimeType || item.type}</span>
+        )}
       </div>
       {item.type === 'image' && (
         <button className="media-image-button" onClick={() => setLightbox(true)} aria-label={`Open ${item.title || 'image'} fullscreen`}>
@@ -58,7 +62,7 @@ export const MediaCard: React.FC<{ item: MediaItem }> = ({ item }) => {
         </button>
       )}
       {item.type === 'video' && <video src={url} controls playsInline preload="metadata" onError={() => setFailed(true)} />}
-      {item.type === 'audio' && <audio src={url} controls preload="metadata" onError={() => setFailed(true)} />}
+      {item.type === 'audio' && <AudioPlayer url={url} title={item.title} />}
       {item.type === 'document' && (
         <a className="media-document-preview" href={downloadUrl} target="_blank" rel="noreferrer">
           <FileText size={28} /> <span>{item.title || 'Open document'}</span>
@@ -79,3 +83,80 @@ export const MediaCard: React.FC<{ item: MediaItem }> = ({ item }) => {
 export const MediaStrip: React.FC<{ items?: MediaItem[] }> = ({ items = [] }) => (
   items.length ? <div className="media-strip">{items.map((item) => <MediaCard key={item.id} item={item} />)}</div> : null
 );
+
+const fmtTime = (s: number): string => {
+  if (!Number.isFinite(s) || s < 0) return '0:00';
+  return `${Math.floor(s / 60)}:${Math.floor(s % 60).toString().padStart(2, '0')}`;
+};
+
+const AudioPlayer: React.FC<{ url: string; title?: string }> = ({ url, title }) => {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [time, setTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+
+  const toggle = () => {
+    const a = audioRef.current;
+    if (!a) return;
+    if (a.paused) void a.play().catch(() => setPlaying(false));
+    else a.pause();
+  };
+  const seek = (e: React.MouseEvent<HTMLDivElement>) => {
+    const a = audioRef.current;
+    if (!a || !Number.isFinite(a.duration) || a.duration <= 0) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+    a.currentTime = ratio * a.duration;
+  };
+  const onKeySeek = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const a = audioRef.current;
+    if (!a) return;
+    if (e.key === 'ArrowRight') a.currentTime = Math.min(a.duration || 0, a.currentTime + 5);
+    else if (e.key === 'ArrowLeft') a.currentTime = Math.max(0, a.currentTime - 5);
+    else if (e.key === 'Home') a.currentTime = 0;
+    else if (e.key === 'End' && Number.isFinite(a.duration)) a.currentTime = a.duration;
+    else return;
+    e.preventDefault();
+  };
+
+  return (
+    <div className="media-audio-player">
+      <audio
+        ref={audioRef}
+        src={url}
+        preload="metadata"
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
+        onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
+        onEnded={() => setPlaying(false)}
+      />
+      <button
+        type="button"
+        className="media-play-btn"
+        onClick={toggle}
+        aria-label={playing ? `Pause ${title || 'audio'}` : `Play ${title || 'audio'}`}
+        title={playing ? 'Pause' : 'Play'}
+      >
+        {playing ? <Pause size={15} /> : <Play size={15} />}
+      </button>
+      <div className="media-track">
+        <div className="media-time"><span>{fmtTime(time)}</span><span>{fmtTime(duration)}</span></div>
+        <div
+          className="media-progress"
+          role="slider"
+          tabIndex={0}
+          aria-label={`Seek ${title || 'audio'}`}
+          aria-valuemin={0}
+          aria-valuemax={Math.round(duration || 0)}
+          aria-valuenow={Math.round(time)}
+          onClick={seek}
+          onKeyDown={onKeySeek}
+          title="Seek (arrow keys work too)"
+        >
+          <div className="media-progress-fill" style={{ width: duration > 0 ? `${(time / duration) * 100}%` : '0%' }} />
+        </div>
+      </div>
+    </div>
+  );
+};

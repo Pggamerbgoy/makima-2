@@ -2960,6 +2960,77 @@ a:focus-visible {
   max-height: 240px;
   object-fit: cover;
   display: block;
+  transition: transform 0.18s ease-out;
+}
+
+.media-image-button {
+  overflow: hidden;
+}
+
+.media-image-button:hover img {
+  transform: scale(1.02);
+}
+
+/* Ledger audio player — square play key + hairline progress */
+.media-audio-player {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.media-play-btn {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--primary);
+  color: var(--text-inverse);
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.media-play-btn:active {
+  transform: translateY(1px);
+}
+
+.media-track {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.media-time {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.media-progress {
+  height: 6px;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.media-progress:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 1px;
+}
+
+.media-progress-fill {
+  height: 100%;
+  background: var(--primary);
+  width: 0;
 }
 
 .media-card video, .media-card audio {
