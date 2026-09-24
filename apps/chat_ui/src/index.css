@@ -1060,7 +1060,7 @@ button {
 .thinking-dots i {
   width: 7px;
   height: 7px;
-  border-radius: 50%;
+  border-radius: 1px;
   background: var(--thinking-accent);
   display: inline-block;
   animation: thinkingBounce 1.2s var(--ease-in-out) infinite;
@@ -1206,6 +1206,8 @@ a:focus-visible {
   .shimmer-bar,
   .check-pop,
   .welcome-rise,
+  .avatar-stamp,
+  .welcome-typewriter .type-caret,
   .agent-activity-rail::before {
     animation: none !important;
   }
@@ -4233,6 +4235,49 @@ a:focus-visible {
 .pinned-drawer-title {
   font-family: var(--font-heading);
   letter-spacing: 0;
+}
+
+/* ==========================================================================
+   Fun elements — rubber stamp avatar, physical button press, typewriter
+   ========================================================================== */
+@keyframes stampIn {
+  0% { transform: scale(1.35) rotate(-10deg); opacity: 0; }
+  60% { transform: scale(0.96) rotate(1deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0deg); opacity: 1; }
+}
+
+.avatar-stamp {
+  animation: stampIn 0.32s var(--ease-out) both;
+}
+
+/* Typewriter keys: buttons physically press down */
+.composer-send-button:active:not(:disabled),
+.primary-action:active:not(:disabled),
+.export-btn:active,
+.topbar-btn:active,
+.quick-prompt-chip:active:not(:disabled),
+.model-category-tab:active,
+.telemetry-ping-btn:active {
+  transform: translateY(1px);
+}
+
+/* Welcome typewriter line */
+.welcome-typewriter {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  min-height: 1.4em;
+  margin-top: 10px;
+}
+
+.welcome-typewriter .type-caret {
+  display: inline-block;
+  width: 8px;
+  height: 1em;
+  vertical-align: text-bottom;
+  margin-left: 2px;
+  background: var(--primary);
+  animation: caretBlink 1s steps(1, end) infinite;
 }
 
 

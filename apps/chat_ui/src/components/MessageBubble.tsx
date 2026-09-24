@@ -554,6 +554,7 @@ export const MessageBubbleImpl: React.FC<MessageBubbleProps> = ({
     >
       {/* Avatar */}
       <div
+        className={isUser ? undefined : 'avatar-stamp'}
         style={{
           width: '36px',
           height: '36px',
@@ -754,7 +755,7 @@ export const MessageBubbleImpl: React.FC<MessageBubbleProps> = ({
               fontSize: '0.95rem',
               lineHeight: '1.6',
               padding: isUser ? '12px 16px' : '4px 0',
-              borderRadius: isUser ? '18px 18px 4px 18px' : '0',
+              borderRadius: isUser ? 'var(--radius-md)' : '0',
               backgroundColor: isUser ? 'var(--bg-tertiary)' : 'transparent',
               color: 'var(--text-primary)',
               maxWidth: '100%',
@@ -783,9 +784,9 @@ export const MessageBubbleImpl: React.FC<MessageBubbleProps> = ({
               style={{
                 marginTop: '12px',
                 padding: '10px 14px',
-                borderRadius: '8px',
-                backgroundColor: 'rgba(0, 210, 255, 0.08)',
-                border: '1px solid rgba(0, 210, 255, 0.25)',
+                borderRadius: 'var(--radius-md)',
+                backgroundColor: 'var(--primary-subtle)',
+                border: '1px solid var(--primary-border)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
@@ -805,11 +806,11 @@ export const MessageBubbleImpl: React.FC<MessageBubbleProps> = ({
                   })
                 }
                 style={{
-                  background: 'var(--accent-teal)',
-                  color: '#04060f',
+                  background: 'var(--primary)',
+                  color: 'var(--text-inverse)',
                   border: 'none',
                   padding: '5px 12px',
-                  borderRadius: '5px',
+                  borderRadius: 'var(--radius-sm)',
                   fontSize: '0.75rem',
                   fontWeight: 700,
                   cursor: 'pointer',

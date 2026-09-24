@@ -56,6 +56,45 @@ const DEFAULT_SETTINGS: AppSettings = {
   },
 };
 
+const WELCOME_PHRASES = [
+  'code likho, bugs bhagao.',
+  'system sambhalo, ek command me.',
+  'web chhano, sources ke saath.',
+  'report likho, canvas me kholo.',
+  'gaane chalao, mood banao.',
+  'kuch bhi puchho — sharmao mat.',
+];
+
+const WelcomeTypewriter: React.FC = () => {
+  const [phraseIdx, setPhraseIdx] = useState(() => Math.floor(Math.random() * WELCOME_PHRASES.length));
+  const [text, setText] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      setText(WELCOME_PHRASES[0]);
+      return;
+    }
+    const current = WELCOME_PHRASES[phraseIdx];
+    let timeout: ReturnType<typeof setTimeout>;
+    if (!deleting && text === current) {
+      timeout = setTimeout(() => setDeleting(true), 1800);
+    } else if (deleting && text === '') {
+      setDeleting(false);
+      setPhraseIdx((i) => (i + 1) % WELCOME_PHRASES.length);
+    } else {
+      const next = deleting ? current.slice(0, text.length - 1) : current.slice(0, text.length + 1);
+      timeout = setTimeout(() => setText(next), deleting ? 26 : 52);
+    }
+    return () => clearTimeout(timeout);
+  }, [text, deleting, phraseIdx]);
+  return (
+    <div className="welcome-typewriter welcome-rise" style={{ animationDelay: '150ms' }} aria-hidden="true">
+      <span>› {text}</span>
+      <span className="type-caret" />
+    </div>
+  );
+};
+
 export const App: React.FC = () => {
   // Real user settings loaded from localStorage
   const [settings, setSettings] = useState<AppSettings>(() => {
@@ -1597,6 +1636,7 @@ export const App: React.FC = () => {
                 <p className="welcome-subtitle welcome-rise" style={{ animationDelay: '120ms' }}>
                   Ask me anything to write code, search the web, automate local system actions, or brainstorm ideas.
                 </p>
+                <WelcomeTypewriter />
 
                 <div className="welcome-suggestions-grid">
                   {[

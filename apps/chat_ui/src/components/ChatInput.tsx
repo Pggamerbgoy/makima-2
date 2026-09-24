@@ -7,6 +7,14 @@ import { uploadMedia } from '../services/mediaApi';
 import { wsClient } from '../services/wsClient';
 
 const MAX_BYTES: Record<MediaKind, number> = { image: 20 * 1024 * 1024, document: 20 * 1024 * 1024, audio: 20 * 1024 * 1024, video: 100 * 1024 * 1024 };
+
+const COMPOSER_PLACEHOLDERS = [
+  'Message Makima…',
+  'Code likho…',
+  'Web search karo…',
+  'System check karo…',
+  'Kuch bhi puchho…',
+];
 const kindFor = (mime: string): MediaKind => mime.startsWith('image/') ? 'image' : mime.startsWith('video/') ? 'video' : mime.startsWith('audio/') ? 'audio' : 'document';
 const accept = { 'image/*': [], 'video/*': [], 'audio/*': [], 'application/pdf': [], 'text/plain': [], 'text/markdown': [], 'text/csv': [], 'application/json': [], 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': [], 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': [], 'application/vnd.openxmlformats-officedocument.presentationml.presentation': [] };
 
@@ -80,6 +88,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const [micError, setMicError] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
+  const [placeholderIdx, setPlaceholderIdx] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -95,6 +104,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   useEffect(() => {
     setSlashIndex(0);
   }, [text]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    const t = window.setInterval(() => setPlaceholderIdx((i) => (i + 1) % COMPOSER_PLACEHOLDERS.length), 4000);
+    return () => window.clearInterval(t);
+  }, []);
 
   const selectCommand = (cmd: SlashCommand) => {
     if (cmd.autoSend) {
@@ -219,7 +234,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       )}
       <div className="composer-row">
         <div className="composer-add-wrap"><button className="composer-icon-button" onClick={() => setMenuOpen((value) => !value)} aria-label="Add attachment" aria-expanded={menuOpen}><Plus size={20} /></button>{menuOpen && <div className="composer-add-menu"><button onClick={open}><Paperclip size={16} /> Upload files</button><button onClick={() => { onOpenLibrary?.(); setMenuOpen(false); }}><FolderOpen size={16} /> Local library</button><span>Paste an image directly into the message box</span></div>}</div>
-        <textarea ref={textareaRef} value={text} onChange={(event) => setText(event.target.value)} onPaste={handlePaste} onKeyDown={handleKeyDown} placeholder="Message Makima…" rows={1} aria-label="Message Makima" />
+        <textarea ref={textareaRef} value={text} onChange={(event) => setText(event.target.value)} onPaste={handlePaste} onKeyDown={handleKeyDown} placeholder={COMPOSER_PLACEHOLDERS[placeholderIdx]} rows={1} aria-label="Message Makima" />
         <button
           className={`composer-icon-button ${isRecording ? 'recording' : ''}`}
           onMouseDown={startRecording}
