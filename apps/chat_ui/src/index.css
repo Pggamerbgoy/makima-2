@@ -1,47 +1,47 @@
 @import 'highlight.js/styles/atom-one-dark.css';
 
 /* ==========================================================================
-   Vintage Ledger Design System — flat, calm, timeless (no glass, no neon)
-   Dark default: old library at night. Light: ink on paper.
+   Black Ledger Design System — flat black, squared, serif headings.
+   No glass, no neon gradients. Calm, not modern.
    ========================================================================== */
 
 :root {
-  /* Dark Theme (Default) — lamplight on dark wood */
-  --bg-canvas: #131009;
-  --bg-surface: #1a1610;
-  --bg-surface-elevated: #221c12;
-  --bg-surface-low: #171310;
-  --bg-surface-hover: #2a2314;
-  --bg-surface-active: #372d18;
-  --bg-glass: #1a1610;
+  /* Dark Theme (Default) — flat black */
+  --bg-canvas: #131314;
+  --bg-surface: #18181b;
+  --bg-surface-elevated: #201f20;
+  --bg-surface-low: #1c1b1c;
+  --bg-surface-hover: #27272a;
+  --bg-surface-active: #323236;
+  --bg-glass: #18181b;
 
-  --border-subtle: #453a24;
-  --border-hover: #6b5a33;
-  --border-focus: #e0aa2e;
+  --border-subtle: #2a2a2e;
+  --border-hover: rgba(255, 255, 255, 0.14);
+  --border-focus: #818cf8;
 
-  --primary: #e0aa2e;
-  --primary-hover: #f0bc44;
-  --primary-subtle: rgba(224, 170, 46, 0.14);
-  --primary-border: rgba(224, 170, 46, 0.45);
+  --primary: #818cf8;
+  --primary-hover: #6366f1;
+  --primary-subtle: rgba(129, 140, 248, 0.14);
+  --primary-border: rgba(129, 140, 248, 0.35);
 
-  --secondary: #a3bd8d;
-  --secondary-subtle: rgba(163, 189, 141, 0.13);
+  --secondary: #22d3ee;
+  --secondary-subtle: rgba(34, 211, 238, 0.12);
 
-  --thinking-accent: #d08a4e;
-  --thinking-subtle: rgba(208, 138, 78, 0.13);
-  --thinking-border: rgba(208, 138, 78, 0.35);
+  --thinking-accent: #a78bfa;
+  --thinking-subtle: rgba(167, 139, 250, 0.12);
+  --thinking-border: rgba(167, 139, 250, 0.25);
 
-  --success: #7fbf6f;
-  --success-subtle: rgba(127, 191, 111, 0.15);
-  --danger: #d4694e;
-  --danger-subtle: rgba(212, 105, 78, 0.15);
-  --warning: #f0ad25;
-  --warning-subtle: rgba(240, 173, 37, 0.15);
+  --success: #34d399;
+  --success-subtle: rgba(52, 211, 153, 0.14);
+  --danger: #f87171;
+  --danger-subtle: rgba(248, 113, 113, 0.14);
+  --warning: #fbbf24;
+  --warning-subtle: rgba(251, 191, 36, 0.14);
 
-  --text-primary: #f4ecda;
-  --text-secondary: #c0b28e;
-  --text-muted: #8d8168;
-  --text-inverse: #131009;
+  --text-primary: #f4f4f5;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+  --text-inverse: #131314;
 
   --radius-sm: 2px;
   --radius-md: 4px;
@@ -61,15 +61,15 @@
   --shadow-composer: 0 4px 16px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--border-subtle);
 
   /* Accent aliases (icons / status chips) */
-  --accent-emerald: #7fbf6f;
-  --accent-amber: #f0ad25;
-  --accent-indigo: #e0aa2e;
-  --accent-pink: #d08a4e;
+  --accent-emerald: #34d399;
+  --accent-amber: #fbbf24;
+  --accent-indigo: #818cf8;
+  --accent-pink: #f472b6;
 
   /* Code block surfaces (theme-aware) */
-  --code-bg: #100d08;
-  --code-header-bg: #171309;
-  --code-hover-bg: rgba(244, 236, 218, 0.08);
+  --code-bg: #141416;
+  --code-header-bg: #1a1a1e;
+  --code-hover-bg: rgba(255, 255, 255, 0.08);
 
   /* Motion tokens — snappy ChatGPT/Claude-grade timings */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
@@ -96,41 +96,41 @@
 }
 
 [data-theme='light'] {
-  --bg-canvas: #f6f1e3;
-  --bg-surface: #fffdf6;
-  --bg-surface-elevated: #eee7d2;
-  --bg-surface-low: #f8f4e8;
-  --bg-surface-hover: #e8e0c9;
-  --bg-surface-active: #d9cdaf;
-  --bg-glass: #fffdf6;
+  --bg-canvas: #ffffff;
+  --bg-surface: #f9fafb;
+  --bg-surface-elevated: #f3f4f6;
+  --bg-surface-low: #f4f5f7;
+  --bg-surface-hover: #e5e7eb;
+  --bg-surface-active: #d1d5db;
+  --bg-glass: #f9fafb;
 
-  --border-subtle: #d8cdae;
-  --border-hover: #bfae87;
-  --border-focus: #96700a;
+  --border-subtle: #e5e7eb;
+  --border-hover: #d1d5db;
+  --border-focus: #4f46e5;
 
-  --primary: #96700a;
-  --primary-hover: #7a5906;
-  --primary-subtle: rgba(150, 112, 10, 0.12);
-  --primary-border: rgba(150, 112, 10, 0.35);
+  --primary: #4f46e5;
+  --primary-hover: #4338ca;
+  --primary-subtle: rgba(79, 70, 229, 0.08);
+  --primary-border: rgba(79, 70, 229, 0.25);
 
-  --secondary: #4f6b43;
-  --secondary-subtle: rgba(79, 107, 67, 0.1);
+  --secondary: #0891b2;
+  --secondary-subtle: rgba(8, 145, 178, 0.08);
 
-  --thinking-accent: #a5662f;
-  --thinking-subtle: rgba(165, 102, 47, 0.1);
-  --thinking-border: rgba(165, 102, 47, 0.3);
+  --thinking-accent: #7c3aed;
+  --thinking-subtle: rgba(124, 58, 237, 0.08);
+  --thinking-border: rgba(124, 58, 237, 0.2);
 
-  --success: #2f7a37;
-  --success-subtle: rgba(47, 122, 55, 0.12);
-  --danger: #c0452f;
-  --danger-subtle: rgba(192, 69, 47, 0.12);
-  --warning: #a86e08;
-  --warning-subtle: rgba(168, 110, 8, 0.12);
+  --success: #10b981;
+  --success-subtle: rgba(16, 185, 129, 0.1);
+  --danger: #ef4444;
+  --danger-subtle: rgba(239, 68, 68, 0.1);
+  --warning: #f59e0b;
+  --warning-subtle: rgba(245, 158, 11, 0.1);
 
-  --text-primary: #211b12;
-  --text-secondary: #54483a;
-  --text-muted: #857861;
-  --text-inverse: #fffdf6;
+  --text-primary: #111827;
+  --text-secondary: #4b5563;
+  --text-muted: #9ca3af;
+  --text-inverse: #ffffff;
 
   --shadow-sm: 0 1px 0 rgba(38, 33, 26, 0.08);
   --shadow-md: 0 2px 6px rgba(38, 33, 26, 0.1);
@@ -139,10 +139,10 @@
   --shadow-composer: 0 4px 16px rgba(38, 33, 26, 0.1), 0 0 0 1px var(--border-subtle);
 
   /* Accent aliases (icons / status chips) */
-  --accent-emerald: #2f7a37;
-  --accent-amber: #a86e08;
-  --accent-indigo: #96700a;
-  --accent-pink: #a5662f;
+  --accent-emerald: #10b981;
+  --accent-amber: #f59e0b;
+  --accent-indigo: #6366f1;
+  --accent-pink: #ec4899;
 
   /* Code block surfaces (theme-aware) */
   --code-bg: #ede7d6;
