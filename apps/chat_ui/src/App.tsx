@@ -561,6 +561,27 @@ export const App: React.FC = () => {
     }
   }, []);
 
+  // Push (or update) one agent-activity row on the streaming message of a task.
+  const pushAgentActivity = useCallback((taskId: string | undefined, activity: AgentActivityEvent) => {
+    if (!taskId) return;
+    setSessions((prev) =>
+      prev.map((session) => {
+        if (session.id !== currentSessionId) return session;
+        const msgIdx = session.messages.findIndex((m) => m.taskId === taskId);
+        if (msgIdx < 0) return session;
+        const updated = [...session.messages];
+        const msg = updated[msgIdx];
+        const currentActivities = msg.agentActivity || [];
+        const existingIdx = currentActivities.findIndex((a) => a.id === activity.id);
+        const newActivities = existingIdx >= 0
+          ? currentActivities.map((a, i) => (i === existingIdx ? { ...a, ...activity } : a))
+          : [...currentActivities, activity];
+        updated[msgIdx] = { ...msg, agentActivity: newActivities };
+        return { ...session, messages: updated };
+      })
+    );
+  }, [currentSessionId]);
+
   // Incoming WebSocket Message Processing (100% Real Live Events)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const handleIncomingWSMessage = useCallback((data: any) => {
@@ -973,8 +994,47 @@ export const App: React.FC = () => {
       if (payload?.message) addToast(String(payload.message), toastLevel, durationMs);
     } else if (type === ServerMessage.AGENT_STARTED) {
       resetWatchdog(task_id);
+      const agent = payload?.agent || 'Agent';
+      pushAgentActivity(task_id, {
+        id: `agent_${agent}_${payload?.subtask || 'main'}`,
+        type: 'agent',
+        agent,
+        status: 'running',
+        message: payload?.subtask || `${agent} started working`,
+        timestamp: Date.now(),
+      });
+      scrollToBottom();
     } else if (type === ServerMessage.AGENT_DONE) {
       resetWatchdog(task_id);
+      const agent = payload?.agent || 'Agent';
+      if (task_id) {
+        setSessions((prev) =>
+          prev.map((session) => {
+            if (session.id !== currentSessionId) return session;
+            const msgIdx = session.messages.findIndex((m) => m.taskId === task_id);
+            if (msgIdx < 0) return session;
+            const updated = [...session.messages];
+            const msg = updated[msgIdx];
+            const acts = msg.agentActivity || [];
+            let idx = -1;
+            for (let i = acts.length - 1; i >= 0; i--) {
+              if (acts[i].agent === agent && acts[i].status === 'running' && acts[i].type === 'agent') { idx = i; break; }
+            }
+            const doneActivity: AgentActivityEvent = {
+              id: idx >= 0 ? acts[idx].id : `agent_${agent}_${Date.now()}`,
+              type: 'agent',
+              agent,
+              status: 'done',
+              message: payload?.result_summary || `${agent} finished`,
+              timestamp: Date.now(),
+            };
+            const newActivities = idx >= 0 ? acts.map((a, i) => (i === idx ? doneActivity : a)) : [...acts, doneActivity];
+            updated[msgIdx] = { ...msg, agentActivity: newActivities };
+            return { ...session, messages: updated };
+          })
+        );
+      }
+      scrollToBottom();
     } else if (type === ServerMessage.CREDENTIALS_DATA) {
       if (payload?.status === 'saved' && payload?.service) {
         addToast(`Credentials saved for ${payload.service}`, 'success');
@@ -982,11 +1042,18 @@ export const App: React.FC = () => {
     } else if (type === ServerMessage.AUTONOMY_MODE_CHANGED) {
       if (payload?.mode) addToast(`Autonomy mode: ${payload.mode}`, 'info');
     }
-  }, [currentSessionId, resetWatchdog, clearWatchdog, addToast, settings.wsUrl, settings.autoReadAloud, scrollToBottom]);
+  }, [currentSessionId, resetWatchdog, clearWatchdog, addToast, settings.wsUrl, settings.autoReadAloud, scrollToBottom, pushAgentActivity]);
 
   useEffect(() => {
     incomingHandlerRef.current = handleIncomingWSMessage;
   });
+
+  // Celebration toast when an execution plan completes (fired by MilestoneChecklist).
+  useEffect(() => {
+    const onPlanComplete = () => addToast('Execution plan complete — sab ho gaya', 'success');
+    window.addEventListener('makima-plan-complete', onPlanComplete);
+    return () => window.removeEventListener('makima-plan-complete', onPlanComplete);
+  }, [addToast]);
 
   // Handle Sending Real Messages
   const handleSendMessage = useCallback((text: string, attachments: Attachment[] = []) => {

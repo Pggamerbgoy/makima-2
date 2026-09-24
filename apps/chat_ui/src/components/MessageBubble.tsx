@@ -642,7 +642,7 @@ export const MessageBubbleImpl: React.FC<MessageBubbleProps> = ({
 
         <MediaStrip items={message.media} />
         <MilestoneChecklist milestones={message.planMilestones} />
-        <AgentActivityTimeline events={message.agentActivity} />
+        <AgentActivityTimeline events={message.agentActivity} live={message.isStreaming} />
         {message.sources?.length ? <div className="source-cards">{message.sources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noreferrer"><strong>{source.title}</strong><span>{source.domain}</span></a>)}</div> : null}
         {message.actionConfirmation && (
           <ActionConfirmationCard

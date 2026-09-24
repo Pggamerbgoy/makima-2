@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { CheckCircle2, Circle, Loader2, AlertCircle, ChevronDown, ChevronRight, ListChecks } from 'lucide-react';
 import type { PlanMilestone } from '../types/chat';
@@ -8,12 +8,22 @@ export const MilestoneChecklist: React.FC<{ milestones?: PlanMilestone[]; title?
   title = 'Execution Plan',
 }) => {
   const [open, setOpen] = useState(true);
+  const prevDoneRef = useRef(false);
 
-  if (!milestones || milestones.length === 0) return null;
+  const list = milestones || [];
+  const completedCount = list.filter((m) => m.status === 'completed').length;
+  const isAllDone = list.length > 0 && completedCount === list.length;
+  const progressPct = list.length > 0 ? Math.round((completedCount / list.length) * 100) : 0;
 
-  const completedCount = milestones.filter((m) => m.status === 'completed').length;
-  const isAllDone = completedCount === milestones.length;
-  const progressPct = Math.round((completedCount / milestones.length) * 100);
+  useEffect(() => {
+    const was = prevDoneRef.current;
+    prevDoneRef.current = isAllDone;
+    if (isAllDone && !was) {
+      window.dispatchEvent(new CustomEvent('makima-plan-complete'));
+    }
+  }, [isAllDone]);
+
+  if (list.length === 0) return null;
 
   return (
     <div
@@ -45,19 +55,21 @@ export const MilestoneChecklist: React.FC<{ milestones?: PlanMilestone[]; title?
         }}
       >
         {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        <ListChecks size={14} color="#60a5fa" />
-        <span style={{ color: 'var(--text-primary, #f1f5f9)' }}>{title}</span>
+        <ListChecks size={14} color="var(--primary)" />
+        <span style={{ color: 'var(--text-primary)' }}>{title}</span>
         <span
+          key={String(isAllDone)}
+          className={isAllDone ? 'celebrate-pop' : undefined}
           style={{
             marginLeft: 'auto',
             fontSize: '0.75rem',
             padding: '2px 6px',
             borderRadius: '4px',
-            background: isAllDone ? 'rgba(84, 197, 138, 0.15)' : 'rgba(96, 165, 250, 0.15)',
-            color: isAllDone ? '#54c58a' : '#60a5fa',
+            background: isAllDone ? 'var(--success-subtle)' : 'var(--primary-subtle)',
+            color: isAllDone ? 'var(--success)' : 'var(--primary)',
           }}
         >
-          {completedCount}/{milestones.length}
+          {completedCount}/{list.length}
         </span>
       </button>
 
@@ -79,7 +91,7 @@ export const MilestoneChecklist: React.FC<{ milestones?: PlanMilestone[]; title?
           style={{
             height: '100%',
             borderRadius: 'var(--radius-full)',
-            background: isAllDone ? '#54c58a' : undefined,
+            background: isAllDone ? 'var(--success)' : undefined,
           }}
         />
       </div>
@@ -95,7 +107,7 @@ export const MilestoneChecklist: React.FC<{ milestones?: PlanMilestone[]; title?
             style={{ overflow: 'hidden' }}
           >
             <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              {milestones.map((m, index) => {
+              {list.map((m, index) => {
                 const isCompleted = m.status === 'completed';
                 const isInProgress = m.status === 'in_progress';
                 const isFailed = m.status === 'failed';
@@ -117,20 +129,20 @@ export const MilestoneChecklist: React.FC<{ milestones?: PlanMilestone[]; title?
                     <div style={{ marginTop: '2px', flexShrink: 0 }}>
                       {isCompleted ? (
                         <span className="check-pop" style={{ display: 'inline-flex' }}>
-                          <CheckCircle2 size={14} color="#54c58a" />
+                          <CheckCircle2 size={14} color="var(--success)" />
                         </span>
                       ) : isInProgress ? (
-                        <Loader2 size={14} color="#60a5fa" className="spin" />
+                        <Loader2 size={14} color="var(--primary)" className="spin" />
                       ) : isFailed ? (
-                        <AlertCircle size={14} color="#ef6b73" />
+                        <AlertCircle size={14} color="var(--danger)" />
                       ) : (
-                        <Circle size={14} color="#64748b" />
+                        <Circle size={14} color="var(--text-muted)" />
                       )}
                     </div>
                     <div style={{ flex: 1, textDecoration: isCompleted ? 'line-through' : 'none', transition: 'opacity var(--dur-base)' }}>
                       <span>{m.title}</span>
                       {m.result_summary && (
-                        <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '2px' }}>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
                           {m.result_summary}
                         </div>
                       )}

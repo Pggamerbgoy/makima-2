@@ -1207,6 +1207,8 @@ a:focus-visible {
   .check-pop,
   .welcome-rise,
   .avatar-stamp,
+  .live-dot,
+  .celebrate-pop,
   .welcome-typewriter .type-caret,
   .agent-activity-rail::before {
     animation: none !important;
@@ -4290,6 +4292,43 @@ a:focus-visible {
     width: calc(100vw - 16px);
     max-width: calc(100vw - 16px);
   }
+}
+
+/* ==========================================================================
+   Hermes-style LIVE badge + milestone celebration
+   ========================================================================== */
+.live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--danger);
+}
+
+.live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--danger);
+  animation: livePulse 1.2s ease-in-out infinite;
+}
+
+@keyframes livePulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.7); }
+}
+
+@keyframes celebratePop {
+  0% { transform: scale(0.4); }
+  60% { transform: scale(1.25); }
+  100% { transform: scale(1); }
+}
+
+.celebrate-pop {
+  display: inline-flex;
+  animation: celebratePop 0.45s var(--ease-out) both;
 }
 
 /* ==========================================================================
