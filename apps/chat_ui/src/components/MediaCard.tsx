@@ -54,7 +54,7 @@ export const MediaCard: React.FC<{ item: MediaItem }> = ({ item }) => {
       </div>
       {item.type === 'image' && (
         <button className="media-image-button" onClick={() => setLightbox(true)} aria-label={`Open ${item.title || 'image'} fullscreen`}>
-          <img src={url} alt={item.alt || item.title || 'Attached image'} onError={() => setFailed(true)} />
+          <img src={url} alt={item.alt || item.title || 'Attached image'} loading="lazy" decoding="async" onError={() => setFailed(true)} />
         </button>
       )}
       {item.type === 'video' && <video src={url} controls playsInline preload="metadata" onError={() => setFailed(true)} />}
@@ -69,7 +69,9 @@ export const MediaCard: React.FC<{ item: MediaItem }> = ({ item }) => {
         <button onClick={share} title="Share media"><Share2 size={15} /></button>
         {item.downloadable !== false && <a href={downloadUrl} download={item.title} title="Download media"><Download size={15} /></a>}
       </div>
-      <ImageViewerModal imageUrl={lightbox ? url : null} imageName={item.title} onClose={() => setLightbox(false)} />
+      {lightbox && (
+        <ImageViewerModal imageUrl={url} imageName={item.title} onClose={() => setLightbox(false)} />
+      )}
     </div>
   );
 };

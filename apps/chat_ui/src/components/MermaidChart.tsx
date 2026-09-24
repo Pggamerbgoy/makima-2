@@ -7,17 +7,27 @@ interface MermaidChartProps {
 }
 
 let mermaidInitialized = false;
+let lastMermaidTheme: 'dark' | 'default' | null = null;
+
+function currentMermaidTheme(): 'dark' | 'default' {
+  const attr = document.documentElement.getAttribute('data-theme');
+  if (attr === 'light') return 'default';
+  if (attr === 'dark') return 'dark';
+  return window.matchMedia('(prefers-color-scheme: light)').matches ? 'default' : 'dark';
+}
 
 function ensureMermaidInit() {
-  if (!mermaidInitialized) {
+  const theme = currentMermaidTheme();
+  if (!mermaidInitialized || lastMermaidTheme !== theme) {
     mermaid.initialize({
       startOnLoad: false,
-      theme: 'dark',
+      theme,
       securityLevel: 'loose',
       fontFamily: 'Inter, sans-serif',
       suppressErrorRendering: true,
     });
     mermaidInitialized = true;
+    lastMermaidTheme = theme;
   }
 }
 
@@ -75,6 +85,7 @@ export const MermaidChart: React.FC<MermaidChartProps> = ({ chart, subType }) =>
   const containerRef = useRef<HTMLDivElement>(null);
   const [svgContent, setSvgContent] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
+  const [themeTick, setThemeTick] = useState(0);
 
   const normalized = normalizeMermaidChart(chart, subType);
 
@@ -101,7 +112,15 @@ export const MermaidChart: React.FC<MermaidChartProps> = ({ chart, subType }) =>
       renderChart();
     }
     return () => { cancelled = true; };
-  }, [normalized]);
+  }, [normalized, themeTick]);
+
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      setThemeTick((tick) => tick + 1);
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    return () => observer.disconnect();
+  }, []);
 
   if (error) {
     return (

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { motion } from 'framer-motion';
 import { X, Copy, Download, Code, Eye, Check, FileText } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -7,6 +8,7 @@ import remarkEmoji from 'remark-emoji';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeKatex from 'rehype-katex';
 import type { CanvasItem } from '../types/chat';
+import { MarkdownErrorBoundary, buildCanvasMarkdownComponents } from './markdownShared';
 
 interface CanvasDrawerProps {
   item: CanvasItem | null;
@@ -63,66 +65,88 @@ export const CanvasDrawer: React.FC<CanvasDrawerProps> = ({ item, onClose }) => 
   };
 
   return (
-    <div
+    <motion.div
       className="canvas-drawer"
+      initial={{ x: 40, opacity: 0 }}
+      animate={{ x: 0, opacity: 1 }}
+      exit={{ x: 40, opacity: 0 }}
+      transition={{ type: 'spring', stiffness: 380, damping: 34 }}
       style={{
         width: '50%',
         maxWidth: '720px',
         minWidth: '380px',
         height: '100%',
-        backgroundColor: 'var(--bg-secondary)',
-        borderLeft: '1px solid rgba(0, 180, 220, 0.18)',
+        backgroundColor: 'var(--bg-surface)',
+        borderLeft: '1px solid var(--border-subtle)',
         display: 'flex',
         flexDirection: 'column',
         zIndex: 50,
-        boxShadow: '-6px 0 30px rgba(0, 0, 0, 0.7)',
+        boxShadow: 'var(--shadow-lg)',
         position: 'relative',
       }}
     >
-      {/* Top corner accent */}
-      <div style={{ position: 'absolute', top: 0, left: 0, width: 16, height: 16, borderTop: '1px solid rgba(0,210,255,0.6)', borderLeft: '1px solid rgba(0,210,255,0.6)', pointerEvents: 'none' }} />
-
       {/* Header */}
       <div
         style={{
-          padding: '10px 16px',
-          borderBottom: '1px solid rgba(0, 180, 220, 0.12)',
+          padding: '0 18px',
+          borderBottom: '1px solid var(--border-subtle)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          backgroundColor: 'rgba(0, 0, 0, 0.3)',
-          height: '44px',
+          backgroundColor: 'var(--bg-surface-elevated)',
+          height: '52px',
           flexShrink: 0,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <div style={{ width: 26, height: 26, borderRadius: '3px', backgroundColor: 'rgba(0, 210, 255, 0.1)', border: '1px solid rgba(0, 210, 255, 0.22)', color: 'var(--accent-teal)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            {isMarkdown ? <FileText size={14} /> : <Code size={14} />}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div
+            style={{
+              width: 30,
+              height: 30,
+              borderRadius: 'var(--radius-md)',
+              backgroundColor: 'var(--primary-subtle)',
+              border: '1px solid var(--primary-border)',
+              color: 'var(--primary)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            {isMarkdown ? <FileText size={15} /> : <Code size={15} />}
           </div>
           <div>
-            <h3 style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', margin: 0 }}>{item.title}</h3>
-            <span style={{ fontSize: '0.58rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontFamily: 'var(--font-mono)' }}>{item.language}</span>
+            <h3 style={{ fontSize: '0.86rem', fontWeight: 600, color: 'var(--text-primary)', margin: 0 }}>{item.title}</h3>
+            <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontFamily: 'var(--font-mono)' }}>{item.language}</span>
           </div>
         </div>
 
         {/* Action Controls */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           {isMarkdown && (
-            <div style={{ display: 'flex', backgroundColor: 'rgba(0,0,0,0.25)', padding: '2px', borderRadius: '3px', border: '1px solid rgba(0, 180, 220, 0.12)' }}>
+            <div
+              style={{
+                display: 'flex',
+                backgroundColor: 'var(--bg-surface)',
+                padding: '2px',
+                borderRadius: 'var(--radius-full)',
+                border: '1px solid var(--border-subtle)',
+              }}
+            >
               <button
                 onClick={() => setActiveTab('report')}
                 style={{
                   border: 'none',
-                  padding: '3px 8px',
-                  borderRadius: '2px',
-                  fontSize: '0.72rem',
+                  padding: '4px 10px',
+                  borderRadius: 'var(--radius-full)',
+                  fontSize: '0.74rem',
                   cursor: 'pointer',
-                  backgroundColor: activeTab === 'report' ? 'rgba(0, 210, 255, 0.12)' : 'transparent',
-                  color: activeTab === 'report' ? 'var(--accent-teal)' : 'var(--text-muted)',
+                  backgroundColor: activeTab === 'report' ? 'var(--bg-surface-elevated)' : 'transparent',
+                  color: activeTab === 'report' ? 'var(--primary)' : 'var(--text-muted)',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '4px',
+                  gap: '5px',
                   fontWeight: activeTab === 'report' ? 600 : 400,
+                  boxShadow: activeTab === 'report' ? 'var(--shadow-sm)' : 'none',
                 }}
               >
                 <FileText size={12} /> Report
@@ -131,16 +155,17 @@ export const CanvasDrawer: React.FC<CanvasDrawerProps> = ({ item, onClose }) => 
                 onClick={() => setActiveTab('code')}
                 style={{
                   border: 'none',
-                  padding: '3px 8px',
-                  borderRadius: '2px',
-                  fontSize: '0.72rem',
+                  padding: '4px 10px',
+                  borderRadius: 'var(--radius-full)',
+                  fontSize: '0.74rem',
                   cursor: 'pointer',
-                  backgroundColor: activeTab === 'code' ? 'rgba(0, 210, 255, 0.12)' : 'transparent',
-                  color: activeTab === 'code' ? 'var(--accent-teal)' : 'var(--text-muted)',
+                  backgroundColor: activeTab === 'code' ? 'var(--bg-surface-elevated)' : 'transparent',
+                  color: activeTab === 'code' ? 'var(--primary)' : 'var(--text-muted)',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '4px',
+                  gap: '5px',
                   fontWeight: activeTab === 'code' ? 600 : 400,
+                  boxShadow: activeTab === 'code' ? 'var(--shadow-sm)' : 'none',
                 }}
               >
                 <Code size={12} /> Source
@@ -149,21 +174,30 @@ export const CanvasDrawer: React.FC<CanvasDrawerProps> = ({ item, onClose }) => 
           )}
 
           {isHtmlWeb && (
-            <div style={{ display: 'flex', backgroundColor: 'rgba(0,0,0,0.25)', padding: '2px', borderRadius: '3px', border: '1px solid rgba(0, 180, 220, 0.12)' }}>
+            <div
+              style={{
+                display: 'flex',
+                backgroundColor: 'var(--bg-surface)',
+                padding: '2px',
+                borderRadius: 'var(--radius-full)',
+                border: '1px solid var(--border-subtle)',
+              }}
+            >
               <button
                 onClick={() => setActiveTab('preview')}
                 style={{
                   border: 'none',
-                  padding: '3px 8px',
-                  borderRadius: '2px',
-                  fontSize: '0.72rem',
+                  padding: '4px 10px',
+                  borderRadius: 'var(--radius-full)',
+                  fontSize: '0.74rem',
                   cursor: 'pointer',
-                  backgroundColor: activeTab === 'preview' ? 'rgba(0, 210, 255, 0.12)' : 'transparent',
-                  color: activeTab === 'preview' ? 'var(--accent-teal)' : 'var(--text-muted)',
+                  backgroundColor: activeTab === 'preview' ? 'var(--bg-surface-elevated)' : 'transparent',
+                  color: activeTab === 'preview' ? 'var(--primary)' : 'var(--text-muted)',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '4px',
+                  gap: '5px',
                   fontWeight: activeTab === 'preview' ? 600 : 400,
+                  boxShadow: activeTab === 'preview' ? 'var(--shadow-sm)' : 'none',
                 }}
               >
                 <Eye size={12} /> Preview
@@ -172,16 +206,17 @@ export const CanvasDrawer: React.FC<CanvasDrawerProps> = ({ item, onClose }) => 
                 onClick={() => setActiveTab('code')}
                 style={{
                   border: 'none',
-                  padding: '3px 8px',
-                  borderRadius: '2px',
-                  fontSize: '0.72rem',
+                  padding: '4px 10px',
+                  borderRadius: 'var(--radius-full)',
+                  fontSize: '0.74rem',
                   cursor: 'pointer',
-                  backgroundColor: activeTab === 'code' ? 'rgba(0, 210, 255, 0.12)' : 'transparent',
-                  color: activeTab === 'code' ? 'var(--accent-teal)' : 'var(--text-muted)',
+                  backgroundColor: activeTab === 'code' ? 'var(--bg-surface-elevated)' : 'transparent',
+                  color: activeTab === 'code' ? 'var(--primary)' : 'var(--text-muted)',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '4px',
+                  gap: '5px',
                   fontWeight: activeTab === 'code' ? 600 : 400,
+                  boxShadow: activeTab === 'code' ? 'var(--shadow-sm)' : 'none',
                 }}
               >
                 <Code size={12} /> Code
@@ -192,25 +227,54 @@ export const CanvasDrawer: React.FC<CanvasDrawerProps> = ({ item, onClose }) => 
           <button
             onClick={handleCopy}
             title="Copy content"
-            style={{ background: 'transparent', border: '1px solid rgba(0, 180, 220, 0.12)', color: copied ? 'var(--accent-teal)' : 'var(--text-muted)', cursor: 'pointer', padding: '4px 6px', borderRadius: '3px', display: 'flex', alignItems: 'center' }}
+            style={{
+              background: 'var(--bg-surface)',
+              border: '1px solid var(--border-subtle)',
+              color: copied ? 'var(--success)' : 'var(--text-secondary)',
+              cursor: 'pointer',
+              padding: '6px 8px',
+              borderRadius: 'var(--radius-md)',
+              display: 'flex',
+              alignItems: 'center',
+              fontSize: '0.75rem',
+              gap: '4px',
+            }}
           >
-            {copied ? <Check size={13} color="var(--accent-teal)" /> : <Copy size={13} />}
+            {copied ? <Check size={14} color="var(--success)" /> : <Copy size={14} />}
           </button>
 
           <button
             onClick={handleDownload}
             title="Download file"
-            style={{ background: 'transparent', border: '1px solid rgba(0, 180, 220, 0.12)', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px 6px', borderRadius: '3px', display: 'flex', alignItems: 'center' }}
+            style={{
+              background: 'var(--bg-surface)',
+              border: '1px solid var(--border-subtle)',
+              color: 'var(--text-secondary)',
+              cursor: 'pointer',
+              padding: '6px 8px',
+              borderRadius: 'var(--radius-md)',
+              display: 'flex',
+              alignItems: 'center',
+            }}
           >
-            <Download size={13} />
+            <Download size={14} />
           </button>
 
           <button
             onClick={onClose}
             title="Close Canvas"
-            style={{ background: 'transparent', border: '1px solid rgba(0, 180, 220, 0.12)', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px 6px', borderRadius: '3px', display: 'flex', alignItems: 'center' }}
+            style={{
+              background: 'var(--bg-surface)',
+              border: '1px solid var(--border-subtle)',
+              color: 'var(--text-muted)',
+              cursor: 'pointer',
+              padding: '6px 8px',
+              borderRadius: 'var(--radius-md)',
+              display: 'flex',
+              alignItems: 'center',
+            }}
           >
-            <X size={14} />
+            <X size={15} />
           </button>
         </div>
       </div>
@@ -219,22 +283,33 @@ export const CanvasDrawer: React.FC<CanvasDrawerProps> = ({ item, onClose }) => 
       <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         {isMarkdown && activeTab === 'report' ? (
           <div
-            className="markdown-content"
+            className="markdown-content markdown-prose canvas-report"
             style={{
               width: '100%',
               height: '100%',
               overflow: 'auto',
-              padding: '24px 28px',
-              backgroundColor: 'var(--bg-primary)',
-              lineHeight: 1.7,
+              padding: '28px 32px 40px',
+              backgroundColor: 'var(--bg-canvas)',
+              lineHeight: 1.75,
             }}
           >
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm, remarkMath, remarkEmoji]}
-              rehypePlugins={[rehypeHighlight, rehypeKatex]}
-            >
-              {item.content}
-            </ReactMarkdown>
+            <MarkdownErrorBoundary fallbackText={item.content}>
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm, remarkMath, remarkEmoji]}
+                rehypePlugins={[rehypeHighlight, rehypeKatex]}
+                components={buildCanvasMarkdownComponents({
+                  fallbackText: item.content,
+                  onOpenCanvas: (next) => {
+                    // Replace drawer content when a nested snippet asks to open in canvas
+                    window.dispatchEvent(
+                      new CustomEvent('makima:canvas-replace', { detail: next })
+                    );
+                  },
+                })}
+              >
+                {item.content}
+              </ReactMarkdown>
+            </MarkdownErrorBoundary>
           </div>
         ) : isHtmlWeb && activeTab === 'preview' ? (
           <iframe
@@ -250,18 +325,18 @@ export const CanvasDrawer: React.FC<CanvasDrawerProps> = ({ item, onClose }) => 
               height: '100%',
               overflow: 'auto',
               margin: 0,
-              padding: '16px',
+              padding: '18px 20px',
               fontFamily: 'var(--font-mono)',
-              fontSize: '0.82rem',
+              fontSize: '0.84rem',
               lineHeight: 1.6,
               color: 'var(--text-primary)',
-              backgroundColor: 'rgba(4, 6, 15, 0.95)',
+              backgroundColor: 'var(--code-bg)',
             }}
           >
             <code>{item.content}</code>
           </pre>
         )}
       </div>
-    </div>
+    </motion.div>
   );
 };

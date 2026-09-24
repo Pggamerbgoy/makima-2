@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { useDropzone } from 'react-dropzone';
 import { FolderOpen, LoaderCircle, Mic, MicOff, Paperclip, Plus, RotateCcw, Send, Sparkles, Square, X } from 'lucide-react';
 import type { Attachment, MediaKind, MediaLibraryEntry } from '../types/chat';
@@ -10,7 +11,8 @@ const kindFor = (mime: string): MediaKind => mime.startsWith('image/') ? 'image'
 const accept = { 'image/*': [], 'video/*': [], 'audio/*': [], 'application/pdf': [], 'text/plain': [], 'text/markdown': [], 'text/csv': [], 'application/json': [], 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': [], 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': [], 'application/vnd.openxmlformats-officedocument.presentationml.presentation': [] };
 
 async function recorderBlobToPcmBase64(blob: Blob): Promise<string> {
-  const context = new AudioContext();
+  const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+  const context = new AudioCtx();
   try {
     const buffer = await context.decodeAudioData(await blob.arrayBuffer());
     const source = buffer.getChannelData(0);
@@ -32,6 +34,7 @@ interface ChatInputProps {
   onRecordingChange?: (isRecording: boolean) => void;
   onOpenLibrary?: () => void;
   libraryItem?: MediaLibraryEntry | null;
+  onLibraryItemConsumed?: () => void; // Called after library item is injected as attachment
   onStop?: () => void;
   wsUrl?: string;
   disabled?: boolean;
@@ -40,11 +43,30 @@ interface ChatInputProps {
   onOpenModelSelector?: () => void;
 }
 
+interface SlashCommand {
+  cmd: string;
+  label: string;
+  description: string;
+  autoSend?: boolean;
+}
+
+const SLASH_COMMANDS: SlashCommand[] = [
+  { cmd: '/diagnostics', label: 'System Diagnostics', description: 'Run full CPU, RAM, battery & services health check', autoSend: true },
+  { cmd: '/clean-temp', label: 'Clean Temporary Files', description: 'Scan and clean safe temporary and cache storage', autoSend: true },
+  { cmd: '/capabilities', label: 'Describe Capabilities', description: 'List all registered system tools and agent powers', autoSend: true },
+  { cmd: '/screen', label: 'Screen Perception', description: 'Inspect active windows and desktop screen state', autoSend: true },
+  { cmd: '/plan', label: 'Autonomous Plan', description: 'Create multi-step execution plan: /plan <goal>', autoSend: false },
+  { cmd: '/browse', label: 'Browse Web', description: 'Launch browser: /browse <url>', autoSend: false },
+  { cmd: '/code', label: 'Code Interpreter', description: 'Run Python script: /code <snippet>', autoSend: false },
+  { cmd: '/organize-desktop', label: 'Organize Desktop', description: 'Group desktop clutter into organized folders', autoSend: true },
+];
+
 export const ChatInput: React.FC<ChatInputProps> = ({ 
   onSendMessage, 
   onRecordingChange, 
   onOpenLibrary, 
-  libraryItem, 
+  libraryItem,
+  onLibraryItemConsumed,
   onStop, 
   wsUrl = 'ws://127.0.0.1:8080/ws', 
   disabled, 
@@ -56,12 +78,35 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [slashIndex, setSlashIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
 
+  const isSlashPrompt = text.startsWith('/') && !text.includes('\n') && !text.includes(' ');
+  const filteredCommands = isSlashPrompt
+    ? SLASH_COMMANDS.filter((c) =>
+        c.cmd.toLowerCase().startsWith(text.split(' ')[0].toLowerCase()) ||
+        c.label.toLowerCase().includes(text.replace('/', '').toLowerCase())
+      )
+    : [];
+
+  useEffect(() => {
+    setSlashIndex(0);
+  }, [text]);
+
+  const selectCommand = (cmd: SlashCommand) => {
+    if (cmd.autoSend) {
+      onSendMessage(cmd.cmd, []);
+      setText('');
+    } else {
+      setText(cmd.cmd + ' ');
+      textareaRef.current?.focus();
+    }
+  };
+
   useEffect(() => { if (textareaRef.current) { textareaRef.current.style.height = 'auto'; textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`; } }, [text]);
-  useEffect(() => { if (libraryItem) setAttachments((prev) => prev.some((entry) => entry.mediaId === libraryItem.id) ? prev : [...prev, addLibraryAttachment(libraryItem)]); }, [libraryItem]);
+  useEffect(() => { if (libraryItem) { setAttachments((prev) => prev.some((entry) => entry.mediaId === libraryItem.id) ? prev : [...prev, addLibraryAttachment(libraryItem)]); onLibraryItemConsumed?.(); } }, [libraryItem, onLibraryItemConsumed]);
 
   const addFile = async (file: File) => {
     const kind = kindFor(file.type || 'application/octet-stream');
@@ -95,11 +140,48 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const remove = (id: string) => setAttachments((prev) => { const item = prev.find((entry) => entry.id === id); if (item?.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(item.previewUrl); return prev.filter((entry) => entry.id !== id); });
   const handleSend = () => { const ready = attachments.filter((entry) => entry.uploadState === 'ready' && entry.mediaId); if ((!text.trim() && !ready.length) || disabled || attachments.some((entry) => entry.uploadState === 'uploading')) return; onSendMessage(text.trim(), ready); setText(''); attachments.forEach((entry) => entry.previewUrl?.startsWith('blob:') && URL.revokeObjectURL(entry.previewUrl)); setAttachments([]); };
   const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => { const image = Array.from(event.clipboardData.files).find((file) => file.type.startsWith('image/')); if (image) { event.preventDefault(); void addFile(image); } };
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); handleSend(); } };
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (filteredCommands.length > 0) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setSlashIndex((prev) => (prev + 1) % filteredCommands.length);
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setSlashIndex((prev) => (prev - 1 + filteredCommands.length) % filteredCommands.length);
+        return;
+      }
+      if (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) {
+        event.preventDefault();
+        if (filteredCommands[slashIndex]) {
+          selectCommand(filteredCommands[slashIndex]);
+          return;
+        }
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setText('');
+        return;
+      }
+    }
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      handleSend();
+    }
+  };
 
   const startRecording = async () => {
     setIsRecording(true); onRecordingChange?.(true); wsClient.sendPTTDown();
-    try { const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } }); const recorder = new MediaRecorder(stream); mediaRecorderRef.current = recorder; audioChunksRef.current = []; recorder.ondataavailable = (event) => event.data.size && audioChunksRef.current.push(event.data); recorder.onstop = () => { const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' }); void recorderBlobToPcmBase64(blob).then((audio) => wsClient.sendPTTUp(audio)).catch(() => wsClient.sendPTTUp()).finally(() => stream.getTracks().forEach((track) => track.stop())); }; recorder.start(); } catch { setIsRecording(false); onRecordingChange?.(false); wsClient.sendPTTUp(); }
+    try { const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } }); const recorder = new MediaRecorder(stream); mediaRecorderRef.current = recorder; audioChunksRef.current = []; recorder.ondataavailable = (event) => event.data.size && audioChunksRef.current.push(event.data); recorder.onstop = () => { const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' }); void recorderBlobToPcmBase64(blob).then((audio) => wsClient.sendPTTUp(audio)).catch((err) => { console.error('[ChatInput] PCM encode failed:', err); wsClient.sendPTTUp(); }).finally(() => stream.getTracks().forEach((track) => track.stop())); }; recorder.start(); } catch (err) {
+      const msg = err instanceof DOMException && err.name === 'NotAllowedError'
+        ? 'Microphone permission denied. Allow mic access in browser settings.'
+        : 'Could not start microphone recording.';
+      console.error('[ChatInput] Recording error:', err);
+      // Show inline text near the mic button via text state (no toast API available here)
+      setText((prev) => prev || msg);
+      setIsRecording(false); onRecordingChange?.(false); wsClient.sendPTTUp();
+    }
   };
   const stopRecording = () => { setIsRecording(false); onRecordingChange?.(false); if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop(); else wsClient.sendPTTUp(); };
 
@@ -114,6 +196,24 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         <button onClick={() => remove(att.id)} aria-label={`Remove ${att.name}`}><X size={14} /></button>
         {att.uploadState === 'uploading' && <div className="attachment-progress"><i style={{ width: `${att.progress || 0}%` }} /></div>}
       </div>)}</div>}
+      {filteredCommands.length > 0 && (
+        <div className="composer-slash-menu">
+          {filteredCommands.map((cmd, idx) => (
+            <div
+              key={cmd.cmd}
+              className={`composer-slash-item ${idx === slashIndex ? 'selected' : ''}`}
+              onClick={() => selectCommand(cmd)}
+              onMouseEnter={() => setSlashIndex(idx)}
+            >
+              <div className="composer-slash-left">
+                <span className="composer-slash-cmd">{cmd.cmd}</span>
+                <span className="composer-slash-label">{cmd.label}</span>
+              </div>
+              <span className="composer-slash-desc">{cmd.description}</span>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="composer-row">
         <div className="composer-add-wrap"><button className="composer-icon-button" onClick={() => setMenuOpen((value) => !value)} aria-label="Add attachment" aria-expanded={menuOpen}><Plus size={20} /></button>{menuOpen && <div className="composer-add-menu"><button onClick={open}><Paperclip size={16} /> Upload files</button><button onClick={() => { onOpenLibrary?.(); setMenuOpen(false); }}><FolderOpen size={16} /> Local library</button><span>Paste an image directly into the message box</span></div>}</div>
         <textarea ref={textareaRef} value={text} onChange={(event) => setText(event.target.value)} onPaste={handlePaste} onKeyDown={handleKeyDown} placeholder="Message Makima…" rows={1} aria-label="Message Makima" />
@@ -130,20 +230,36 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         >
           {isRecording ? <MicOff size={19} /> : <Mic size={19} />}
         </button>
-        {isGenerating ? (
-          <button className="composer-send-button stop" onClick={onStop} aria-label="Stop generation">
-            <Square size={16} fill="currentColor" />
-          </button>
-        ) : (
-          <button
-            className="composer-send-button"
-            onClick={handleSend}
-            disabled={disabled || (!text.trim() && !attachments.some((entry) => entry.uploadState === 'ready'))}
-            aria-label="Send message"
-          >
-            {disabled ? <LoaderCircle className="spin" size={18} /> : <Send size={18} />}
-          </button>
-        )}
+        <AnimatePresence mode="wait" initial={false}>
+          {isGenerating ? (
+            <motion.button
+              key="stop"
+              className="composer-send-button stop"
+              onClick={onStop}
+              aria-label="Stop generation"
+              initial={{ scale: 0.7, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.7, opacity: 0 }}
+              transition={{ duration: 0.14, ease: [0.16, 1, 0.3, 1] }}
+            >
+              <Square size={16} fill="currentColor" />
+            </motion.button>
+          ) : (
+            <motion.button
+              key="send"
+              className="composer-send-button"
+              onClick={handleSend}
+              disabled={disabled || (!text.trim() && !attachments.some((entry) => entry.uploadState === 'ready'))}
+              aria-label="Send message"
+              initial={{ scale: 0.7, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.7, opacity: 0 }}
+              transition={{ duration: 0.14, ease: [0.16, 1, 0.3, 1] }}
+            >
+              {disabled ? <LoaderCircle className="spin" size={18} /> : <Send size={18} />}
+            </motion.button>
+          )}
+        </AnimatePresence>
       </div>
       <div className="composer-hint">
         {onOpenModelSelector && (

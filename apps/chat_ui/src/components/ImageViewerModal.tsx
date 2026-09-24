@@ -13,24 +13,26 @@ export const ImageViewerModal: React.FC<ImageViewerModalProps> = ({
   onClose,
 }) => {
   const [zoom, setZoom] = useState(1);
+  const src = imageUrl;
 
   useEffect(() => {
+    if (!src) return;
     const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); if (event.key === '+') setZoom((value) => Math.min(3, value + 0.25)); if (event.key === '-') setZoom((value) => Math.max(0.5, value - 0.25)); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-  useEffect(() => setZoom(1), [imageUrl]);
+  }, [src, onClose]);
+  useEffect(() => setZoom(1), [src]);
 
-  if (!imageUrl) return null;
+  if (!src) return null;
 
   const handleDownload = () => {
     const a = document.createElement('a');
-    a.href = imageUrl;
+    a.href = src;
     a.download = imageName;
     a.click();
   };
-  const handleCopy = async () => { try { const response = await fetch(imageUrl); const blob = await response.blob(); await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]); } catch { await navigator.clipboard?.writeText(imageUrl); } };
-  const handleShare = async () => { if (navigator.share) await navigator.share({ title: imageName, url: imageUrl }).catch(() => undefined); else await navigator.clipboard?.writeText(imageUrl); };
+  const handleCopy = async () => { try { const response = await fetch(src); const blob = await response.blob(); await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]); } catch { await navigator.clipboard?.writeText(src); } };
+  const handleShare = async () => { if (navigator.share) await navigator.share({ title: imageName, url: src }).catch(() => undefined); else await navigator.clipboard?.writeText(src); };
 
   return (
     <div
@@ -111,7 +113,7 @@ export const ImageViewerModal: React.FC<ImageViewerModalProps> = ({
         onClick={(e) => e.stopPropagation()}
       >
         <img
-          src={imageUrl}
+          src={src}
           alt={imageName}
           style={{
             maxWidth: '100%',

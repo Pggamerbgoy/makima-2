@@ -238,6 +238,8 @@ export function VoiceSessionController({ conversationId, connected, settings, on
     const unsubscribe = wsClient.onMessage((event) => {
       const incomingId = event?.payload?.voice_session_id;
       if (!incomingId) return;
+      // One-shot read-aloud sessions (tts_*) belong to MessageBubble, never here.
+      if (String(incomingId).startsWith('tts_')) return;
 
       if (event.payload?.auto_started || !sessionRef.current) {
         sessionRef.current = incomingId;

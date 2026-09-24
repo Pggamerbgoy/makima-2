@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { motion } from 'framer-motion';
 import {
   Check,
   Cpu,
@@ -42,12 +43,14 @@ export const ModelSelectorPopover: React.FC<ModelSelectorPopoverProps> = ({
   const [activeCategory, setActiveCategory] = useState<'all' | 'fast' | 'reasoning' | 'local'>('all');
   const [editingKeyForProvider, setEditingKeyForProvider] = useState<string | null>(null);
   const [tempApiKey, setTempApiKey] = useState('');
-
-  if (!isOpen) return null;
+  const [expandedProviders, setExpandedProviders] = useState<Record<string, boolean>>({});
 
   // Curated descriptions and badges for known models
   const getModelDescriptor = (providerId: string, modelName: string): { label: string; badge: string } => {
-    const m = modelName.toLowerCase();
+    const m = (modelName || '').toLowerCase();
+    if (m.includes('gpt-oss-120b')) return { label: 'GPT-OSS 120B', badge: 'Ultra-Fast · 120B' };
+    if (m.includes('gpt-oss-20b')) return { label: 'GPT-OSS 20B', badge: 'Lightning Fast' };
+    if (m.includes('qwen3.8') || m.includes('qwen-3.8')) return { label: 'Qwen 3.8 27B', badge: 'Next-Gen Open' };
     if (m.includes('llama-3.3-70b')) return { label: 'Llama 3.3 70B', badge: 'Ultra-Fast · 70B' };
     if (m.includes('llama3-8b') || m.includes('llama-3.1-8b') || m.includes('llama3.2')) return { label: 'Llama 3.2 / 8B', badge: 'Fast · Low Latency' };
     if (m.includes('gemini-2.5-flash') || m.includes('gemini-2.0-flash')) return { label: 'Gemini 2.5 Flash', badge: '1M Context · Multimodal' };
@@ -60,31 +63,42 @@ export const ModelSelectorPopover: React.FC<ModelSelectorPopoverProps> = ({
     if (m.includes('gpt-4o')) return { label: 'GPT-4o Omnimodal', badge: 'Flagship' };
     if (m.includes('claude-3-5-sonnet') || m.includes('sonnet')) return { label: 'Claude 3.5 Sonnet', badge: 'Top Code & Logic' };
     if (m.includes('claude-3-5-haiku')) return { label: 'Claude 3.5 Haiku', badge: 'Instant Response' };
-    return { label: modelName, badge: providerId.toUpperCase() };
+    return { label: modelName || 'Model', badge: (providerId || 'LLM').toUpperCase() };
   };
 
+  // MUST be called unconditionally before any early return to comply with React Rules of Hooks
   const filteredProviders = useMemo(() => {
+    if (!isOpen) return [];
     const q = searchQuery.toLowerCase().trim();
-    return providers
+    return (providers || [])
       .map((provider) => {
+        if (!provider) return null;
         // Filter by category
         if (activeCategory === 'local' && !provider.local) return null;
         if (activeCategory === 'fast' && !(provider.id === 'groq' || provider.id === 'gemini' || provider.id === 'cerebras')) return null;
         if (activeCategory === 'reasoning' && !(provider.id === 'deepseek' || provider.id === 'openai' || provider.id === 'anthropic' || provider.id === 'gemini')) return null;
 
-        const providerMatches = provider.name.toLowerCase().includes(q) || provider.id.toLowerCase().includes(q);
-        const matchedModels = (provider.models || [provider.model]).filter(
-          (m) => providerMatches || m.toLowerCase().includes(q)
+        const pName = (provider.name || '').toLowerCase();
+        const pId = (provider.id || '').toLowerCase();
+        const providerMatches = pName.includes(q) || pId.includes(q);
+        const allModels = Array.isArray(provider.models) && provider.models.length > 0 
+          ? provider.models 
+          : [provider.model || 'default'];
+          
+        const matchedModels = allModels.filter(
+          (m) => providerMatches || (m || '').toLowerCase().includes(q)
         );
 
         if (matchedModels.length === 0 && !providerMatches) return null;
         return {
           ...provider,
-          filteredModels: matchedModels.length > 0 ? matchedModels : [provider.model],
+          filteredModels: matchedModels.length > 0 ? matchedModels : allModels,
         };
       })
       .filter((p): p is LLMProvider & { filteredModels: string[] } => Boolean(p));
-  }, [providers, searchQuery, activeCategory]);
+  }, [isOpen, providers, searchQuery, activeCategory]);
+
+  if (!isOpen) return null;
 
   const handleSaveKey = (providerId: string) => {
     if (onSaveClientApiKey) {
@@ -95,9 +109,20 @@ export const ModelSelectorPopover: React.FC<ModelSelectorPopoverProps> = ({
   };
 
   return (
-    <div className="model-popover-backdrop" onClick={onClose}>
-      <div
+    <motion.div
+      className="model-popover-backdrop"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
+      onClick={onClose}
+    >
+      <motion.div
         className="model-popover-container"
+        initial={{ opacity: 0, scale: 0.96, y: 8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.97, y: 4 }}
+        transition={{ type: 'spring', stiffness: 400, damping: 30 }}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-label="Model Selector"
@@ -287,36 +312,70 @@ export const ModelSelectorPopover: React.FC<ModelSelectorPopoverProps> = ({
 
                   {/* Model Items */}
                   <div className="model-item-list">
-                    {provider.filteredModels.map((modelName) => {
-                      const isSelected = isCurrentProvider && activeModel === modelName;
-                      const { label, badge } = getModelDescriptor(provider.id, modelName);
+                    {(() => {
+                      const isExpanded = Boolean(expandedProviders[provider.id]) || Boolean(searchQuery.trim());
+                      const visibleModels = isExpanded
+                        ? provider.filteredModels
+                        : provider.filteredModels.slice(0, 10);
+                      const hasMore = provider.filteredModels.length > 10 && !isExpanded;
 
                       return (
-                        <button
-                          key={modelName}
-                          type="button"
-                          className={`model-option-card ${isSelected ? 'selected' : ''}`}
-                          onClick={() => {
-                            onSelectModel(provider.id, modelName);
-                            onClose();
-                          }}
-                        >
-                          <div className="model-option-main">
-                            <span className="model-name-text">{label}</span>
-                            <span className="model-technical-id">{modelName}</span>
-                          </div>
+                        <>
+                          {visibleModels.map((modelName) => {
+                            const isSelected = isCurrentProvider && activeModel === modelName;
+                            const { label, badge } = getModelDescriptor(provider.id, modelName);
 
-                          <div className="model-option-meta">
-                            <span className="model-descriptor-tag">{badge}</span>
-                            {isSelected && (
-                              <div className="model-selected-check">
-                                <Check size={13} />
-                              </div>
-                            )}
-                          </div>
-                        </button>
+                            return (
+                              <button
+                                key={modelName}
+                                type="button"
+                                className={`model-option-card ${isSelected ? 'selected' : ''}`}
+                                onClick={() => {
+                                  onSelectModel(provider.id, modelName);
+                                  onClose();
+                                }}
+                              >
+                                <div className="model-option-main">
+                                  <span className="model-name-text">{label}</span>
+                                  <span className="model-technical-id">{modelName}</span>
+                                </div>
+
+                                <div className="model-option-meta">
+                                  <span className="model-descriptor-tag">{badge}</span>
+                                  {isSelected && (
+                                    <div className="model-selected-check">
+                                      <Check size={13} />
+                                    </div>
+                                  )}
+                                </div>
+                              </button>
+                            );
+                          })}
+
+                          {hasMore && (
+                            <button
+                              type="button"
+                              className="model-show-more-btn"
+                              onClick={() => setExpandedProviders((prev) => ({ ...prev, [provider.id]: true }))}
+                              style={{
+                                padding: '8px',
+                                background: 'var(--bg-canvas)',
+                                border: '1px dashed var(--border-subtle)',
+                                borderRadius: 'var(--radius-md)',
+                                color: 'var(--primary)',
+                                fontSize: '0.78rem',
+                                fontWeight: 500,
+                                cursor: 'pointer',
+                                textAlign: 'center',
+                                marginTop: '4px',
+                              }}
+                            >
+                              + Show {provider.filteredModels.length - 10} more {provider.name} models...
+                            </button>
+                          )}
+                        </>
                       );
-                    })}
+                    })()}
                   </div>
                 </div>
               );
@@ -343,7 +402,7 @@ export const ModelSelectorPopover: React.FC<ModelSelectorPopoverProps> = ({
             <span>Manage All Providers & Connectors</span>
           </button>
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 };

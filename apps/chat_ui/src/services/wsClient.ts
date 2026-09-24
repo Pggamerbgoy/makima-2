@@ -1,4 +1,5 @@
 import type { Attachment } from '../types/chat';
+import { httpBaseFromWs } from './httpBase';
 
 type MessageHandler = (data: any) => void;
 type ConnectionStatusHandler = (connected: boolean) => void;
@@ -94,6 +95,33 @@ export class WSClient {
     this.statusHandlers.forEach((h) => h(status));
   }
 
+  public ping(): Promise<number> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+        reject(new Error('WebSocket not connected'));
+        return;
+      }
+      const startMs = performance.now();
+      const pingId = 'ping_' + Math.random().toString(36).substring(2, 9);
+      let cleanup: (() => void) | null = null;
+      const timer = setTimeout(() => {
+        if (cleanup) cleanup();
+        reject(new Error('Ping timeout (5000ms)'));
+      }, 5000);
+
+      cleanup = this.onMessage((data) => {
+        if (data && (data.type === 'pong' || data.payload?.type === 'pong')) {
+          clearTimeout(timer);
+          if (cleanup) cleanup();
+          const rtt = Math.max(1, Math.round(performance.now() - startMs));
+          resolve(rtt);
+        }
+      });
+
+      this.send('ping', pingId, { timestamp: Date.now() });
+    });
+  }
+
   public sendMessage(
     text: string,
     conversationId: string,
@@ -163,7 +191,6 @@ export class WSClient {
   }
 
   public regenerateMessage(
-    taskId: string,
     text: string,
     conversationId: string,
     options?: {
@@ -172,7 +199,8 @@ export class WSClient {
       apiKey?: string;
       baseUrl?: string;
     }
-  ): void {
+  ): string {
+    const taskId = 'task_' + Math.random().toString(36).substring(2, 9);
     this.send('regenerate_message', taskId, {
       text,
       conversation_id: conversationId,
@@ -181,10 +209,31 @@ export class WSClient {
       ...(options?.apiKey ? { api_key: options.apiKey } : {}),
       ...(options?.baseUrl ? { base_url: options.baseUrl } : {}),
     });
+    return taskId;
   }
 
-  public modifyResponse(taskId: string, text: string, instruction: string, conversationId: string): void {
-    this.send('modify_response', taskId, { text, instruction, conversation_id: conversationId });
+  public modifyResponse(
+    text: string,
+    instruction: string,
+    conversationId: string,
+    options?: {
+      provider?: string;
+      model?: string;
+      apiKey?: string;
+      baseUrl?: string;
+    }
+  ): string {
+    const taskId = 'task_' + Math.random().toString(36).substring(2, 9);
+    this.send('modify_response', taskId, {
+      text,
+      instruction,
+      conversation_id: conversationId,
+      ...(options?.provider ? { provider: options.provider } : {}),
+      ...(options?.model ? { model: options.model } : {}),
+      ...(options?.apiKey ? { api_key: options.apiKey } : {}),
+      ...(options?.baseUrl ? { base_url: options.baseUrl } : {}),
+    });
+    return taskId;
   }
 
   public approveAction(taskId: string, action: string): void {
@@ -253,6 +302,26 @@ export class WSClient {
     this.send('voice_speak', taskId, { voice_session_id: voiceSessionId, text });
   }
 
+  /**
+   * One-shot TTS: sends `voice_speak` with an ephemeral session ID.
+   * The brain's synthesize_session_tts handler will respond with a
+   * `voice_tts_audio` event on this same WS connection.
+   * @returns the ephemeral voiceSessionId (so caller can filter incoming events)
+   */
+  public speakText(text: string, taskId?: string): string {
+    const voiceSessionId = `tts_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+    const tid = taskId || `task_${Math.random().toString(36).substring(2, 9)}`;
+    this.send('voice_speak', tid, { voice_session_id: voiceSessionId, text });
+    return voiceSessionId;
+  }
+
+  /**
+   * Cancel an in-progress one-shot TTS playback.
+   */
+  public stopSpeaking(voiceSessionId: string): void {
+    this.send('voice_tts_stop', voiceSessionId, { voice_session_id: voiceSessionId });
+  }
+
   public sendFeedback(taskId: string, positive: boolean, category: string = 'general'): void {
     if (this.socket && this.socket.readyState === WebSocket.OPEN) {
       this.socket.send(JSON.stringify({
@@ -303,7 +372,7 @@ export class WSClient {
         payload: { path: filePath },
       }));
     } else {
-      fetch('http://127.0.0.1:8080/api/open-file', {
+      fetch(`${httpBaseFromWs(this.url)}/api/open-file`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: filePath }),

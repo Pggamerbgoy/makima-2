@@ -1,5 +1,4 @@
-import React, { Component, useState } from 'react';
-import type { ErrorInfo, ReactNode } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -8,129 +7,41 @@ import rehypeHighlight from 'rehype-highlight';
 import rehypeKatex from 'rehype-katex';
 import { motion } from 'framer-motion';
 import type { Message, CanvasItem } from '../types/chat';
-import { Sparkles, User, Copy, Check, ThumbsUp, ThumbsDown, RotateCcw, Volume2, VolumeX, ChevronDown, ChevronUp, Edit3, Sliders, Share2, Search, FileSpreadsheet, FileText, FileCode, ExternalLink, Table as TableIcon } from 'lucide-react';
+import { Sparkles, User, Copy, Check, ThumbsUp, ThumbsDown, RotateCcw, Volume2, VolumeX, ChevronDown, ChevronUp, Edit3, Sliders, Share2, Search, FileSpreadsheet, FileText, FileCode, ExternalLink, Pin } from 'lucide-react';
 import { wsClient } from '../services/wsClient';
 import { CodeBlockRunner } from './CodeBlockRunner';
 import { ImageViewerModal } from './ImageViewerModal';
-import { MermaidChart } from './MermaidChart';
 import { MediaStrip } from './MediaCard';
 import { AgentActivityTimeline } from './AgentActivityTimeline';
+import { MilestoneChecklist } from './MilestoneChecklist';
 import { ActionConfirmationCard } from './ActionConfirmationCard';
+import { MarkdownTable, MarkdownErrorBoundary, extractTextFromReactNode, LazyMermaid } from './markdownShared';
 
-const MarkdownTable: React.FC<{ children?: ReactNode; [key: string]: any }> = ({ children, ...props }) => {
-  const [copied, setCopied] = useState(false);
-  const tableRef = React.useRef<HTMLTableElement>(null);
-
-  const copyTable = () => {
-    if (!tableRef.current) return;
-    const table = tableRef.current;
-    const rows = Array.from(table.querySelectorAll('tr'));
-    if (!rows.length) return;
-
-    // Convert to markdown table format
-    const matrix: string[][] = rows.map((row) =>
-      Array.from(row.querySelectorAll('th, td')).map((cell) => cell.textContent?.trim().replace(/\|/g, '\\|') || '')
-    );
-
-    if (!matrix.length || !matrix[0].length) return;
-
-    const colWidths = matrix[0].map((_, colIdx) =>
-      Math.max(...matrix.map((row) => (row[colIdx] || '').length), 3)
-    );
-
-    let md = '';
-    // Header
-    const headerRow = matrix[0];
-    md += '| ' + headerRow.map((cell, idx) => cell.padEnd(colWidths[idx])).join(' | ') + ' |\n';
-    // Divider
-    md += '| ' + colWidths.map((w) => '-'.repeat(w)).join(' | ') + ' |\n';
-    // Data rows
-    for (let r = 1; r < matrix.length; r++) {
-      md += '| ' + matrix[r].map((cell, idx) => (cell || '').padEnd(colWidths[idx])).join(' | ') + ' |\n';
-    }
-
-    navigator.clipboard?.writeText(md.trim());
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  return (
-    <div className="gpt-table-card">
-      <div className="gpt-table-header">
-        <div className="gpt-table-title">
-          <TableIcon size={14} className="gpt-table-icon" />
-          <span>Data Table</span>
-        </div>
-        <button
-          onClick={copyTable}
-          className="gpt-table-copy-btn"
-          title="Copy table as Markdown"
-        >
-          {copied ? <Check size={13} style={{ color: '#54c58a' }} /> : <Copy size={13} />}
-          <span>{copied ? 'Copied' : 'Copy'}</span>
-        </button>
-      </div>
-      <div className="gpt-table-scroll">
-        <table ref={tableRef} {...props} className="gpt-table">
-          {children}
-        </table>
-      </div>
-    </div>
-  );
+const getSafeUrl = (value: string | undefined): string | null => {
+  if (!value) return null;
+  if (value.startsWith('file://')) return value;
+  try {
+    const parsed = new URL(value, window.location.origin);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'blob:' || parsed.protocol === 'file:' || (parsed.protocol === 'data:' && parsed.pathname.startsWith('image/'))) return parsed.toString();
+  } catch { /* Invalid media/link URLs render as a safe fallback. */ }
+  return null;
 };
 
-interface MarkdownErrorBoundaryProps {
-  fallbackText: string;
-  children: ReactNode;
-}
-
-const extractTextFromReactNode = (node: any): string => {
-  if (node === null || node === undefined) return '';
-  if (typeof node === 'string') return node;
-  if (typeof node === 'number' || typeof node === 'boolean') return String(node);
-  if (Array.isArray(node)) {
-    return node.map(extractTextFromReactNode).join('');
-  }
-  if (typeof node === 'object') {
-    if (node.props && node.props.children !== undefined) {
-      return extractTextFromReactNode(node.props.children);
-    }
-    if ('value' in node && typeof node.value === 'string') {
-      return node.value;
-    }
-    if ('children' in node && Array.isArray(node.children)) {
-      return node.children.map(extractTextFromReactNode).join('');
-    }
-  }
-  return '';
+const getYouTubeId = (url: string): string | null => {
+  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+  const match = url.match(regExp);
+  return match && match[2].length === 11 ? match[2] : null;
 };
 
-interface MarkdownErrorBoundaryState {
-  hasError: boolean;
-}
-
-class MarkdownErrorBoundary extends Component<MarkdownErrorBoundaryProps, MarkdownErrorBoundaryState> {
-  state: MarkdownErrorBoundaryState = { hasError: false };
-
-  static getDerivedStateFromError(_: Error): MarkdownErrorBoundaryState {
-    return { hasError: true };
-  }
-
-  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.warn('[MarkdownRenderError] Fallback to raw text:', error, errorInfo);
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', color: 'var(--text-primary)' }}>
-          {this.props.fallbackText}
-        </div>
-      );
+const getSpotifyEmbedUrl = (url: string): string | null => {
+  try {
+    const match = /open\.spotify\.com\/(track|album|playlist|artist)\/([a-zA-Z0-9]+)/.exec(url);
+    if (match) {
+      return `https://open.spotify.com/embed/${match[1]}/${match[2]}`;
     }
-    return this.props.children;
-  }
-}
+  } catch {}
+  return null;
+};
 
 const getAgentBadgeStyle = (agentName?: string) => {
   const norm = (agentName || '').toLowerCase().trim();
@@ -178,9 +89,10 @@ interface MessageBubbleProps {
   onRejectAction?: (taskId: string, action: string) => void;
   onEditMessage?: (messageId: string, newText: string) => void;
   onOpenCanvas?: (canvasItem: CanvasItem) => void;
+  onTogglePin?: (messageId: string) => void;
 }
 
-export const MessageBubble: React.FC<MessageBubbleProps> = ({
+export const MessageBubbleImpl: React.FC<MessageBubbleProps> = ({
   message,
   onRegenerate,
   onModifyResponse,
@@ -189,6 +101,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   onRejectAction,
   onEditMessage,
   onOpenCanvas,
+  onTogglePin,
 }) => {
   const isUser = message.sender === 'user';
   const [copied, setCopied] = useState(false);
@@ -200,29 +113,113 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [showModifyMenu, setShowModifyMenu] = useState(false);
 
-  const handleCopyText = (text: string) => {
+  // TTS via Makima's voice system (Gemini Live / Kokoro)
+  const ttsSessionIdRef = useRef<string | null>(null);
+  const playbackCtxRef = useRef<AudioContext | null>(null);
+  const activeTtsSrcRef = useRef<AudioBufferSourceNode[]>([]);
+  const nextPlayTimeRef = useRef(0);
+
+  /** Play a base64 PCM s16le chunk at 24 kHz — mirrors VoiceSessionController.playPcm24k */
+  const playPcm24k = useCallback((base64Audio: string) => {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!playbackCtxRef.current || playbackCtxRef.current.state === 'closed') {
+        playbackCtxRef.current = new AudioCtx({ sampleRate: 24000 });
+      }
+      const ctx = playbackCtxRef.current;
+      if (ctx.state === 'suspended') void ctx.resume();
+      const binary = atob(base64Audio);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      const int16 = new Int16Array(bytes.buffer);
+      const float32 = new Float32Array(int16.length);
+      for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768.0;
+      const audioBuffer = ctx.createBuffer(1, float32.length, 24000);
+      audioBuffer.getChannelData(0).set(float32);
+      const source = ctx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(ctx.destination);
+      const now = ctx.currentTime;
+      const startAt = Math.max(now, nextPlayTimeRef.current);
+      source.start(startAt);
+      nextPlayTimeRef.current = startAt + audioBuffer.duration;
+      activeTtsSrcRef.current.push(source);
+      source.onended = () => {
+        activeTtsSrcRef.current = activeTtsSrcRef.current.filter((s) => s !== source);
+        if (activeTtsSrcRef.current.length === 0) setIsSpeaking(false);
+      };
+    } catch (err) {
+      console.warn('[MessageBubble] TTS PCM playback error:', err);
+      setIsSpeaking(false);
+    }
+  }, []);
+
+  /** Stop all queued TTS audio */
+  const stopTtsAudio = useCallback(() => {
+    activeTtsSrcRef.current.forEach((src) => { try { src.stop(); src.disconnect(); } catch {} });
+    activeTtsSrcRef.current = [];
+    nextPlayTimeRef.current = 0;
+    setIsSpeaking(false);
+  }, []);
+
+  // Subscribe to voice_tts_audio events for our one-shot TTS session
+  useEffect(() => {
+    const unsub = wsClient.onMessage((event) => {
+      if (!ttsSessionIdRef.current) return;
+      const sid = event?.payload?.voice_session_id;
+      if (sid !== ttsSessionIdRef.current) return;
+      if (event.type === 'voice_tts_audio' && event.payload?.audio) {
+        playPcm24k(event.payload.audio);
+      }
+      if (event.type === 'voice_tts_stopped') {
+        stopTtsAudio();
+        ttsSessionIdRef.current = null;
+      }
+      if (event.type === 'voice_error') {
+        stopTtsAudio();
+        ttsSessionIdRef.current = null;
+      }
+    });
+    return unsub;
+  }, [playPcm24k, stopTtsAudio]);
+
+  // Cleanup audio on unmount
+  useEffect(() => () => stopTtsAudio(), [stopTtsAudio]);
+
+  const handleCopyText = useCallback((text: string) => {
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
-  };
+  }, []);
 
   const handleFeedback = (isPositive: boolean) => {
     setFeedbackState(isPositive ? 'up' : 'down');
     wsClient.sendFeedback(message.id, isPositive);
   };
 
-  // TTS Read Aloud
+  // TTS Read Aloud — routes to Makima's voice system (Gemini Live / Kokoro / Edge-TTS)
   const handleToggleSpeech = () => {
     if (isSpeaking) {
-      window.speechSynthesis.cancel();
-      setIsSpeaking(false);
+      if (ttsSessionIdRef.current) {
+        wsClient.stopSpeaking(ttsSessionIdRef.current);
+        ttsSessionIdRef.current = null;
+      }
+      stopTtsAudio();
     } else {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(message.text);
-      utterance.rate = 1.0;
-      utterance.onend = () => setIsSpeaking(false);
-      utterance.onerror = () => setIsSpeaking(false);
-      window.speechSynthesis.speak(utterance);
+      const rawText = message.text || '';
+      // Strip markdown syntax so TTS reads clean text
+      const cleanText = rawText
+        .replace(/```[\s\S]*?```/g, '') // remove code blocks
+        .replace(/`([^`]+)`/g, '$1')    // inline code
+        .replace(/\*\*([^*]+)\*\*/g, '$1') // bold
+        .replace(/\*([^*]+)\*/g, '$1')     // italic
+        .replace(/#+\s/g, '')              // headings
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // links
+        .replace(/^[-*>]\s/gm, '')         // lists/blockquotes
+        .trim();
+      if (!cleanText) return;
+      const sessionId = wsClient.speakText(cleanText);
+      ttsSessionIdRef.current = sessionId;
       setIsSpeaking(true);
     }
   };
@@ -235,8 +232,18 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   };
 
   const handleGoogleCheck = () => {
-    const query = encodeURIComponent(message.text.substring(0, 100));
-    window.open(`https://www.google.com/search?q=${query}`, '_blank');
+    // Strip markdown before building the search query
+    const cleanQuery = (message.text || '')
+      .replace(/```[\s\S]*?```/g, '')
+      .replace(/`[^`]+`/g, '')
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .replace(/\*([^*]+)\*/g, '$1')
+      .replace(/#+\s/g, '')
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/\n+/g, ' ')
+      .trim()
+      .substring(0, 120);
+    window.open(`https://www.google.com/search?q=${encodeURIComponent(cleanQuery)}`, '_blank');
   };
 
   const handleShare = async () => {
@@ -244,267 +251,13 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
     else await navigator.clipboard?.writeText(message.text);
   };
 
-  // Helper to extract YouTube video ID
-  const getYouTubeId = (url: string): string | null => {
-    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
-    const match = url.match(regExp);
-    return match && match[2].length === 11 ? match[2] : null;
-  };
-
-  // Helper to extract Spotify Embed URL
-  const getSpotifyEmbedUrl = (url: string): string | null => {
-    try {
-      const match = /open\.spotify\.com\/(track|album|playlist|artist)\/([a-zA-Z0-9]+)/.exec(url);
-      if (match) {
-        return `https://open.spotify.com/embed/${match[1]}/${match[2]}`;
-      }
-    } catch {}
-    return null;
-  };
-
-  const isLongReport = !isUser && message.format === 'report' && message.text.length > 1500 && !message.isStreaming;
+  const isLongReport = !isUser && message.text.length > 1800 && !message.isStreaming;
   const displayText = message.text;
-  const getSafeUrl = (value: string | undefined): string | null => {
-    if (!value) return null;
-    if (value.startsWith('file://')) return value;
-    try {
-      const parsed = new URL(value, window.location.origin);
-      if (parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'blob:' || parsed.protocol === 'file:' || (parsed.protocol === 'data:' && parsed.pathname.startsWith('image/'))) return parsed.toString();
-    } catch { /* Invalid media/link URLs render as a safe fallback. */ }
-    return null;
-  };
 
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.25, ease: 'easeOut' }}
-      style={{
-        display: 'flex',
-        flexDirection: isUser ? 'row-reverse' : 'row',
-        gap: '16px',
-        padding: '16px 24px',
-        width: '100%',
-        maxWidth: '860px',
-        margin: '0 auto',
-      }}
-    >
-      {/* Avatar */}
-      <div
-        style={{
-          width: '36px',
-          height: '36px',
-          borderRadius: '50%',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          flexShrink: 0,
-          background: isUser
-            ? 'var(--bg-tertiary)'
-            : 'linear-gradient(135deg, #4285f4 0%, #9b51e0 50%, #e91e63 100%)',
-          color: '#ffffff',
-          boxShadow: isUser ? 'none' : '0 2px 10px rgba(66, 133, 244, 0.3)',
-        }}
-      >
-        {isUser ? <User size={20} /> : <Sparkles size={20} />}
-      </div>
-
-      {/* Message Content Container */}
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: isUser ? 'flex-end' : 'flex-start' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-          <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontWeight: 600 }}>
-            {isUser ? 'You' : 'Makima AI'}
-          </div>
-          {!isUser && message.agent_name && (
-            <span
-              style={{
-                fontSize: '0.65rem',
-                fontWeight: 600,
-                padding: '2px 8px',
-                borderRadius: '10px',
-                textTransform: 'uppercase',
-                letterSpacing: '0.04em',
-                fontFamily: 'var(--font-mono)',
-                ...getAgentBadgeStyle(message.agent_name),
-              }}
-            >
-              {message.agent_name.replace(/_agent$/i, '').replace(/_/g, ' ')}
-            </span>
-          )}
-
-          {/* Edit button for user message */}
-          {isUser && !isEditing && (
-            <button
-              onClick={() => setIsEditing(true)}
-              title="Edit message"
-              style={{
-                background: 'transparent',
-                border: 'none',
-                color: 'var(--text-muted)',
-                cursor: 'pointer',
-                padding: '4px',
-                borderRadius: '4px',
-                display: 'flex',
-              }}
-            >
-              <Edit3 size={14} />
-            </button>
-          )}
-        </div>
-
-        {/* Attachments preview */}
-        {message.attachments && message.attachments.length > 0 && (
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '12px' }}>
-            {message.attachments.map((att) => (
-              <div
-                key={att.id}
-                style={{
-                  padding: '6px 12px',
-                  borderRadius: '12px',
-                  backgroundColor: 'var(--bg-tertiary)',
-                  fontSize: '0.85rem',
-                  color: 'var(--accent-blue)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                }}
-              >
-                📎 {att.name}
-              </div>
-            ))}
-          </div>
-        )}
-
-        <MediaStrip items={message.media} />
-        <AgentActivityTimeline events={message.agentActivity} />
-        {message.sources?.length ? <div className="source-cards">{message.sources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noreferrer"><strong>{source.title}</strong><span>{source.domain}</span></a>)}</div> : null}
-        {message.actionConfirmation && (
-          <ActionConfirmationCard
-            {...message.actionConfirmation}
-            onApprove={() => onApproveAction?.(message.taskId || message.id.replace(/^ai_/, ''), message.actionConfirmation!.action)}
-            onReject={() => onRejectAction?.(message.taskId || message.id.replace(/^ai_/, ''), message.actionConfirmation!.action)}
-          />
-        )}
-        {message.error && <div className="response-error-card"><strong>Response failed</strong><span>{message.error.message}</span>{message.error.retryable && onRegenerate && <button onClick={() => onRegenerate(message.id)}>Retry</button>}</div>}
-
-        {/* Thinking Accordion (For AI messages) */}
-        {!isUser && message.thought && (
-          <div
-            style={{
-              margin: '0 0 12px 0',
-              borderRadius: '12px',
-              border: '1px solid var(--border-color)',
-              backgroundColor: 'var(--bg-tertiary)',
-              overflow: 'hidden',
-              width: '100%',
-            }}
-          >
-            <button
-              onClick={() => setIsThoughtOpen(!isThoughtOpen)}
-              style={{
-                width: '100%',
-                padding: '8px 12px',
-                background: 'transparent',
-                border: 'none',
-                color: 'var(--text-secondary)',
-                fontSize: '0.82rem',
-                fontWeight: 500,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                cursor: 'pointer',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <Sparkles size={14} color="var(--accent-blue)" />
-                <span>Thinking Process</span>
-              </div>
-              {isThoughtOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-            </button>
-            {isThoughtOpen && (
-              <div
-                style={{
-                  padding: '10px 14px',
-                  borderTop: '1px solid var(--border-color)',
-                  fontSize: '0.82rem',
-                  color: 'var(--text-muted)',
-                  fontStyle: 'italic',
-                  lineHeight: 1.5,
-                  whiteSpace: 'pre-wrap',
-                }}
-              >
-                {message.thought}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* User Message Edit Mode */}
-        {isEditing ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%', margin: '8px 0' }}>
-            <textarea
-              value={editText}
-              onChange={(e) => setEditText(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '10px',
-                borderRadius: '12px',
-                backgroundColor: 'var(--bg-tertiary)',
-                border: '1px solid var(--accent-blue)',
-                color: 'var(--text-primary)',
-                outline: 'none',
-                fontSize: '0.95rem',
-                resize: 'vertical',
-                minHeight: '60px',
-              }}
-            />
-            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-              <button
-                onClick={() => setIsEditing(false)}
-                style={{ padding: '6px 12px', borderRadius: '16px', border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.8rem' }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSaveEdit}
-                style={{ padding: '6px 14px', borderRadius: '16px', border: 'none', background: 'var(--accent-blue)', color: '#000', fontWeight: 600, cursor: 'pointer', fontSize: '0.8rem' }}
-              >
-                Save & Submit
-              </button>
-            </div>
-          </div>
-        ) : (
-          /* Message Content Body: Pill-shaped for User, Borderless for AI */
-          <div
-            style={{
-              fontSize: '0.95rem',
-              lineHeight: '1.6',
-              padding: isUser ? '12px 16px' : '4px 0',
-              borderRadius: isUser ? '18px 18px 4px 18px' : '0',
-              backgroundColor: isUser ? 'var(--bg-tertiary)' : 'transparent',
-              color: 'var(--text-primary)',
-              maxWidth: '100%',
-              wordBreak: 'break-word',
-            }}
-            className="markdown-content"
-          >
-            {!isUser && message.isStreaming && !message.text.trim() ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '5px', padding: '6px 0', opacity: 0.7 }}>
-                <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent-teal)', display: 'inline-block' }} />
-                <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent-teal)', display: 'inline-block', opacity: 0.6 }} />
-                <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent-teal)', display: 'inline-block', opacity: 0.3 }} />
-              </div>
-            ) : (
-              <MarkdownErrorBoundary fallbackText={message.text}>
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm, remarkMath, remarkEmoji]}
-                  rehypePlugins={[rehypeHighlight, rehypeKatex]}
-                  components={{
-                  // Google & ChatGPT SOTA Table renderer
+  const markdownComponents = useMemo(() => ({
                   table(props: any) {
                     return <MarkdownTable {...props} />;
                   },
-                  // Code block renderer with Run Code + Copy + Canvas + Mermaid
                   code({ node, inline, className, children, ...props }: any) {
                     const match = /language-([^\s]+)(?:\s+(.*))?/.exec(className || '');
                     const fullLang = match ? match[1].toLowerCase() : 'code';
@@ -520,13 +273,13 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                           return (
                             <pre
                               style={{
-                                backgroundColor: 'rgba(0, 0, 0, 0.35)',
-                                border: '1px solid rgba(0, 210, 255, 0.15)',
+                                backgroundColor: 'var(--bg-surface-elevated)',
+                                border: '1px solid var(--border-subtle)',
                                 padding: '10px 14px',
-                                borderRadius: '8px',
+                                borderRadius: 'var(--radius-md)',
                                 fontSize: '0.78rem',
                                 color: 'var(--text-muted)',
-                                fontFamily: 'monospace',
+                                fontFamily: 'var(--font-mono)',
                                 margin: '8px 0',
                               }}
                             >
@@ -534,7 +287,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                             </pre>
                           );
                         }
-                        return <MermaidChart chart={codeString} subType={subType} />;
+                        return <LazyMermaid chart={codeString} subType={subType} />;
                       }
                       return (
                         <CodeBlockRunner
@@ -560,7 +313,6 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                       </code>
                     );
                   },
-                  // Image renderer for Fullscreen Lightbox
                   img({ src, alt, ...props }: any) {
                     const safeSrc = getSafeUrl(src);
                     if (!safeSrc) return <span className="media-card-error">Image preview unavailable.</span>;
@@ -568,6 +320,8 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                       <img
                         src={safeSrc}
                         alt={alt || 'Image'}
+                        loading="lazy"
+                        decoding="async"
                         onClick={() => setSelectedImage(src)}
                         style={{
                           maxWidth: '100%',
@@ -580,8 +334,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                       />
                     );
                   },
-                  // Custom Link renderer for YouTube and Spotify embeds
-                  a({ href, children, ...props }) {
+                  a({ href, children, ...props }: any) {
                     if (href) {
                       const ytId = getYouTubeId(href);
                       if (ytId) {
@@ -629,7 +382,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                       const cleanPath = href.replace(/^file:\/\/\/?/, '');
                       const fileName = cleanPath.split(/[/\\]/).pop() || href;
                       const ext = (fileName.split('.').pop() || '').toLowerCase();
-                      
+
                       let badgeColor = 'rgba(59, 130, 246, 0.15)';
                       let borderColor = 'rgba(59, 130, 246, 0.35)';
                       let textColor = '#60a5fa';
@@ -766,8 +519,246 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                       </a>
                     );
                   },
+  }), [message.isStreaming, onOpenCanvas, handleCopyText]);
+
+  return (
+    <motion.div
+      id={`msg-${message.id}`}
+      className={`message-bubble-wrapper ${message.isPinned ? 'is-pinned' : ''}`}
+      initial={{ opacity: 0, y: 14 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+      style={{
+        display: 'flex',
+        flexDirection: isUser ? 'row-reverse' : 'row',
+        gap: '16px',
+        padding: '16px 24px',
+        width: '100%',
+        maxWidth: '860px',
+        margin: '0 auto',
+      }}
+    >
+      {/* Avatar */}
+      <div
+        style={{
+          width: '36px',
+          height: '36px',
+          borderRadius: '50%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
+          background: isUser
+            ? 'var(--bg-tertiary)'
+            : 'linear-gradient(135deg, #4285f4 0%, #9b51e0 50%, #e91e63 100%)',
+          color: '#ffffff',
+          boxShadow: isUser ? 'none' : '0 2px 10px rgba(66, 133, 244, 0.3)',
+        }}
+      >
+        {isUser ? <User size={20} /> : <Sparkles size={20} />}
+      </div>
+
+      {/* Message Content Container */}
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: isUser ? 'flex-end' : 'flex-start' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+          <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+            {isUser ? 'You' : 'Makima AI'}
+          </div>
+          {!isUser && message.agent_name && (
+            <span
+              style={{
+                fontSize: '0.65rem',
+                fontWeight: 600,
+                padding: '2px 8px',
+                borderRadius: '10px',
+                textTransform: 'uppercase',
+                letterSpacing: '0.04em',
+                fontFamily: 'var(--font-mono)',
+                ...getAgentBadgeStyle(message.agent_name),
+              }}
+            >
+              {message.agent_name.replace(/_agent$/i, '').replace(/_/g, ' ')}
+            </span>
+          )}
+
+          {message.isPinned && (
+            <span
+              className="message-pinned-tag"
+              title="Pinned message"
+            >
+              <Pin size={10} style={{ fill: 'currentColor' }} />
+              <span>Pinned</span>
+            </span>
+          )}
+
+          {/* Edit button for user message */}
+          {isUser && !isEditing && (
+            <button
+              onClick={() => setIsEditing(true)}
+              title="Edit message"
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--text-muted)',
+                cursor: 'pointer',
+                padding: '4px',
+                borderRadius: '4px',
+                display: 'flex',
+              }}
+            >
+              <Edit3 size={14} />
+            </button>
+          )}
+        </div>
+
+        {/* Attachments preview */}
+        {message.attachments && message.attachments.length > 0 && (
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '12px' }}>
+            {message.attachments.map((att) => (
+              <div
+                key={att.id}
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: '12px',
+                  backgroundColor: 'var(--bg-tertiary)',
+                  fontSize: '0.85rem',
+                  color: 'var(--accent-blue)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
                 }}
               >
+                📎 {att.name}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <MediaStrip items={message.media} />
+        <MilestoneChecklist milestones={message.planMilestones} />
+        <AgentActivityTimeline events={message.agentActivity} />
+        {message.sources?.length ? <div className="source-cards">{message.sources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noreferrer"><strong>{source.title}</strong><span>{source.domain}</span></a>)}</div> : null}
+        {message.actionConfirmation && (
+          <ActionConfirmationCard
+            {...message.actionConfirmation}
+            onApprove={() => onApproveAction?.(message.taskId || message.id.replace(/^ai_/, ''), message.actionConfirmation!.action)}
+            onReject={() => onRejectAction?.(message.taskId || message.id.replace(/^ai_/, ''), message.actionConfirmation!.action)}
+          />
+        )}
+        {message.error && <div className="response-error-card"><strong>Response failed</strong><span>{message.error.message}</span>{message.error.retryable && onRegenerate && <button onClick={() => onRegenerate(message.id)}>Retry</button>}</div>}
+
+        {/* Thinking Accordion (For AI messages) */}
+        {!isUser && message.thought && (
+          <div
+            style={{
+              margin: '0 0 12px 0',
+              borderRadius: '12px',
+              border: '1px solid var(--border-color)',
+              backgroundColor: 'var(--bg-tertiary)',
+              overflow: 'hidden',
+              width: '100%',
+            }}
+          >
+            <button
+              onClick={() => setIsThoughtOpen(!isThoughtOpen)}
+              style={{
+                width: '100%',
+                padding: '8px 12px',
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--text-secondary)',
+                fontSize: '0.82rem',
+                fontWeight: 500,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                cursor: 'pointer',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Sparkles size={14} color="var(--accent-blue)" />
+                <span>Thinking Process</span>
+              </div>
+              {isThoughtOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            </button>
+            {isThoughtOpen && (
+              <div
+                style={{
+                  padding: '10px 14px',
+                  borderTop: '1px solid var(--border-color)',
+                  fontSize: '0.82rem',
+                  color: 'var(--text-muted)',
+                  fontStyle: 'italic',
+                  lineHeight: 1.5,
+                  whiteSpace: 'pre-wrap',
+                }}
+              >
+                {message.thought}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* User Message Edit Mode */}
+        {isEditing ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%', margin: '8px 0' }}>
+            <textarea
+              value={editText}
+              onChange={(e) => setEditText(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '10px',
+                borderRadius: '12px',
+                backgroundColor: 'var(--bg-tertiary)',
+                border: '1px solid var(--accent-blue)',
+                color: 'var(--text-primary)',
+                outline: 'none',
+                fontSize: '0.95rem',
+                resize: 'vertical',
+                minHeight: '60px',
+              }}
+            />
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setIsEditing(false)}
+                style={{ padding: '6px 12px', borderRadius: '16px', border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.8rem' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveEdit}
+                style={{ padding: '6px 14px', borderRadius: '16px', border: 'none', background: 'var(--accent-blue)', color: '#000', fontWeight: 600, cursor: 'pointer', fontSize: '0.8rem' }}
+              >
+                Save & Submit
+              </button>
+            </div>
+          </div>
+        ) : (
+          /* Message Content Body: Pill-shaped for User, Borderless for AI */
+          <div
+            style={{
+              fontSize: '0.95rem',
+              lineHeight: '1.6',
+              padding: isUser ? '12px 16px' : '4px 0',
+              borderRadius: isUser ? '18px 18px 4px 18px' : '0',
+              backgroundColor: isUser ? 'var(--bg-tertiary)' : 'transparent',
+              color: 'var(--text-primary)',
+              maxWidth: '100%',
+              wordBreak: 'break-word',
+            }}
+            className="markdown-content"
+          >
+            {!isUser && message.isStreaming && !message.text.trim() ? (
+              <div className="thinking-dots" aria-label="Thinking">
+                <i /><i /><i />
+              </div>
+            ) : (
+              <MarkdownErrorBoundary fallbackText={message.text}>
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm, remarkMath, remarkEmoji]}
+                  rehypePlugins={[rehypeHighlight, rehypeKatex]}
+                  components={markdownComponents}
+                >
                 {displayText}
               </ReactMarkdown>
             </MarkdownErrorBoundary>
@@ -819,18 +810,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
             </div>
           )}
 
-            {message.isStreaming && (
-              <span
-                style={{
-                  display: 'inline-block',
-                  width: '8px',
-                  height: '16px',
-                  backgroundColor: 'var(--accent-blue)',
-                  marginLeft: '4px',
-                  animation: 'pulse 1s infinite',
-                }}
-              />
-            )}
+            {message.isStreaming && <span className="stream-caret" aria-hidden="true" />}
           </div>
         )}
 
@@ -991,6 +971,29 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
               {copied ? <Check size={15} /> : <Copy size={15} />}
             </button>
 
+            {/* Pin / Unpin */}
+            {onTogglePin && (
+              <button
+                type="button"
+                onClick={() => onTogglePin(message.id)}
+                title={message.isPinned ? 'Unpin message' : 'Pin message'}
+                aria-label={message.isPinned ? 'Unpin message' : 'Pin message'}
+                aria-pressed={message.isPinned}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: message.isPinned ? 'var(--accent-amber)' : 'var(--text-muted)',
+                  cursor: 'pointer',
+                  padding: '6px',
+                  borderRadius: '50%',
+                  display: 'flex',
+                  alignItems: 'center',
+                }}
+              >
+                <Pin size={15} style={message.isPinned ? { fill: 'currentColor' } : undefined} />
+              </button>
+            )}
+
             {/* Read Aloud TTS button */}
             <button
               type="button"
@@ -1036,7 +1039,11 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
         )}
       </div>
 
-      <ImageViewerModal imageUrl={selectedImage} onClose={() => setSelectedImage(null)} />
+      {selectedImage && (
+        <ImageViewerModal imageUrl={selectedImage} onClose={() => setSelectedImage(null)} />
+      )}
     </motion.div>
   );
 };
+
+export const MessageBubble = React.memo(MessageBubbleImpl);

@@ -1,17 +1,5 @@
 import type { MediaKind, MediaLibraryEntry } from '../types/chat';
-
-function httpBaseFromWs(wsUrl: string): string {
-  try {
-    const url = new URL(wsUrl);
-    url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
-    url.pathname = '';
-    url.search = '';
-    url.hash = '';
-    return url.toString().replace(/\/$/, '');
-  } catch {
-    return 'http://127.0.0.1:8080';
-  }
-}
+import { httpBaseFromWs } from './httpBase';
 
 function normalizeItem(raw: any, base: string): MediaLibraryEntry {
   const type = (raw.kind || raw.type || 'document') as MediaKind;

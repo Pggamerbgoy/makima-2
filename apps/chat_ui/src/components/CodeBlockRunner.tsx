@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Play, Copy, Check, Layout, Terminal, RefreshCw } from 'lucide-react';
-import hljs from 'highlight.js';
+import hljs from 'highlight.js/lib/common';
 import type { CanvasItem } from '../types/chat';
 
 interface CodeBlockRunnerProps {
@@ -15,6 +15,7 @@ export const CodeBlockRunner: React.FC<CodeBlockRunnerProps> = ({
   onOpenCanvas,
 }) => {
   const [copied, setCopied] = useState(false);
+  const [copiedPrompt, setCopiedPrompt] = useState(false);
   const [output, setOutput] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
 
@@ -190,6 +191,35 @@ export const CodeBlockRunner: React.FC<CodeBlockRunnerProps> = ({
           <pre style={{ margin: 0, padding: 0, whiteSpace: 'pre-wrap', color: output.includes('[Runtime Error]') ? '#f44336' : '#e0e0e0' }}>
             {output}
           </pre>
+          {(output.includes('[Python 3.12 Sandboxed]') || output.includes('[Compiler]')) && (
+            <button
+              type="button"
+              onClick={() => {
+                const prompt = `Please execute this ${language} script and show the output:\n\`\`\`${language}\n${cleanString}\n\`\`\``;
+                navigator.clipboard.writeText(prompt);
+                setCopiedPrompt(true);
+                setTimeout(() => setCopiedPrompt(false), 2500);
+              }}
+              style={{
+                marginTop: '10px',
+                padding: '5px 12px',
+                borderRadius: 'var(--radius-sm, 4px)',
+                background: 'rgba(66, 133, 244, 0.15)',
+                border: '1px solid rgba(66, 133, 244, 0.35)',
+                color: '#60a5fa',
+                fontSize: '0.75rem',
+                fontWeight: 500,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              {copiedPrompt ? <Check size={12} /> : <Terminal size={12} />}
+              {copiedPrompt ? 'Prompt Copied! Paste in Chat (⌘V)' : 'Ask Makima to Execute (Copy Prompt)'}
+            </button>
+          )}
         </div>
       )}
     </div>

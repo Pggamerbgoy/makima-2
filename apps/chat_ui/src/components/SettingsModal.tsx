@@ -1,13 +1,18 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { motion } from 'framer-motion';
 import {
   X, Check, Sliders, Plug, Volume2, Terminal, Cpu,
   GitBranch, MessageSquare, Mail, Music, FileText, Database, Tv, Share2, Globe,
   Shield, VolumeX, Play, Trash2, Eye, EyeOff, Activity, CheckCircle2, RefreshCw,
-  Zap, KeyRound, LoaderCircle, Server, Sparkles
+  Zap, KeyRound, LoaderCircle, Server, Sparkles, Wrench, Plus
 } from 'lucide-react';
 import type { AppSettings, LLMProvider } from '../types/chat';
 import { wsClient } from '../services/wsClient';
-import { getLLMProviders, saveLLMProvider } from '../services/brainApi';
+import {
+  getLLMProviders, saveLLMProvider, testIntegration, oauthStatus, oauthDisconnect, oauthLoginUrl,
+  listTools, setToolEnabled, listMcpServers, addMcpServer, deleteMcpServer, reloadMcpServers,
+  type ToolEntry, type McpServerEntry,
+} from '../services/brainApi';
 
 interface ModelSelectorPanelProps {
   providers: LLMProvider[];
@@ -85,11 +90,11 @@ const ModelSelectorPanel: React.FC<ModelSelectorPanelProps> = ({
       </div>
 
       {selected?.models && selected.models.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', margin: '4px 0 8px' }}>
-          <span style={{ fontSize: '0.68rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', margin: '6px 0 10px' }}>
+          <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
             Quick Select Models for {selected.name}:
           </span>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
             {selected.models.map((m) => {
               const isSelected = model === m;
               return (
@@ -98,18 +103,18 @@ const ModelSelectorPanel: React.FC<ModelSelectorPanelProps> = ({
                   type="button"
                   onClick={() => onModelChange(m)}
                   style={{
-                    padding: '4px 9px',
-                    borderRadius: '4px',
-                    fontSize: '0.72rem',
+                    padding: '5px 12px',
+                    borderRadius: 'var(--radius-full)',
+                    fontSize: '0.75rem',
                     fontFamily: 'var(--font-mono)',
-                    border: `1px solid ${isSelected ? 'rgba(0,210,255,0.6)' : 'rgba(0,180,220,0.15)'}`,
-                    background: isSelected ? 'rgba(0,210,255,0.18)' : 'rgba(0,0,0,0.25)',
-                    color: isSelected ? '#00d2ff' : 'var(--text-primary)',
+                    border: `1px solid ${isSelected ? 'var(--primary)' : 'var(--border-subtle)'}`,
+                    background: isSelected ? 'var(--primary-subtle)' : 'var(--bg-canvas)',
+                    color: isSelected ? 'var(--primary)' : 'var(--text-primary)',
                     cursor: 'pointer',
                     transition: 'all 0.15s',
                   }}
-                  onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.borderColor = 'rgba(0,210,255,0.35)'; }}
-                  onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.borderColor = 'rgba(0,180,220,0.15)'; }}
+                  onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.borderColor = 'var(--primary-border)'; }}
+                  onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.borderColor = 'var(--border-subtle)'; }}
                 >
                   {m}
                 </button>
@@ -146,7 +151,7 @@ const ModelSelectorPanel: React.FC<ModelSelectorPanelProps> = ({
       {!selected?.local && (
         <details className="advanced-model-settings">
           <summary>Advanced endpoint</summary>
-          <label className="field-block">
+          <label className="field-block" style={{ marginTop: '8px' }}>
             <span>Base URL</span>
             <input value={baseUrl} onChange={(event) => onBaseUrlChange(event.target.value)} placeholder="https://api.provider.com/v1" />
           </label>
@@ -167,7 +172,7 @@ const ModelSelectorPanel: React.FC<ModelSelectorPanelProps> = ({
 interface SettingsModalProps {
   isOpen: boolean;
   settings: AppSettings;
-  initialTab?: 'models' | 'general' | 'connectors' | 'voice' | 'developer';
+  initialTab?: 'models' | 'general' | 'connectors' | 'voice' | 'developer' | 'tools';
   onClose: () => void;
   onSave: (newSettings: AppSettings) => void;
 }
@@ -195,7 +200,7 @@ const REAL_APP_CONNECTORS: AppConnectorConfig[] = [
   { id: 'figma',     name: 'Figma',                category: 'developer',   desc: 'Inspect design frames & export assets',          icon: Globe,         authType: 'apiKey',  placeholder: 'figd_personal_access_token...' },
 ];
 
-// ── Toggle Switch ─────────────────────────────────────────────────────────────
+// ── Toggle Switch (Gemini / iOS sleek pill) ───────────────────────────────────
 const ToggleSwitch: React.FC<{ checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; onClick?: (e: any) => void }> = ({ checked, onChange, disabled, onClick }) => (
   <button
     type="button"
@@ -204,28 +209,29 @@ const ToggleSwitch: React.FC<{ checked: boolean; onChange: (v: boolean) => void;
     disabled={disabled}
     onClick={(e) => { if (onClick) { onClick(e); } else if (!disabled) { onChange(!checked); } }}
     style={{
-      position: 'relative', width: '36px', height: '19px', borderRadius: '10px',
-      border: `1px solid ${checked ? 'rgba(0,210,255,0.45)' : 'rgba(255,255,255,0.08)'}`,
-      background: checked ? 'rgba(0,210,255,0.15)' : 'rgba(255,255,255,0.04)',
+      position: 'relative', width: '38px', height: '22px', borderRadius: '12px',
+      border: `1px solid ${checked ? 'var(--primary)' : 'var(--border-subtle)'}`,
+      background: checked ? 'var(--primary)' : 'var(--bg-canvas)',
       cursor: disabled ? 'not-allowed' : 'pointer', transition: 'all 0.2s', flexShrink: 0, outline: 'none',
     }}
   >
     <span style={{
-      position: 'absolute', top: '2px', left: checked ? '17px' : '2px',
-      width: '13px', height: '13px', borderRadius: '50%',
-      background: checked ? '#00d2ff' : '#2a3f55',
-      transition: 'left 0.2s, background 0.2s',
-      boxShadow: checked ? '0 0 5px rgba(0,210,255,0.5)' : 'none',
+      position: 'absolute', top: '2px', left: checked ? '18px' : '2px',
+      width: '16px', height: '16px', borderRadius: '50%',
+      background: '#ffffff',
+      transition: 'left 0.2s',
+      boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
     }} />
   </button>
 );
 
 // ── Section Label ─────────────────────────────────────────────────────────────
-const SLabel: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+const SLabel: React.FC<{ children: React.ReactNode; style?: React.CSSProperties }> = ({ children, style }) => (
   <div style={{
-    fontSize: '0.56rem', fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase',
-    color: 'var(--text-muted)', paddingBottom: '6px', borderBottom: '1px solid rgba(0,180,220,0.1)',
-    marginBottom: '6px', fontFamily: 'var(--font-display)',
+    fontSize: '0.74rem', fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase',
+    color: 'var(--text-muted)', paddingBottom: '6px', borderBottom: '1px solid var(--border-subtle)',
+    marginBottom: '8px', marginTop: '12px', fontFamily: 'var(--font-sans)',
+    ...style,
   }}>{children}</div>
 );
 
@@ -233,14 +239,14 @@ const SLabel: React.FC<{ children: React.ReactNode }> = ({ children }) => (
 const SettingRow: React.FC<{ label: string; desc?: string; icon?: React.ReactNode; control: React.ReactNode }> = ({ label, desc, icon, control }) => (
   <div style={{
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: '9px 11px', borderRadius: '4px',
-    border: '1px solid rgba(0,180,220,0.1)', background: 'rgba(0,0,0,0.15)', gap: '12px',
+    padding: '12px 14px', borderRadius: 'var(--radius-md)',
+    border: '1px solid var(--border-subtle)', background: 'var(--bg-surface-elevated)', gap: '14px',
   }}>
-    <div style={{ display: 'flex', alignItems: 'center', gap: '9px', flex: 1, minWidth: 0 }}>
-      {icon && <span style={{ color: 'var(--accent-teal)', flexShrink: 0 }}>{icon}</span>}
+    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}>
+      {icon && <span style={{ color: 'var(--primary)', flexShrink: 0 }}>{icon}</span>}
       <div>
-        <div style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-primary)' }}>{label}</div>
-        {desc && <div style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginTop: '1px' }}>{desc}</div>}
+        <div style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text-primary)' }}>{label}</div>
+        {desc && <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: '2px', lineHeight: 1.4 }}>{desc}</div>}
       </div>
     </div>
     {control}
@@ -253,14 +259,14 @@ const SInput = React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTML
     ref={ref}
     {...props}
     style={{
-      width: '100%', padding: '7px 10px', borderRadius: '4px',
-      border: '1px solid rgba(0,180,220,0.14)', background: 'rgba(0,0,0,0.28)',
-      color: 'var(--text-primary)', fontSize: '0.8rem', fontFamily: 'inherit',
-      outline: 'none', transition: 'border-color 0.2s',
+      width: '100%', padding: '9px 12px', borderRadius: 'var(--radius-sm)',
+      border: '1px solid var(--border-subtle)', background: 'var(--bg-canvas)',
+      color: 'var(--text-primary)', fontSize: '0.84rem', fontFamily: 'inherit',
+      outline: 'none', transition: 'border-color 0.15s, box-shadow 0.15s',
       ...props.style,
     }}
-    onFocus={(e) => { e.currentTarget.style.borderColor = 'rgba(0,210,255,0.38)'; props.onFocus?.(e); }}
-    onBlur={(e) => { e.currentTarget.style.borderColor = 'rgba(0,180,220,0.14)'; props.onBlur?.(e); }}
+    onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--primary)'; props.onFocus?.(e); }}
+    onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-subtle)'; props.onBlur?.(e); }}
   />
 ));
 
@@ -269,9 +275,10 @@ const SSelect: React.FC<React.SelectHTMLAttributes<HTMLSelectElement>> = ({ chil
   <select
     {...props}
     style={{
-      width: '100%', padding: '7px 10px', borderRadius: '4px',
-      border: '1px solid rgba(0,180,220,0.14)', background: 'rgba(0,0,0,0.28)',
-      color: 'var(--text-primary)', fontSize: '0.8rem', outline: 'none', cursor: 'pointer',
+      width: '100%', padding: '9px 12px', borderRadius: 'var(--radius-sm)',
+      border: '1px solid var(--border-subtle)', background: 'var(--bg-canvas)',
+      color: 'var(--text-primary)', fontSize: '0.84rem', outline: 'none', cursor: 'pointer',
+      fontFamily: 'inherit',
       ...props.style,
     }}
   >{children}</select>
@@ -280,21 +287,21 @@ const SSelect: React.FC<React.SelectHTMLAttributes<HTMLSelectElement>> = ({ chil
 // ── Action Button ─────────────────────────────────────────────────────────────
 const ActionBtn: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary' | 'ghost' | 'danger' }> = ({ children, variant = 'ghost', style, disabled, ...props }) => {
   const v: Record<string, React.CSSProperties> = {
-    primary: { border: '1px solid rgba(0,210,255,0.4)', background: 'rgba(0,210,255,0.1)', color: '#00d2ff' },
-    ghost:   { border: '1px solid rgba(0,180,220,0.14)', background: 'transparent', color: 'var(--text-secondary)' },
-    danger:  { border: '1px solid rgba(255,68,68,0.28)', background: 'rgba(255,68,68,0.07)', color: '#ff4444' },
+    primary: { border: '1px solid var(--primary)', background: 'var(--primary)', color: '#ffffff' },
+    ghost:   { border: '1px solid var(--border-subtle)', background: 'var(--bg-surface-elevated)', color: 'var(--text-secondary)' },
+    danger:  { border: '1px solid rgba(248, 113, 113, 0.4)', background: 'var(--danger-subtle)', color: 'var(--danger)' },
   };
   return (
     <button
       {...props}
       disabled={disabled}
       style={{
-        display: 'flex', alignItems: 'center', gap: '5px',
-        padding: '7px 13px', borderRadius: '4px', cursor: disabled ? 'not-allowed' : 'pointer',
-        fontSize: '0.73rem', fontWeight: 600, letterSpacing: '0.03em',
-        transition: 'all 0.18s', fontFamily: 'inherit',
+        display: 'inline-flex', alignItems: 'center', gap: '6px',
+        padding: '8px 14px', borderRadius: 'var(--radius-sm)', cursor: disabled ? 'not-allowed' : 'pointer',
+        fontSize: '0.78rem', fontWeight: 600,
+        transition: 'all 0.15s', fontFamily: 'inherit',
         ...(v[variant] || v.ghost),
-        ...(disabled ? { opacity: 0.38 } : {}),
+        ...(disabled ? { opacity: 0.4 } : {}),
         ...style,
       }}
     >{children}</button>
@@ -303,7 +310,7 @@ const ActionBtn: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { vari
 
 // ── Main Component ────────────────────────────────────────────────────────────
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, initialTab, onClose, onSave }) => {
-  const [activeTab, setActiveTab] = useState<'models' | 'general' | 'connectors' | 'voice' | 'developer'>(initialTab || 'models');
+  const [activeTab, setActiveTab] = useState<'models' | 'general' | 'connectors' | 'voice' | 'developer' | 'tools'>(initialTab || 'models');
   const [selectedConnector, setSelectedConnector] = useState<AppConnectorConfig | null>(null);
   const [connectorKeys, setConnectorKeys] = useState<Record<string, string>>(() => {
     const saved = localStorage.getItem('makima_connector_keys');
@@ -340,11 +347,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
   }, []);
 
   const [wsUrl, setWsUrl]               = useState(settings.wsUrl || 'ws://127.0.0.1:8080/ws');
+  const [wsConnected, setWsConnected]   = useState(false);
   const [pingLatency, setPingLatency]   = useState<number | null>(null);
   const [pingLoading, setPingLoading]   = useState(false);
   const [ollamaModelName, setOllamaModelName] = useState('');
   const [ollamaLoading, setOllamaLoading]     = useState(false);
   const [ollamaStatus, setOllamaStatus]       = useState('');
+
+  useEffect(() => {
+    const unsub = wsClient.onStatusChange((connected) => setWsConnected(connected));
+    return unsub;
+  }, []);
 
   const [wakeWordEnabled, setWakeWordEnabled]   = useState(settings.wakeWordEnabled);
   const [autoReadAloud, setAutoReadAloud]       = useState(settings.autoReadAloud || false);
@@ -360,6 +373,125 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
     slack: false, notion: false, discord: false, youtube: true, figma: false,
     ...settings.connectors,
   });
+
+  // ── Tools & MCP state ──────────────────────────────────────────────────────
+  const [toolsList, setToolsList] = useState<ToolEntry[]>([]);
+  const [toolsCategories, setToolsCategories] = useState<string[]>([]);
+  const [toolsCategoryFilter, setToolsCategoryFilter] = useState<string>('');
+  const [toolsSearch, setToolsSearch] = useState('');
+  const [toolsLoading, setToolsLoading] = useState(false);
+  const [toolsError, setToolsError] = useState('');
+  const [toolsTotal, setToolsTotal] = useState(0);
+  const [toolsEnabledCount, setToolsEnabledCount] = useState(0);
+
+  const [mcpServers, setMcpServers] = useState<McpServerEntry[]>([]);
+  const [mcpTotalTools, setMcpTotalTools] = useState(0);
+  const [mcpLoading, setMcpLoading] = useState(false);
+  const [mcpError, setMcpError] = useState('');
+  const [mcpStatus, setMcpStatus] = useState('');
+  const [mcpFormOpen, setMcpFormOpen] = useState(false);
+  const [mcpFormName, setMcpFormName] = useState('');
+  const [mcpFormCommand, setMcpFormCommand] = useState('');
+  const [mcpFormUrl, setMcpFormUrl] = useState('');
+  const [mcpFormTransport, setMcpFormTransport] = useState<'stdio' | 'http' | 'sse'>('stdio');
+  const [mcpFormSaving, setMcpFormSaving] = useState(false);
+
+  const refreshTools = useCallback(async () => {
+    setToolsLoading(true); setToolsError('');
+    try {
+      const snap = await listTools(wsUrl);
+      if (!snap.ok) { setToolsError(snap.error || 'Failed to load tools.'); return; }
+      setToolsList(snap.tools);
+      setToolsCategories(snap.categories);
+      setToolsTotal(snap.total);
+      setToolsEnabledCount(snap.enabled_count);
+    } catch (err) { setToolsError(err instanceof Error ? err.message : 'Could not load tools.'); }
+    finally { setToolsLoading(false); }
+  }, [wsUrl]);
+
+  const refreshMcp = useCallback(async () => {
+    setMcpLoading(true); setMcpError('');
+    try {
+      const snap = await listMcpServers(wsUrl);
+      if (!snap.ok) { setMcpError(snap.error || 'Failed to load MCP servers.'); return; }
+      setMcpServers(snap.servers);
+      setMcpTotalTools(snap.total_mcp_tools);
+    } catch (err) { setMcpError(err instanceof Error ? err.message : 'Could not load MCP servers.'); }
+    finally { setMcpLoading(false); }
+  }, [wsUrl]);
+
+  useEffect(() => {
+    if (!isOpen || activeTab !== 'tools') return;
+    void refreshTools();
+    void refreshMcp();
+  }, [isOpen, activeTab, refreshTools, refreshMcp]);
+
+  const handleToggleTool = async (tool: ToolEntry) => {
+    const next = !tool.enabled;
+    setToolsList((prev) => prev.map((t) => (t.name === tool.name ? { ...t, enabled: next } : t)));
+    try {
+      const res = await setToolEnabled(tool.name, next, wsUrl);
+      if (!res.ok) {
+        setToolsList((prev) => prev.map((t) => (t.name === tool.name ? { ...t, enabled: !next } : t)));
+        setToolsError(res.error || 'Failed to update tool.');
+      } else {
+        setToolsEnabledCount((c) => c + (next ? 1 : -1));
+        setToolsError('');
+      }
+    } catch (err) {
+      setToolsList((prev) => prev.map((t) => (t.name === tool.name ? { ...t, enabled: !next } : t)));
+      setToolsError(err instanceof Error ? err.message : 'Failed to update tool.');
+    }
+  };
+
+  const handleAddMcp = async () => {
+    const name = mcpFormName.trim();
+    if (!name) { setMcpError('Server name is required.'); return; }
+    const transport = mcpFormTransport;
+    const payload: Parameters<typeof addMcpServer>[0] = { name, enabled: true, transport };
+    if (transport === 'stdio') {
+      const cmd = mcpFormCommand.trim();
+      if (!cmd) { setMcpError('Command is required for stdio transport.'); return; }
+      payload.command = cmd;
+    } else {
+      const url = mcpFormUrl.trim();
+      if (!url) { setMcpError('URL is required for http/sse transport.'); return; }
+      payload.url = url;
+    }
+    setMcpFormSaving(true); setMcpError(''); setMcpStatus('');
+    try {
+      const res = await addMcpServer(payload, wsUrl);
+      if (!res.ok) { setMcpError(res.error || 'Failed to add MCP server.'); return; }
+      setMcpStatus(`Added "${name}" — reloaded.`);
+      setMcpFormOpen(false); setMcpFormName(''); setMcpFormCommand(''); setMcpFormUrl('');
+      await refreshMcp();
+      await refreshTools();
+    } catch (err) { setMcpError(err instanceof Error ? err.message : 'Failed to add MCP server.'); }
+    finally { setMcpFormSaving(false); }
+  };
+
+  const handleDeleteMcp = async (name: string) => {
+    setMcpError(''); setMcpStatus('');
+    try {
+      const res = await deleteMcpServer(name, wsUrl);
+      if (!res.ok) { setMcpError(res.error || 'Failed to delete MCP server.'); return; }
+      setMcpStatus(`Removed "${name}" — reloaded.`);
+      await refreshMcp();
+      await refreshTools();
+    } catch (err) { setMcpError(err instanceof Error ? err.message : 'Failed to delete MCP server.'); }
+  };
+
+  const handleReloadMcp = async () => {
+    setMcpError(''); setMcpStatus(''); setMcpLoading(true);
+    try {
+      const res = await reloadMcpServers(wsUrl);
+      if (!res.ok) { setMcpError(res.error || 'Reload failed.'); return; }
+      setMcpStatus(`Reloaded: ${res.servers_enabled ?? 0}/${res.servers_configured ?? 0} servers, ${res.mcp_tools_registered ?? 0} tools.`);
+      await refreshMcp();
+      await refreshTools();
+    } catch (err) { setMcpError(err instanceof Error ? err.message : 'Reload failed.'); }
+    finally { setMcpLoading(false); }
+  };
 
   useEffect(() => {
     if (!isOpen) return;
@@ -437,14 +569,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
     finally { setProvidersSaving(false); }
   };
 
-  const handleTestPing = () => {
-    setPingLoading(true); setPingLatency(null);
-    const start = performance.now();
-    const unsub = wsClient.onMessage((data) => {
-      if (data?.type === 'pong') { setPingLatency(Math.round(performance.now() - start)); setPingLoading(false); unsub(); }
-    });
-    try { wsClient.sendMessage('__ping__', 'test_ping'); } catch { setPingLoading(false); }
-    setTimeout(() => { setPingLoading((l) => { if (l) unsub(); return false; }); }, 4000);
+  const handleTestPing = async () => {
+    setPingLoading(true);
+    setPingLatency(null);
+    try {
+      const rtt = await wsClient.ping();
+      setPingLatency(rtt);
+    } catch {
+      setPingLatency(null);
+    } finally {
+      setPingLoading(false);
+    }
   };
 
   const handleTestVoice = () => {
@@ -490,51 +625,59 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
     { id: 'connectors', label: 'Connectors', icon: Plug     },
     { id: 'general',    label: 'General',    icon: Sliders  },
     { id: 'voice',      label: 'Voice',      icon: Volume2  },
+    { id: 'tools',      label: 'Tools & MCP', icon: Wrench  },
     { id: 'developer',  label: 'Developer',  icon: Terminal },
   ] as const;
 
   const tabTitles: Record<string, string> = {
     models: 'AI Models & Provider Keys', connectors: 'App Connectors Hub',
     general: 'General & System Persona', voice: 'Voice Pipeline & Speech',
+    tools: 'Registered Tools & MCP Servers',
     developer: 'Developer & Network',
   };
 
   return (
-    <div
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
       style={{
         position: 'fixed', inset: 0, zIndex: 100,
-        background: 'rgba(0,0,0,0.84)', backdropFilter: 'blur(14px)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px',
+        background: 'rgba(0, 0, 0, 0.7)', backdropFilter: 'blur(10px)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px',
       }}
       onClick={onClose}
     >
-      <div
+      <motion.div
+        initial={{ opacity: 0, scale: 0.96, y: 6 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.97, y: 4 }}
+        transition={{ type: 'spring', stiffness: 380, damping: 30 }}
         style={{
-          width: '100%', maxWidth: '900px',
-          height: 'min(660px, calc(100vh - 32px))',
-          background: 'var(--bg-secondary)',
-          border: '1px solid rgba(0,210,255,0.18)',
-          borderRadius: '6px', display: 'flex', overflow: 'hidden',
-          boxShadow: '0 0 80px rgba(0,0,0,0.9), 0 0 30px rgba(0,210,255,0.05)',
+          width: '100%', maxWidth: '960px',
+          height: 'min(720px, calc(100vh - 40px))',
+          background: 'var(--bg-surface)',
+          border: '1px solid var(--border-subtle)',
+          borderRadius: 'var(--radius-lg)', display: 'flex', overflow: 'hidden',
+          boxShadow: '0 25px 60px -15px rgba(0, 0, 0, 0.85)',
           position: 'relative',
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Corner accents */}
-        <div style={{ position: 'absolute', top: 0, left: 0, width: 20, height: 20, borderTop: '1px solid rgba(0,210,255,0.55)', borderLeft: '1px solid rgba(0,210,255,0.55)', pointerEvents: 'none', zIndex: 2 }} />
-        <div style={{ position: 'absolute', bottom: 0, right: 0, width: 20, height: 20, borderBottom: '1px solid rgba(124,92,191,0.45)', borderRight: '1px solid rgba(124,92,191,0.45)', pointerEvents: 'none', zIndex: 2 }} />
-
         {/* ── SIDEBAR ── */}
         <div style={{
-          width: '170px', flexShrink: 0,
-          background: 'rgba(4,6,15,0.85)', borderRight: '1px solid rgba(0,180,220,0.1)',
-          padding: '14px 8px', display: 'flex', flexDirection: 'column', gap: '2px',
+          width: '210px', flexShrink: 0,
+          background: 'var(--bg-canvas)', borderRight: '1px solid var(--border-subtle)',
+          padding: '20px 12px', display: 'flex', flexDirection: 'column', gap: '4px',
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '16px', paddingLeft: '4px' }}>
-            <div style={{ width: 20, height: 20, borderRadius: 3, background: 'linear-gradient(135deg,#00d2ff,#7c5cbf)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.62rem', fontWeight: 800, color: '#fff', fontFamily: 'var(--font-display)', flexShrink: 0 }}>M</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px', paddingLeft: '6px' }}>
+            <div style={{ width: 28, height: 28, borderRadius: 'var(--radius-sm)', background: 'var(--primary-subtle)', border: '1px solid var(--primary-border)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--primary)', flexShrink: 0 }}>
+              <Sliders size={15} />
+            </div>
             <div>
-              <div style={{ fontSize: '0.54rem', fontWeight: 700, color: 'var(--accent-teal)', letterSpacing: '0.14em', textTransform: 'uppercase', fontFamily: 'var(--font-display)' }}>Settings</div>
-              <div style={{ fontSize: '0.5rem', color: 'var(--text-muted)' }}>Makima OS</div>
+              <div style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-primary)' }}>Settings</div>
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Makima Intelligence</div>
             </div>
           </div>
 
@@ -546,24 +689,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
                 style={{
-                  display: 'flex', alignItems: 'center', gap: '8px',
-                  padding: '8px 9px', borderRadius: '3px', border: 'none',
-                  background: active ? 'rgba(0,210,255,0.08)' : 'transparent',
-                  color: active ? 'var(--accent-teal)' : 'var(--text-muted)',
-                  fontWeight: active ? 600 : 400, fontSize: '0.74rem',
-                  cursor: 'pointer', textAlign: 'left', transition: 'all 0.14s',
-                  borderLeft: active ? '2px solid var(--accent-teal)' : '2px solid transparent',
+                  display: 'flex', alignItems: 'center', gap: '10px',
+                  padding: '9px 12px', borderRadius: 'var(--radius-md)', border: 'none',
+                  background: active ? 'var(--primary-subtle)' : 'transparent',
+                  color: active ? 'var(--primary)' : 'var(--text-secondary)',
+                  fontWeight: active ? 600 : 500, fontSize: '0.82rem',
+                  cursor: 'pointer', textAlign: 'left', transition: 'all 0.15s',
                   fontFamily: 'inherit',
                 }}
               >
-                <Icon size={13} /><span>{tab.label}</span>
+                <Icon size={16} /><span>{tab.label}</span>
               </button>
             );
           })}
 
-          <div style={{ marginTop: 'auto', borderTop: '1px solid rgba(0,180,220,0.09)', paddingTop: '9px' }}>
-            <ActionBtn variant="danger" onClick={handleResetDefaults} style={{ width: '100%', justifyContent: 'flex-start', fontSize: '0.66rem', padding: '6px 8px' }}>
-              <Trash2 size={11} /> Reset Defaults
+          <div style={{ marginTop: 'auto', borderTop: '1px solid var(--border-subtle)', paddingTop: '12px' }}>
+            <ActionBtn variant="danger" onClick={handleResetDefaults} style={{ width: '100%', justifyContent: 'center', fontSize: '0.75rem', padding: '8px' }}>
+              <Trash2 size={13} /> Reset Defaults
             </ActionBtn>
           </div>
         </div>
@@ -573,24 +715,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
           {/* Header bar */}
           <div style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            padding: '0 14px', height: '38px', flexShrink: 0,
-            borderBottom: '1px solid rgba(0,180,220,0.1)', background: 'rgba(0,0,0,0.22)',
+            padding: '0 24px', height: '54px', flexShrink: 0,
+            borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-surface)',
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontFamily: 'var(--font-display)', fontSize: '0.56rem', fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--accent-teal)' }}>
-              <Zap size={9} /> {tabTitles[activeTab]}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.92rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+              {tabTitles[activeTab]}
             </div>
             <button
               onClick={onClose}
-              style={{ background: 'transparent', border: '1px solid rgba(0,180,220,0.13)', color: 'var(--text-muted)', cursor: 'pointer', padding: '3px', borderRadius: '3px', display: 'flex', transition: 'all 0.15s' }}
-              onMouseEnter={(e) => { e.currentTarget.style.color = '#ff4444'; e.currentTarget.style.borderColor = 'rgba(255,68,68,0.32)'; }}
-              onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-muted)'; e.currentTarget.style.borderColor = 'rgba(0,180,220,0.13)'; }}
+              style={{ background: 'transparent', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)', cursor: 'pointer', padding: '6px', borderRadius: 'var(--radius-sm)', display: 'flex', transition: 'all 0.15s' }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-surface-hover)'; e.currentTarget.style.color = 'var(--text-primary)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-muted)'; }}
             >
-              <X size={13} />
+              <X size={16} />
             </button>
           </div>
 
           {/* Body */}
-          <div style={{ flex: 1, overflowY: 'auto', padding: '14px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <div style={{ flex: 1, overflowY: 'auto', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
 
             {/* MODELS */}
             {activeTab === 'models' && (
@@ -607,18 +749,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
 
             {/* CONNECTORS */}
             {activeTab === 'connectors' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                <SLabel>Available Integrations</SLabel>
-                <div style={{ fontSize: '0.67rem', color: 'var(--text-muted)', marginBottom: '2px' }}>
-                  Click any card to configure credentials. Use toggle to enable/disable.
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div>
+                  <h4 style={{ fontSize: '0.92rem', fontWeight: 600, color: 'var(--text-primary)', margin: '0 0 4px' }}>App Connectors & Integrations</h4>
+                  <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: 0 }}>Authorize external platforms and apps to enable autonomous agent execution.</p>
                 </div>
                 {(['messaging', 'developer', 'productivity', 'media'] as const).map((cat) => {
                   const items = REAL_APP_CONNECTORS.filter((c) => c.category === cat);
-                  const catLabel: Record<string, string> = { messaging: 'Messaging', developer: 'Developer', productivity: 'Productivity', media: 'Media' };
+                  const catLabel: Record<string, string> = { messaging: 'Messaging & Chat', developer: 'Developer & Git', productivity: 'Productivity & Workspace', media: 'Media & Playback' };
                   return (
-                    <div key={cat}>
-                      <div style={{ fontSize: '0.54rem', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'rgba(0,180,220,0.5)', marginBottom: '5px' }}>{catLabel[cat]}</div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <div key={cat} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <SLabel>{catLabel[cat]}</SLabel>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '10px' }}>
                         {items.map((conn) => {
                           const Icon = conn.icon;
                           const isEnabled = connectors[conn.id] ?? false;
@@ -629,34 +771,44 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
                               onClick={() => setSelectedConnector(conn)}
                               style={{
                                 display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                                padding: '8px 11px', borderRadius: '4px', cursor: 'pointer',
-                                border: `1px solid ${isEnabled ? 'rgba(0,210,255,0.2)' : 'rgba(0,180,220,0.08)'}`,
-                                background: isEnabled ? 'rgba(0,210,255,0.04)' : 'rgba(0,0,0,0.12)',
-                                transition: 'all 0.14s',
+                                padding: '12px 14px', borderRadius: 'var(--radius-md)', cursor: 'pointer',
+                                border: `1px solid ${isEnabled ? 'var(--primary-border)' : 'var(--border-subtle)'}`,
+                                background: isEnabled ? 'var(--primary-subtle)' : 'var(--bg-surface-elevated)',
+                                transition: 'all 0.15s',
                               }}
-                              onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'rgba(0,210,255,0.28)'; }}
-                              onMouseLeave={(e) => { e.currentTarget.style.borderColor = isEnabled ? 'rgba(0,210,255,0.2)' : 'rgba(0,180,220,0.08)'; }}
+                              onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--border-hover)'; }}
+                              onMouseLeave={(e) => { e.currentTarget.style.borderColor = isEnabled ? 'var(--primary-border)' : 'var(--border-subtle)'; }}
                             >
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '9px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0, flex: 1 }}>
                                 <div style={{
-                                  width: 26, height: 26, borderRadius: 3, flexShrink: 0,
+                                  width: 32, height: 32, borderRadius: 'var(--radius-sm)', flexShrink: 0,
                                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                  background: isEnabled ? 'rgba(0,210,255,0.08)' : 'rgba(255,255,255,0.04)',
-                                  border: `1px solid ${isEnabled ? 'rgba(0,210,255,0.18)' : 'rgba(255,255,255,0.06)'}`,
-                                  color: isEnabled ? 'var(--accent-teal)' : 'var(--text-muted)',
+                                  background: 'var(--bg-canvas)',
+                                  border: '1px solid var(--border-subtle)',
+                                  color: isEnabled ? 'var(--primary)' : 'var(--text-muted)',
                                 }}>
-                                  <Icon size={13} />
+                                  <Icon size={16} />
                                 </div>
-                                <div>
+                                <div style={{ minWidth: 0, flex: 1 }}>
                                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                    <span style={{ fontSize: '0.74rem', fontWeight: 600, color: 'var(--text-primary)' }}>{conn.name}</span>
-                                    {hasKey && <span style={{ fontSize: '0.52rem', padding: '1px 5px', borderRadius: '2px', background: 'rgba(0,230,118,0.09)', color: '#00e676', border: '1px solid rgba(0,230,118,0.18)', fontWeight: 700, letterSpacing: '0.06em' }}>KEYED</span>}
+                                    <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{conn.name}</span>
+                                    {hasKey && <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'var(--success-subtle)', color: 'var(--success)', fontWeight: 600 }}>KEYED</span>}
                                   </div>
-                                  <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)', marginTop: '1px' }}>{conn.desc}</div>
+                                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{conn.desc}</div>
                                 </div>
                               </div>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
-                                <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>Configure</span>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0, marginLeft: '8px' }}>
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); setSelectedConnector(conn); }}
+                                  style={{
+                                    padding: '4px 8px', borderRadius: 'var(--radius-sm)', background: 'var(--bg-canvas)',
+                                    border: '1px solid var(--border-subtle)', color: 'var(--text-secondary)', fontSize: '0.7rem',
+                                    fontWeight: 500, cursor: 'pointer',
+                                  }}
+                                >
+                                  Config
+                                </button>
                                 <ToggleSwitch checked={isEnabled} onChange={() => {}} onClick={(e) => toggleConnector(conn.id, e)} />
                               </div>
                             </div>
@@ -671,10 +823,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
 
             {/* GENERAL */}
             {activeTab === 'general' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '11px' }}>
-                <SLabel>Agent Persona</SLabel>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 <div>
-                  <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', marginBottom: '5px' }}>System Prompt Mode</div>
+                  <h4 style={{ fontSize: '0.92rem', fontWeight: 600, color: 'var(--text-primary)', margin: '0 0 4px' }}>General & System Configuration</h4>
+                  <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: 0 }}>Configure system-level instructions, agent persona, and proactive behavior.</p>
+                </div>
+
+                <SLabel>Agent Persona & Behavior</SLabel>
+                <div>
+                  <div style={{ fontSize: '0.78rem', fontWeight: 500, color: 'var(--text-secondary)', marginBottom: '6px' }}>System Prompt Mode</div>
                   <SSelect value={persona} onChange={(e) => setPersona(e.target.value as any)}>
                     <option value="general">General Assistant — Balanced reasoning & multi-tasking</option>
                     <option value="coder">Master Software Architect — Deep code gen, refactoring & debug</option>
@@ -689,40 +846,46 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
                     rows={4} value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)}
                     placeholder="e.g. Always write clean TypeScript with comments. Prefer concise bullet-point explanations..."
                     style={{
-                      width: '100%', padding: '9px 11px', borderRadius: '4px', resize: 'vertical',
-                      background: 'rgba(0,0,0,0.28)', border: '1px solid rgba(0,180,220,0.14)',
-                      color: 'var(--text-primary)', fontSize: '0.8rem', fontFamily: 'inherit',
-                      outline: 'none', lineHeight: 1.55,
+                      width: '100%', padding: '10px 12px', borderRadius: 'var(--radius-sm)', resize: 'vertical',
+                      background: 'var(--bg-canvas)', border: '1px solid var(--border-subtle)',
+                      color: 'var(--text-primary)', fontSize: '0.84rem', fontFamily: 'inherit',
+                      outline: 'none', lineHeight: 1.55, transition: 'border-color 0.15s',
                     }}
-                    onFocus={(e) => { e.currentTarget.style.borderColor = 'rgba(0,210,255,0.35)'; }}
-                    onBlur={(e) => { e.currentTarget.style.borderColor = 'rgba(0,180,220,0.14)'; }}
+                    onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--primary)'; }}
+                    onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-subtle)'; }}
                   />
-                  <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)', marginTop: '3px' }}>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '4px' }}>
                     Appended to every prompt sent to Makima's reasoning engine.
                   </div>
                 </div>
 
-                <SLabel>Privacy & Session State</SLabel>
-                <SettingRow label="Privacy Mode — Ephemeral Sessions" desc="Chat turns are NOT saved to long-term memory or SQLite." icon={<Shield size={13} />} control={<ToggleSwitch checked={privacyMode} onChange={setPrivacyMode} />} />
-
-                <SLabel>Autonomy — Proactive Actions</SLabel>
+                <SLabel>Privacy & Ephemeral Mode</SLabel>
                 <SettingRow
-                  label="Let Makima act on its own"
-                  desc="Off = never. Suggest = ideas only. Auto = safe actions run themselves; risky ones always ask first."
-                  icon={<Zap size={13} />}
+                  label="Privacy Mode — Ephemeral Sessions"
+                  desc="Chat turns are NOT saved to long-term memory or SQLite conversation database."
+                  icon={<Shield size={16} />}
+                  control={<ToggleSwitch checked={privacyMode} onChange={setPrivacyMode} />}
+                />
+
+                <SLabel>Autonomy — Proactive Execution</SLabel>
+                <SettingRow
+                  label="Autonomous Action Execution"
+                  desc="Off = never. Suggest = propose ideas only. Auto = safe tools execute autonomously; risky ones always confirm."
+                  icon={<Zap size={16} />}
                   control={
-                    <div style={{ display: 'flex', gap: '4px' }}>
+                    <div style={{ display: 'flex', gap: '6px' }}>
                       {(['off', 'suggest', 'auto'] as const).map((m) => (
                         <button
                           key={m}
                           type="button"
                           onClick={() => { setAutonomyMode(m); localStorage.setItem('makima_autonomy_mode', m); wsClient.setAutonomyMode(m); }}
                           style={{
-                            padding: '3px 9px', fontSize: '0.6rem', fontWeight: autonomyMode === m ? 700 : 500,
-                            borderRadius: '4px', cursor: 'pointer', textTransform: 'capitalize',
-                            border: `1px solid ${autonomyMode === m ? 'rgba(0,210,255,0.5)' : 'rgba(255,255,255,0.08)'}`,
-                            background: autonomyMode === m ? 'rgba(0,210,255,0.15)' : 'rgba(255,255,255,0.03)',
-                            color: autonomyMode === m ? 'var(--accent-teal)' : 'var(--text-muted)',
+                            padding: '5px 12px', fontSize: '0.75rem', fontWeight: autonomyMode === m ? 600 : 500,
+                            borderRadius: 'var(--radius-sm)', cursor: 'pointer', textTransform: 'capitalize',
+                            border: `1px solid ${autonomyMode === m ? 'var(--primary)' : 'var(--border-subtle)'}`,
+                            background: autonomyMode === m ? 'var(--primary-subtle)' : 'var(--bg-canvas)',
+                            color: autonomyMode === m ? 'var(--primary)' : 'var(--text-secondary)',
+                            transition: 'all 0.15s',
                           }}
                         >{m}</button>
                       ))}
@@ -734,44 +897,49 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
 
             {/* VOICE */}
             {activeTab === 'voice' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '11px' }}>
-                <SLabel>Voice Activation</SLabel>
-                <SettingRow label={'Wake Word — "Hey Makima"'} desc="Continuously listens via local openwakeword engine." icon={<Zap size={13} />} control={<ToggleSwitch checked={wakeWordEnabled} onChange={setWakeWordEnabled} />} />
-                <SettingRow label="Auto Read Aloud AI Responses" desc="Synthesize speech when assistant finishes streaming." icon={<Volume2 size={13} />} control={<ToggleSwitch checked={autoReadAloud} onChange={setAutoReadAloud} />} />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div>
+                  <h4 style={{ fontSize: '0.92rem', fontWeight: 600, color: 'var(--text-primary)', margin: '0 0 4px' }}>Voice & Speech Pipeline</h4>
+                  <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: 0 }}>Configure speech recognition (STT), speech synthesis (TTS), and wake word listening.</p>
+                </div>
 
-                <SLabel>Speech Settings</SLabel>
-                <div style={{ padding: '11px 13px', border: '1px solid rgba(0,180,220,0.1)', borderRadius: '4px', background: 'rgba(0,0,0,0.14)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '7px' }}>
-                    <span style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>TTS Playback Speed</span>
-                    <span style={{ fontSize: '0.74rem', color: 'var(--accent-teal)', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{ttsSpeed.toFixed(1)}×</span>
+                <SLabel>Hands-Free Activation</SLabel>
+                <SettingRow label={'Wake Word — "Hey Makima"'} desc="Continuously listens via local OpenWakeWord engine on device." icon={<Zap size={16} />} control={<ToggleSwitch checked={wakeWordEnabled} onChange={setWakeWordEnabled} />} />
+                <SettingRow label="Auto Read Aloud AI Responses" desc="Automatically synthesize speech when assistant finishes streaming." icon={<Volume2 size={16} />} control={<ToggleSwitch checked={autoReadAloud} onChange={setAutoReadAloud} />} />
+
+                <SLabel>Speech Synthesis (TTS)</SLabel>
+                <div style={{ padding: '14px 16px', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', background: 'var(--bg-surface-elevated)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                    <span style={{ fontSize: '0.82rem', fontWeight: 500, color: 'var(--text-secondary)' }}>TTS Playback Speed</span>
+                    <span style={{ fontSize: '0.82rem', color: 'var(--primary)', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{ttsSpeed.toFixed(1)}×</span>
                   </div>
                   <input type="range" min="0.5" max="2.0" step="0.1" value={ttsSpeed}
                     onChange={(e) => setTtsSpeed(parseFloat(e.target.value))}
-                    style={{ width: '100%', cursor: 'pointer', accentColor: '#00d2ff' }}
+                    style={{ width: '100%', cursor: 'pointer', accentColor: 'var(--primary)' }}
                   />
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '2px' }}>
-                    <span style={{ fontSize: '0.54rem', color: 'var(--text-muted)' }}>0.5×</span>
-                    <span style={{ fontSize: '0.54rem', color: 'var(--text-muted)' }}>2.0×</span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>0.5× (Slow)</span>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>2.0× (Fast)</span>
                   </div>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
                   {[
                     { label: 'Follow-up Window', unit: 's',  val: followupTimeoutSeconds, set: setFollowupTimeoutSeconds, min: 5,   max: 120, step: 1  },
                     { label: 'Silence End',       unit: 'ms', val: silenceTimeoutMs,       set: setSilenceTimeoutMs,       min: 400, max: 3000, step: 50 },
                     { label: 'Max Turn',          unit: 's',  val: maxUtteranceSeconds,     set: setMaxUtteranceSeconds,    min: 3,   max: 60,  step: 1  },
                   ].map((f) => (
-                    <div key={f.label} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      <div style={{ fontSize: '0.62rem', color: 'var(--text-secondary)' }}>{f.label} ({f.unit})</div>
+                    <div key={f.label} style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                      <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>{f.label} ({f.unit})</div>
                       <SInput type="number" min={f.min} max={f.max} step={f.step} value={f.val}
                         onChange={(e) => f.set(Number(e.target.value))} />
                     </div>
                   ))}
                 </div>
 
-                <SLabel>Language & Testing</SLabel>
+                <SLabel>Language & Test</SLabel>
                 <div>
-                  <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>Voice Language</div>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '5px' }}>Voice Language</div>
                   <SSelect value={voiceLanguage} onChange={(e) => setVoiceLanguage(e.target.value as any)}>
                     <option value="auto">Auto (Hindi / English)</option>
                     <option value="hi">Hindi (हिन्दी)</option>
@@ -779,59 +947,245 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
                   </SSelect>
                 </div>
                 <ActionBtn variant={isTestingVoice ? 'danger' : 'primary'} onClick={handleTestVoice} style={{ alignSelf: 'flex-start' }}>
-                  {isTestingVoice ? <VolumeX size={12} /> : <Play size={12} />}
+                  {isTestingVoice ? <VolumeX size={14} /> : <Play size={14} />}
                   {isTestingVoice ? 'Stop Test' : 'Test Voice Output'}
                 </ActionBtn>
               </div>
             )}
 
+            {/* TOOLS & MCP */}
+            {activeTab === 'tools' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div>
+                  <h4 style={{ fontSize: '0.92rem', fontWeight: 600, color: 'var(--text-primary)', margin: '0 0 4px' }}>Registered Tools & MCP Servers</h4>
+                  <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: 0 }}>
+                    Inspect live ToolRegistry, toggle tools on/off, and manage external MCP servers.
+                  </p>
+                </div>
+
+                {toolsError && <div className="inline-alert error">{toolsError}</div>}
+                {mcpError && <div className="inline-alert error">{mcpError}</div>}
+                {mcpStatus && <div className="inline-alert success"><CheckCircle2 size={15} /> {mcpStatus}</div>}
+
+                {/* ── Tools list ── */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
+                  <SLabel style={{ margin: 0 }}>
+                    Tools · {toolsEnabledCount}/{toolsTotal} enabled
+                    {toolsLoading && <LoaderCircle size={13} className="spin" style={{ marginLeft: 8, verticalAlign: 'middle' }} />}
+                  </SLabel>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <SInput
+                      type="text" placeholder="Search tools…" value={toolsSearch}
+                      onChange={(e) => setToolsSearch(e.target.value)}
+                      style={{ width: '180px', fontSize: '0.78rem', padding: '6px 10px' }}
+                    />
+                    <SSelect
+                      value={toolsCategoryFilter}
+                      onChange={(e) => setToolsCategoryFilter(e.target.value)}
+                      style={{ width: '140px', fontSize: '0.78rem', padding: '6px 8px' }}
+                    >
+                      <option value="">All categories</option>
+                      {toolsCategories.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </SSelect>
+                    <ActionBtn variant="ghost" onClick={() => { void refreshTools(); void refreshMcp(); }} title="Refresh">
+                      <RefreshCw size={13} className={toolsLoading ? 'spin' : ''} />
+                    </ActionBtn>
+                  </div>
+                </div>
+
+                <div style={{
+                  maxHeight: '260px', overflowY: 'auto', borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--border-subtle)', background: 'var(--bg-surface-elevated)',
+                }}>
+                  {(() => {
+                    const q = toolsSearch.trim().toLowerCase();
+                    const filtered = toolsList.filter((t) =>
+                      (!toolsCategoryFilter || t.category === toolsCategoryFilter) &&
+                      (!q || t.name.toLowerCase().includes(q) || t.description.toLowerCase().includes(q))
+                    );
+                    if (filtered.length === 0) {
+                      return <div style={{ padding: '16px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                        {toolsLoading ? 'Loading tools…' : 'No tools match.'}
+                      </div>;
+                    }
+                    return filtered.map((t) => (
+                      <div key={t.name} style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px',
+                        padding: '8px 12px', borderBottom: '1px solid var(--border-subtle)',
+                      }}>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>{t.name}</span>
+                            <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'var(--bg-canvas)', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}>{t.category}</span>
+                            {t.source === 'mcp' && <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'var(--primary-subtle)', color: 'var(--primary)' }}>MCP</span>}
+                            {t.is_destructive && <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'var(--status-red-subtle, #fee2e2)', color: 'var(--status-red, #ef4444)' }}>RISKY</span>}
+                          </div>
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.description}</div>
+                        </div>
+                        <ToggleSwitch checked={t.enabled} onChange={() => void handleToggleTool(t)} />
+                      </div>
+                    ));
+                  })()}
+                </div>
+
+                {/* ── MCP servers ── */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+                  <SLabel style={{ margin: 0 }}>
+                    MCP Servers · {mcpServers.length} configured · {mcpTotalTools} tools registered
+                    {mcpLoading && <LoaderCircle size={13} className="spin" style={{ marginLeft: 8, verticalAlign: 'middle' }} />}
+                  </SLabel>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <ActionBtn variant="ghost" onClick={() => void handleReloadMcp()} disabled={mcpLoading} title="Hot-reload MCP servers">
+                      <RefreshCw size={13} className={mcpLoading ? 'spin' : ''} /> Reload
+                    </ActionBtn>
+                    <ActionBtn variant="primary" onClick={() => setMcpFormOpen((v) => !v)}>
+                      <Plus size={13} /> Add Server
+                    </ActionBtn>
+                  </div>
+                </div>
+
+                {mcpFormOpen && (
+                  <div style={{
+                    display: 'flex', flexDirection: 'column', gap: '10px', padding: '12px 14px',
+                    borderRadius: 'var(--radius-md)', border: '1px solid var(--primary-border)',
+                    background: 'var(--primary-subtle)',
+                  }}>
+                    <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)' }}>Add external MCP server</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                      <div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>Name</div>
+                        <SInput value={mcpFormName} onChange={(e) => setMcpFormName(e.target.value)} placeholder="e.g. filesystem" />
+                      </div>
+                      <div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>Transport</div>
+                        <SSelect value={mcpFormTransport} onChange={(e) => setMcpFormTransport(e.target.value as any)}>
+                          <option value="stdio">stdio (local command)</option>
+                          <option value="http">http (streamable)</option>
+                          <option value="sse">sse</option>
+                        </SSelect>
+                      </div>
+                    </div>
+                    {mcpFormTransport === 'stdio' ? (
+                      <div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>Command</div>
+                        <SInput value={mcpFormCommand} onChange={(e) => setMcpFormCommand(e.target.value)} placeholder='npx -y @modelcontextprotocol/server-filesystem C:/Users' style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }} />
+                      </div>
+                    ) : (
+                      <div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>URL</div>
+                        <SInput value={mcpFormUrl} onChange={(e) => setMcpFormUrl(e.target.value)} placeholder="https://example.com/mcp" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }} />
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                      <ActionBtn variant="ghost" onClick={() => setMcpFormOpen(false)}>Cancel</ActionBtn>
+                      <ActionBtn variant="primary" onClick={() => void handleAddMcp()} disabled={mcpFormSaving}>
+                        {mcpFormSaving ? <LoaderCircle size={13} className="spin" /> : <Plus size={13} />} Add & Reload
+                      </ActionBtn>
+                    </div>
+                  </div>
+                )}
+
+                <div style={{
+                  borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)',
+                  background: 'var(--bg-surface-elevated)', overflow: 'hidden',
+                }}>
+                  {mcpServers.length === 0 && !mcpLoading && (
+                    <div style={{ padding: '16px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                      No MCP servers configured. Add one above (stdio command or http URL).
+                    </div>
+                  )}
+                  {mcpServers.map((s) => (
+                    <div key={s.name} style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px',
+                      padding: '10px 14px', borderBottom: '1px solid var(--border-subtle)',
+                    }}>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>{s.name}</span>
+                          <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'var(--bg-canvas)', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}>{s.transport}</span>
+                          {s.live
+                            ? <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'var(--success-subtle)', color: 'var(--success)', fontWeight: 600 }}>LIVE · {s.tools_registered}</span>
+                            : s.enabled
+                              ? <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: '#fef3c7', color: '#b45309', fontWeight: 600 }}>OFFLINE</span>
+                              : <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'var(--bg-canvas)', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}>DISABLED</span>}
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {s.command ? (Array.isArray(s.command) ? s.command.join(' ') : s.command) : s.url || '—'}
+                        </div>
+                      </div>
+                      <ActionBtn variant="ghost" onClick={() => void handleDeleteMcp(s.name)} title="Remove server">
+                        <Trash2 size={13} />
+                      </ActionBtn>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* DEVELOPER */}
             {activeTab === 'developer' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '11px' }}>
-                <SLabel>WebSocket Connection</SLabel>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                  <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)' }}>Makima Brain WebSocket URL</div>
-                  <div style={{ display: 'flex', gap: '7px' }}>
-                    <SInput type="text" value={wsUrl} onChange={(e) => setWsUrl(e.target.value)} style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: '0.76rem' }} />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div>
+                  <h4 style={{ fontSize: '0.92rem', fontWeight: 600, color: 'var(--text-primary)', margin: '0 0 4px' }}>Developer Diagnostics & WebSocket</h4>
+                  <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: 0 }}>Inspect network latency, manage local models, and verify server protocols.</p>
+                </div>
+
+                <SLabel>WebSocket Connectivity</SLabel>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Makima Brain WebSocket URL</div>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <SInput type="text" value={wsUrl} onChange={(e) => setWsUrl(e.target.value)} style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: '0.82rem' }} />
                     <ActionBtn variant="primary" onClick={handleTestPing} disabled={pingLoading} style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
-                      <Activity size={11} className={pingLoading ? 'spin' : ''} />
+                      <Activity size={13} className={pingLoading ? 'spin' : ''} />
                       {pingLoading ? 'Pinging...' : 'Ping'}
                     </ActionBtn>
                   </div>
                   {pingLatency !== null && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.7rem', color: '#00e676' }}>
-                      <CheckCircle2 size={12} /> Pong received · <strong style={{ fontFamily: 'var(--font-mono)' }}>{pingLatency}ms</strong>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem', color: 'var(--success)' }}>
+                      <CheckCircle2 size={14} /> Pong received · <strong style={{ fontFamily: 'var(--font-mono)' }}>{pingLatency}ms latency</strong>
                     </div>
                   )}
                 </div>
 
                 <SLabel>Protocol Status</SLabel>
-                <div style={{ padding: '10px 13px', borderRadius: '4px', background: 'rgba(4,6,15,0.8)', border: '1px solid rgba(0,180,220,0.1)', fontFamily: 'var(--font-mono)' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '5px' }}>
-                    <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#00e676', display: 'inline-block', boxShadow: '0 0 5px rgba(0,230,118,0.6)' }} />
-                    <span style={{ fontSize: '0.68rem', color: '#00e676' }}>Protocol v1.0 — Makima OS Core WebSocket</span>
+                <div style={{ padding: '12px 14px', borderRadius: 'var(--radius-md)', background: 'var(--bg-surface-elevated)', border: '1px solid var(--border-subtle)', fontFamily: 'var(--font-mono)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                    <span
+                      style={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: '50%',
+                        background: wsConnected ? 'var(--success)' : 'var(--status-red, #ef4444)',
+                        display: 'inline-block',
+                      }}
+                    />
+                    <span style={{ fontSize: '0.78rem', color: 'var(--text-primary)', fontWeight: 600 }}>
+                      {wsConnected ? 'WebSocket connected (protocol v1)' : 'WebSocket not connected'}
+                    </span>
                   </div>
-                  <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)' }}>Endpoints: /ws · /health · /settings · /media · /auth</div>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                    Endpoints on brain: /ws · /health · /llm/providers · /media · /status — use Ping above for RTT
+                  </div>
                 </div>
 
                 <SLabel>Local Ollama Model Manager</SLabel>
-                <div style={{ padding: '11px 13px', borderRadius: '4px', border: '1px solid rgba(0,180,220,0.1)', background: 'rgba(0,0,0,0.13)' }}>
-                  <div style={{ fontSize: '0.76rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '3px' }}>Pull Open-Weight Model</div>
-                  <div style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginBottom: '9px' }}>
-                    Download into Ollama: <code style={{ color: 'var(--accent-teal)' }}>llama3.2</code>, <code style={{ color: 'var(--accent-teal)' }}>qwen2.5-coder:7b</code>, <code style={{ color: 'var(--accent-teal)' }}>deepseek-r1:1.5b</code>
+                <div style={{ padding: '14px 16px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', background: 'var(--bg-surface-elevated)' }}>
+                  <div style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '3px' }}>Pull Local Model into Ollama</div>
+                  <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginBottom: '10px' }}>
+                    Available models: <code style={{ color: 'var(--primary)' }}>llama3.2</code>, <code style={{ color: 'var(--primary)' }}>qwen2.5-coder:7b</code>, <code style={{ color: 'var(--primary)' }}>deepseek-r1:1.5b</code>
                   </div>
-                  <div style={{ display: 'flex', gap: '7px' }}>
+                  <div style={{ display: 'flex', gap: '8px' }}>
                     <SInput type="text" placeholder="e.g. llama3.2, deepseek-r1:1.5b" value={ollamaModelName}
                       onChange={(e) => setOllamaModelName(e.target.value)}
-                      style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: '0.76rem' }}
+                      style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: '0.82rem' }}
                       onKeyDown={(e) => { if (e.key === 'Enter') handlePullOllamaModel(); }}
                     />
                     <ActionBtn variant="primary" onClick={handlePullOllamaModel} disabled={ollamaLoading || !ollamaModelName.trim()} style={{ flexShrink: 0 }}>
-                      <RefreshCw size={11} className={ollamaLoading ? 'spin' : ''} /> Pull
+                      <RefreshCw size={13} className={ollamaLoading ? 'spin' : ''} /> Pull
                     </ActionBtn>
                   </div>
                   {ollamaStatus && (
-                    <div style={{ marginTop: '7px', fontSize: '0.64rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>› {ollamaStatus}</div>
+                    <div style={{ marginTop: '8px', fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>› {ollamaStatus}</div>
                   )}
                 </div>
               </div>
@@ -840,12 +1194,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
 
           {/* Footer */}
           <div style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '7px',
-            padding: '9px 14px', flexShrink: 0,
-            borderTop: '1px solid rgba(0,180,220,0.1)', background: 'rgba(0,0,0,0.2)',
+            display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px',
+            padding: '12px 24px', flexShrink: 0,
+            borderTop: '1px solid var(--border-subtle)', background: 'var(--bg-surface)',
           }}>
             <ActionBtn variant="ghost" onClick={onClose}>Cancel</ActionBtn>
-            <ActionBtn variant="primary" onClick={handleSave}><Check size={12} /> Save Changes</ActionBtn>
+            <ActionBtn variant="primary" onClick={handleSave}><Check size={13} /> Save Changes</ActionBtn>
           </div>
 
           {/* Connector sub-modal */}
@@ -853,89 +1207,238 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
             <ConnectorConfigSubModal
               connector={selectedConnector}
               initialKey={connectorKeys[selectedConnector.id] || ''}
+              wsUrl={wsUrl}
               onClose={() => setSelectedConnector(null)}
               onSaveKey={(val) => handleSaveConnectorKey(selectedConnector.id, val)}
               onClearKey={() => handleSaveConnectorKey(selectedConnector.id, '')}
             />
           )}
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
+};
+
+// Connector id → backend OAuth provider (auth/oauth_manager.PROVIDERS keys)
+const OAUTH_PROVIDER_BY_CONNECTOR: Record<string, string> = {
+  gdrive: 'google',
+  gmail: 'google',
+  github: 'github',
 };
 
 // ── Connector Config Sub-Modal ────────────────────────────────────────────────
 const ConnectorConfigSubModal: React.FC<{
   connector: AppConnectorConfig;
   initialKey: string;
+  wsUrl?: string;
   onClose: () => void;
   onSaveKey: (val: string) => void;
   onClearKey: () => void;
-}> = ({ connector, initialKey, onClose, onSaveKey, onClearKey }) => {
+}> = ({ connector, initialKey, wsUrl, onClose, onSaveKey, onClearKey }) => {
   const [val, setVal]           = useState(initialKey);
   const [showKey, setShowKey]   = useState(false);
+  const [testing, setTesting]   = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const Icon                    = connector.icon;
+
+  const oauthProvider = OAUTH_PROVIDER_BY_CONNECTOR[connector.id];
+  const [oauthConnected, setOauthConnected] = useState(false);
+  const [oauthBusy, setOauthBusy] = useState(false);
+  const oauthPollRef = React.useRef<number | null>(null);
+
+  const clearOauthPoll = useCallback(() => {
+    if (oauthPollRef.current !== null) {
+      window.clearInterval(oauthPollRef.current);
+      oauthPollRef.current = null;
+    }
+    setOauthBusy(false);
+  }, []);
+
+  const refreshOauth = useCallback(async () => {
+    if (!oauthProvider) return;
+    try {
+      const providers = await oauthStatus(wsUrl);
+      setOauthConnected(Boolean(providers[oauthProvider]));
+    } catch {
+      /* brain offline — keep last known state */
+    }
+  }, [oauthProvider, wsUrl]);
+
+  useEffect(() => {
+    void refreshOauth();
+    return clearOauthPoll;
+  }, [refreshOauth, clearOauthPoll]);
+
+  const handleOauthConnect = () => {
+    if (!oauthProvider) return;
+    if (oauthPollRef.current !== null) return;
+    setOauthBusy(true);
+    window.open(oauthLoginUrl(oauthProvider, wsUrl), 'makima_oauth', 'width=540,height=720');
+    const startedAt = Date.now();
+    oauthPollRef.current = window.setInterval(async () => {
+      try {
+        const providers = await oauthStatus(wsUrl);
+        if (providers[oauthProvider]) {
+          setOauthConnected(true);
+          clearOauthPoll();
+        } else if (Date.now() - startedAt > 60000) {
+          clearOauthPoll();
+        }
+      } catch {
+        if (Date.now() - startedAt > 60000) clearOauthPoll();
+      }
+    }, 2000);
+  };
+
+  const handleOauthDisconnect = async () => {
+    if (!oauthProvider) return;
+    try {
+      const res = await oauthDisconnect(oauthProvider, wsUrl);
+      if (res.ok) setOauthConnected(false);
+    } catch {
+      /* ignore — brain offline */
+    }
+  };
+
+  const handleTestConnection = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      if (val.trim()) {
+        wsClient.saveCredential(connector.id, { apiKey: val.trim() });
+      }
+      const res = await testIntegration(connector.id, wsUrl);
+      setTestResult({ ok: res.ok, message: res.message });
+    } catch (err: any) {
+      setTestResult({ ok: false, message: err?.message || 'Connection test failed or brain offline' });
+    } finally {
+      setTesting(false);
+    }
+  };
 
   return (
     <div style={{
-      position: 'absolute', inset: 0, background: 'rgba(4,6,15,0.9)',
-      backdropFilter: 'blur(12px)', display: 'flex', alignItems: 'center',
+      position: 'absolute', inset: 0, background: 'rgba(0, 0, 0, 0.7)',
+      backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center',
       justifyContent: 'center', zIndex: 110, padding: '24px',
     }}>
       <div style={{
-        width: '100%', maxWidth: '420px',
-        background: 'var(--bg-secondary)', border: '1px solid rgba(0,210,255,0.22)',
-        borderRadius: '6px', padding: '18px', position: 'relative',
-        boxShadow: '0 0 50px rgba(0,0,0,0.9)',
+        width: '100%', maxWidth: '440px',
+        background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)',
+        borderRadius: 'var(--radius-lg)', padding: '24px', position: 'relative',
+        boxShadow: '0 20px 45px rgba(0, 0, 0, 0.8)',
       }}>
-        <div style={{ position: 'absolute', top: 0, left: 0, width: 16, height: 16, borderTop: '1px solid rgba(0,210,255,0.5)', borderLeft: '1px solid rgba(0,210,255,0.5)', pointerEvents: 'none' }} />
-        <div style={{ position: 'absolute', bottom: 0, right: 0, width: 16, height: 16, borderBottom: '1px solid rgba(124,92,191,0.45)', borderRight: '1px solid rgba(124,92,191,0.45)', pointerEvents: 'none' }} />
-
         {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '13px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <div style={{ width: 26, height: 26, borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,210,255,0.09)', border: '1px solid rgba(0,210,255,0.2)', color: 'var(--accent-teal)' }}>
-              <Icon size={13} />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{ width: 34, height: 34, borderRadius: 'var(--radius-sm)', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--primary-subtle)', border: '1px solid var(--primary-border)', color: 'var(--primary)' }}>
+              <Icon size={18} />
             </div>
             <div>
-              <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-primary)' }}>Configure {connector.name}</div>
-              <div style={{ fontSize: '0.58rem', color: 'var(--text-muted)', textTransform: 'capitalize' }}>{connector.category} · {connector.authType}</div>
+              <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-primary)' }}>Configure {connector.name}</div>
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'capitalize' }}>{connector.category} · {connector.authType}</div>
             </div>
           </div>
-          <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex' }}><X size={13} /></button>
+          <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex' }}><X size={16} /></button>
         </div>
 
-        <p style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '13px', lineHeight: 1.5 }}>
+        <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '16px', lineHeight: 1.5 }}>
           {connector.desc}. Enter credentials to authorize Makima OS:
         </p>
 
-        <div style={{ marginBottom: '14px' }}>
-          <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Credentials / API Key</div>
+        {oauthProvider && (
+          <div
+            style={{
+              marginBottom: '16px',
+              padding: '10px 12px',
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid var(--border-subtle)',
+              background: 'var(--bg-surface-elevated)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+              <div>
+                <div style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-primary)', textTransform: 'capitalize' }}>
+                  OAuth · {oauthProvider}
+                </div>
+                <div style={{ fontSize: '0.72rem', color: oauthConnected ? 'var(--success)' : 'var(--text-muted)' }}>
+                  {oauthConnected ? 'Connected — token stored by Makima Brain' : 'Not connected'}
+                </div>
+              </div>
+              {oauthConnected ? (
+                <ActionBtn variant="danger" onClick={() => void handleOauthDisconnect()}>
+                  Disconnect
+                </ActionBtn>
+              ) : (
+                <ActionBtn variant="primary" onClick={handleOauthConnect} disabled={oauthBusy}>
+                  {oauthBusy ? <LoaderCircle size={13} className="spin" /> : null}
+                  {oauthBusy ? 'Waiting…' : 'Sign in with OAuth'}
+                </ActionBtn>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div style={{ marginBottom: '16px' }}>
+          <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginBottom: '6px', fontWeight: 500 }}>Credentials / API Key</div>
           <div style={{ position: 'relative' }}>
             <SInput
               type={showKey ? 'text' : 'password'}
               placeholder={connector.placeholder}
               value={val}
-              onChange={(e) => setVal(e.target.value)}
+              onChange={(e) => {
+                setVal(e.target.value);
+                setTestResult(null);
+              }}
               onKeyDown={(e) => { if (e.key === 'Enter') onSaveKey(val); }}
-              style={{ paddingRight: '34px', fontFamily: 'var(--font-mono)', fontSize: '0.76rem' }}
+              style={{ paddingRight: '36px', fontFamily: 'var(--font-mono)', fontSize: '0.82rem' }}
             />
             <button type="button" onClick={() => setShowKey(!showKey)}
-              style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex' }}>
-              {showKey ? <EyeOff size={13} /> : <Eye size={13} />}
+              style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex' }}>
+              {showKey ? <EyeOff size={15} /> : <Eye size={15} />}
             </button>
           </div>
         </div>
 
+        {testResult && (
+          <div
+            style={{
+              padding: '8px 12px',
+              borderRadius: 'var(--radius-sm)',
+              marginBottom: '16px',
+              fontSize: '0.78rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              background: testResult.ok ? 'rgba(76, 175, 80, 0.12)' : 'rgba(244, 67, 54, 0.12)',
+              border: `1px solid ${testResult.ok ? 'rgba(76, 175, 80, 0.3)' : 'rgba(244, 67, 54, 0.3)'}`,
+              color: testResult.ok ? 'var(--accent-emerald, #4caf50)' : 'var(--danger, #f44336)',
+            }}
+          >
+            {testResult.ok ? <CheckCircle2 size={14} /> : <X size={14} />}
+            <span style={{ flex: 1, wordBreak: 'break-word' }}>{testResult.message}</span>
+          </div>
+        )}
+
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           {initialKey ? (
-            <ActionBtn variant="danger" onClick={onClearKey} style={{ fontSize: '0.66rem', padding: '6px 11px' }}>
-              <Trash2 size={11} /> Remove Key
+            <ActionBtn variant="danger" onClick={onClearKey}>
+              <Trash2 size={13} /> Remove Key
             </ActionBtn>
           ) : <div />}
-          <div style={{ display: 'flex', gap: '7px' }}>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <ActionBtn
+              variant="ghost"
+              onClick={handleTestConnection}
+              disabled={testing || (!val.trim() && !initialKey)}
+              style={{ border: '1px solid var(--border-subtle)' }}
+              title="Verify credential validity with Makima Brain"
+            >
+              {testing ? <RefreshCw size={13} className="spin" /> : <Activity size={13} />}
+              {testing ? 'Testing...' : 'Test Connection'}
+            </ActionBtn>
             <ActionBtn variant="ghost" onClick={onClose}>Cancel</ActionBtn>
-            <ActionBtn variant="primary" onClick={() => onSaveKey(val)}><Check size={11} /> Save</ActionBtn>
+            <ActionBtn variant="primary" onClick={() => onSaveKey(val)}><Check size={13} /> Save</ActionBtn>
           </div>
         </div>
       </div>

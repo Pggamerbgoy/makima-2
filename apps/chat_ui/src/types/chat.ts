@@ -54,12 +54,21 @@ export interface Message {
   thought?: string;
   sources?: GroundingSource[];
   agentActivity?: AgentActivityEvent[];
+  planMilestones?: PlanMilestone[];
   taskId?: string;
   status?: 'streaming' | 'complete' | 'error' | 'cancelled';
   error?: { code?: string; message: string; retryable?: boolean };
   actionConfirmation?: { action: string; description: string; riskLevel?: string; status?: 'pending' | 'approved' | 'rejected' };
   agent_name?: string;
   format?: string;
+  isPinned?: boolean;
+}
+
+export interface PlanMilestone {
+  id: number;
+  title: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'failed';
+  result_summary?: string;
 }
 
 export interface AgentActivityEvent {
@@ -76,6 +85,7 @@ export interface ChatSession {
   id: string;
   title: string;
   createdAt: number;
+  lastActiveAt?: number; // Updated each time a message is added; used for Today/Yesterday grouping
   messages: Message[];
 }
 
