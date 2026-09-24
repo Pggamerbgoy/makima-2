@@ -350,6 +350,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
   const [wsConnected, setWsConnected]   = useState(false);
   const [pingLatency, setPingLatency]   = useState<number | null>(null);
   const [pingLoading, setPingLoading]   = useState(false);
+  const [pingError, setPingError]       = useState('');
   const [ollamaModelName, setOllamaModelName] = useState('');
   const [ollamaLoading, setOllamaLoading]     = useState(false);
   const [ollamaStatus, setOllamaStatus]       = useState('');
@@ -447,14 +448,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
       const res = await setToolEnabled(tool.name, next, wsUrl);
       if (!res.ok) {
         setToolsList((prev) => prev.map((t) => (t.name === tool.name ? { ...t, enabled: !next } : t)));
-        setToolsError(res.error || 'Failed to update tool.');
+        const msg = res.error || 'Failed to update tool.';
+        setToolsError(/failed to fetch|networkerror|load failed/i.test(msg)
+          ? 'Brain is offline — tool toggle not saved.'
+          : msg);
       } else {
         setToolsEnabledCount((c) => c + (next ? 1 : -1));
         setToolsError('');
       }
     } catch (err) {
       setToolsList((prev) => prev.map((t) => (t.name === tool.name ? { ...t, enabled: !next } : t)));
-      setToolsError(err instanceof Error ? err.message : 'Failed to update tool.');
+      const msg = err instanceof Error ? err.message : 'Failed to update tool.';
+      setToolsError(/failed to fetch|networkerror|load failed/i.test(msg)
+        ? 'Brain is offline — tool toggle not saved.'
+        : msg);
     }
   };
 
@@ -600,17 +607,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
   const handleTestPing = async () => {
     setPingLoading(true);
     setPingLatency(null);
+    setPingError('');
     try {
       const rtt = await wsClient.ping();
       setPingLatency(rtt);
     } catch {
       setPingLatency(null);
+      setPingError('Brain unreachable — check the WebSocket URL and start the backend.');
     } finally {
       setPingLoading(false);
     }
   };
 
   const handleTestVoice = () => {
+    if (!('speechSynthesis' in window)) { setProviderError('Voice test not supported in this browser.'); return; }
     if (isTestingVoice) { window.speechSynthesis.cancel(); setIsTestingVoice(false); return; }
     window.speechSynthesis.cancel();
     const text = voiceLanguage === 'hi'
@@ -951,16 +961,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
                   </div>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '10px' }}>
                   {[
                     { label: 'Follow-up Window', unit: 's',  val: followupTimeoutSeconds, set: setFollowupTimeoutSeconds, min: 5,   max: 120, step: 1  },
                     { label: 'Silence End',       unit: 'ms', val: silenceTimeoutMs,       set: setSilenceTimeoutMs,       min: 400, max: 3000, step: 50 },
                     { label: 'Max Turn',          unit: 's',  val: maxUtteranceSeconds,     set: setMaxUtteranceSeconds,    min: 3,   max: 60,  step: 1  },
                   ].map((f) => (
-                    <div key={f.label} style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                    <div key={f.label} style={{ display: 'flex', flexDirection: 'column', gap: '5px', minWidth: 0 }}>
                       <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>{f.label} ({f.unit})</div>
                       <SInput type="number" min={f.min} max={f.max} step={f.step} value={f.val}
-                        onChange={(e) => f.set(Number(e.target.value))} />
+                        onChange={(e) => {
+                          const n = Number(e.target.value);
+                          f.set(Number.isFinite(n) ? Math.min(f.max, Math.max(f.min, n)) : f.min);
+                        }} />
                     </div>
                   ))}
                 </div>
@@ -1050,11 +1063,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
                           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px',
                           padding: '8px 12px',
                           borderBottom: i < filtered.length - 1 ? '1px solid var(--border-subtle)' : 'none',
-                          background: t.enabled ? 'transparent' : 'rgba(0,0,0,0.12)',
+                          background: t.enabled ? 'transparent' : 'var(--bg-canvas)',
+                          opacity: t.enabled ? 1 : 0.65,
                         }}>
                           <div style={{ minWidth: 0, flex: 1 }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                              <span style={{ fontSize: '0.8rem', fontWeight: 600, color: t.enabled ? 'var(--text-primary)' : 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{t.name}</span>
+                              <span style={{ fontSize: '0.8rem', fontWeight: 600, color: t.enabled ? 'var(--text-primary)' : 'var(--text-muted)', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>{t.name}</span>
                               <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'var(--bg-canvas)', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}>{t.category}</span>
                               {t.source === 'mcp' && <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'var(--primary-subtle)', color: 'var(--primary)' }}>MCP</span>}
                               {t.is_destructive && <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'var(--danger-subtle)', color: 'var(--danger)' }}>RISKY</span>}
@@ -1147,12 +1161,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
                       }}>
                         <div style={{ minWidth: 0, flex: 1 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                            <span style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>{s.name}</span>
+                            <span style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>{s.name}</span>
                             <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'var(--bg-canvas)', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}>{s.transport}</span>
                             {s.live
                               ? <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'var(--success-subtle)', color: 'var(--success)', fontWeight: 600 }}>LIVE · {s.tools_registered}</span>
                               : s.enabled
-                                ? <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'rgba(251, 191, 36, 0.15)', color: '#d97706', fontWeight: 600 }}>OFFLINE</span>
+                                ? <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'var(--warning-subtle)', color: 'var(--warning)', fontWeight: 600 }}>OFFLINE</span>
                                 : <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'var(--bg-canvas)', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}>DISABLED</span>}
                           </div>
                           <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>
@@ -1180,13 +1194,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
                 <SLabel>WebSocket Connectivity</SLabel>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Makima Brain WebSocket URL</div>
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <SInput type="text" value={wsUrl} onChange={(e) => setWsUrl(e.target.value)} style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: '0.82rem' }} />
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <SInput type="text" value={wsUrl} onChange={(e) => setWsUrl(e.target.value)} style={{ flex: 1, minWidth: '180px', fontFamily: 'var(--font-mono)', fontSize: '0.82rem' }} />
                     <ActionBtn variant="primary" onClick={handleTestPing} disabled={pingLoading} style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
                       <Activity size={13} className={pingLoading ? 'spin' : ''} />
                       {pingLoading ? 'Pinging...' : 'Ping'}
                     </ActionBtn>
                   </div>
+                  {pingError && <div className="inline-alert error">{pingError}</div>}
                   {pingLatency !== null && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem', color: 'var(--success)' }}>
                       <CheckCircle2 size={14} /> Pong received · <strong style={{ fontFamily: 'var(--font-mono)' }}>{pingLatency}ms latency</strong>
@@ -1221,10 +1236,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
                   <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginBottom: '10px' }}>
                     Available models: <code style={{ color: 'var(--primary)' }}>llama3.2</code>, <code style={{ color: 'var(--primary)' }}>qwen2.5-coder:7b</code>, <code style={{ color: 'var(--primary)' }}>deepseek-r1:1.5b</code>
                   </div>
-                  <div style={{ display: 'flex', gap: '8px' }}>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                     <SInput type="text" placeholder="e.g. llama3.2, deepseek-r1:1.5b" value={ollamaModelName}
                       onChange={(e) => setOllamaModelName(e.target.value)}
-                      style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: '0.82rem' }}
+                      style={{ flex: 1, minWidth: '180px', fontFamily: 'var(--font-mono)', fontSize: '0.82rem' }}
                       onKeyDown={(e) => { if (e.key === 'Enter') handlePullOllamaModel(); }}
                     />
                     <ActionBtn variant="primary" onClick={handlePullOllamaModel} disabled={ollamaLoading || !ollamaModelName.trim()} style={{ flexShrink: 0 }}>
@@ -1370,7 +1385,7 @@ const ConnectorConfigSubModal: React.FC<{
       justifyContent: 'center', zIndex: 110, padding: '24px',
     }}>
       <div style={{
-        width: '100%', maxWidth: '440px',
+        width: '100%', maxWidth: '440px', maxHeight: 'calc(100vh - 80px)', overflowY: 'auto',
         background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)',
         borderRadius: 'var(--radius-lg)', padding: '24px', position: 'relative',
         boxShadow: '0 20px 45px rgba(0, 0, 0, 0.8)',
@@ -1457,9 +1472,9 @@ const ConnectorConfigSubModal: React.FC<{
               display: 'flex',
               alignItems: 'center',
               gap: '8px',
-              background: testResult.ok ? 'rgba(76, 175, 80, 0.12)' : 'rgba(244, 67, 54, 0.12)',
-              border: `1px solid ${testResult.ok ? 'rgba(76, 175, 80, 0.3)' : 'rgba(244, 67, 54, 0.3)'}`,
-              color: testResult.ok ? 'var(--accent-emerald, #4caf50)' : 'var(--danger, #f44336)',
+              background: testResult.ok ? 'var(--success-subtle)' : 'var(--danger-subtle)',
+              border: `1px solid ${testResult.ok ? 'var(--success)' : 'var(--danger)'}`,
+              color: testResult.ok ? 'var(--success)' : 'var(--danger)',
             }}
           >
             {testResult.ok ? <CheckCircle2 size={14} /> : <X size={14} />}
@@ -1467,13 +1482,13 @@ const ConnectorConfigSubModal: React.FC<{
           </div>
         )}
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
           {initialKey ? (
-            <ActionBtn variant="danger" onClick={onClearKey}>
+            <ActionBtn variant="danger" onClick={() => { if (window.confirm(`Remove saved key for "${connector.name}"?`)) onClearKey(); }}>
               <Trash2 size={13} /> Remove Key
             </ActionBtn>
           ) : <div />}
-          <div style={{ display: 'flex', gap: '8px' }}>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             <ActionBtn
               variant="ghost"
               onClick={handleTestConnection}
