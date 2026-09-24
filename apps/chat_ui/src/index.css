@@ -1,74 +1,75 @@
 @import 'highlight.js/styles/atom-one-dark.css';
 
 /* ==========================================================================
-   Obsidian Intelligence Design System (Gemini × ChatGPT × Claude Synthesis)
+   Vintage Ledger Design System — flat, calm, timeless (no glass, no neon)
+   Dark default: old library at night. Light: ink on paper.
    ========================================================================== */
 
 :root {
-  /* Dark Theme (Default) */
-  --bg-canvas: #131314;
-  --bg-surface: #18181b;
-  --bg-surface-elevated: #201f20;
-  --bg-surface-low: #1c1b1c;
-  --bg-surface-hover: #27272a;
-  --bg-surface-active: #323236;
-  --bg-glass: rgba(24, 24, 27, 0.85);
+  /* Dark Theme (Default) — lamplight on dark wood */
+  --bg-canvas: #171410;
+  --bg-surface: #1e1a14;
+  --bg-surface-elevated: #262017;
+  --bg-surface-low: #1b1712;
+  --bg-surface-hover: #2c2519;
+  --bg-surface-active: #38301f;
+  --bg-glass: #1e1a14;
 
-  --border-subtle: #27272a;
-  --border-hover: rgba(255, 255, 255, 0.14);
-  --border-focus: #818cf8;
+  --border-subtle: #3a3122;
+  --border-hover: #57482c;
+  --border-focus: #c9a24b;
 
-  --primary: #818cf8;
-  --primary-hover: #6366f1;
-  --primary-subtle: rgba(129, 140, 248, 0.14);
-  --primary-border: rgba(129, 140, 248, 0.35);
+  --primary: #c9a24b;
+  --primary-hover: #d9b45f;
+  --primary-subtle: rgba(201, 162, 75, 0.13);
+  --primary-border: rgba(201, 162, 75, 0.38);
 
-  --secondary: #22d3ee;
-  --secondary-subtle: rgba(34, 211, 238, 0.12);
+  --secondary: #8fa382;
+  --secondary-subtle: rgba(143, 163, 130, 0.12);
 
-  --thinking-accent: #a78bfa;
-  --thinking-subtle: rgba(167, 139, 250, 0.12);
-  --thinking-border: rgba(167, 139, 250, 0.25);
+  --thinking-accent: #c08a5a;
+  --thinking-subtle: rgba(192, 138, 90, 0.12);
+  --thinking-border: rgba(192, 138, 90, 0.3);
 
-  --success: #34d399;
-  --success-subtle: rgba(52, 211, 153, 0.14);
-  --danger: #f87171;
-  --danger-subtle: rgba(248, 113, 113, 0.14);
-  --warning: #fbbf24;
-  --warning-subtle: rgba(251, 191, 36, 0.14);
+  --success: #93a97e;
+  --success-subtle: rgba(147, 169, 126, 0.14);
+  --danger: #c26d54;
+  --danger-subtle: rgba(194, 109, 84, 0.14);
+  --warning: #d9a441;
+  --warning-subtle: rgba(217, 164, 65, 0.14);
 
-  --text-primary: #f4f4f5;
-  --text-secondary: #a1a1aa;
-  --text-muted: #71717a;
-  --text-inverse: #131314;
+  --text-primary: #ece3d0;
+  --text-secondary: #b3a586;
+  --text-muted: #7e7460;
+  --text-inverse: #171410;
 
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 16px;
-  --radius-xl: 22px;
-  --radius-3xl: 26px;
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+  --radius-3xl: 12px;
   --radius-full: 9999px;
 
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-heading: 'Geist', 'Inter', sans-serif;
+  --font-heading: Georgia, 'Palatino Linotype', 'Book Antiqua', 'Times New Roman', serif;
   --font-mono: 'JetBrains Mono', monospace;
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
-  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.35);
-  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.5);
-  --shadow-xl: 0 24px 48px -12px rgba(0, 0, 0, 0.65);
-  --shadow-composer: 0 8px 32px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--border-subtle);
+  --shadow-sm: 0 1px 0 rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 6px 18px rgba(0, 0, 0, 0.5);
+  --shadow-xl: 0 12px 28px rgba(0, 0, 0, 0.55);
+  --shadow-composer: 0 4px 16px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--border-subtle);
 
   /* Accent aliases (icons / status chips) */
-  --accent-emerald: #34d399;
-  --accent-amber: #fbbf24;
-  --accent-indigo: #818cf8;
-  --accent-pink: #f472b6;
+  --accent-emerald: #93a97e;
+  --accent-amber: #d9a441;
+  --accent-indigo: #c9a24b;
+  --accent-pink: #c08a5a;
 
   /* Code block surfaces (theme-aware) */
-  --code-bg: #141416;
-  --code-header-bg: #1a1a1e;
-  --code-hover-bg: rgba(255, 255, 255, 0.08);
+  --code-bg: #14110c;
+  --code-header-bg: #1a1611;
+  --code-hover-bg: rgba(236, 227, 208, 0.07);
 
   /* Motion tokens — snappy ChatGPT/Claude-grade timings */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
@@ -95,58 +96,58 @@
 }
 
 [data-theme='light'] {
-  --bg-canvas: #ffffff;
-  --bg-surface: #f9fafb;
-  --bg-surface-elevated: #f3f4f6;
-  --bg-surface-low: #f4f5f7;
-  --bg-surface-hover: #e5e7eb;
-  --bg-surface-active: #d1d5db;
-  --bg-glass: rgba(255, 255, 255, 0.88);
+  --bg-canvas: #f3efe4;
+  --bg-surface: #faf7ee;
+  --bg-surface-elevated: #ece6d5;
+  --bg-surface-low: #f6f2e7;
+  --bg-surface-hover: #e7dfcb;
+  --bg-surface-active: #d9cfb6;
+  --bg-glass: #faf7ee;
 
-  --border-subtle: #e5e7eb;
-  --border-hover: #d1d5db;
-  --border-focus: #4f46e5;
+  --border-subtle: #ddd3ba;
+  --border-hover: #c9bc9c;
+  --border-focus: #8a6d1f;
 
-  --primary: #4f46e5;
-  --primary-hover: #4338ca;
-  --primary-subtle: rgba(79, 70, 229, 0.08);
-  --primary-border: rgba(79, 70, 229, 0.25);
+  --primary: #8a6d1f;
+  --primary-hover: #6f5718;
+  --primary-subtle: rgba(138, 109, 31, 0.1);
+  --primary-border: rgba(138, 109, 31, 0.3);
 
-  --secondary: #0891b2;
-  --secondary-subtle: rgba(8, 145, 178, 0.08);
+  --secondary: #5f7351;
+  --secondary-subtle: rgba(95, 115, 81, 0.08);
 
-  --thinking-accent: #7c3aed;
-  --thinking-subtle: rgba(124, 58, 237, 0.08);
-  --thinking-border: rgba(124, 58, 237, 0.2);
+  --thinking-accent: #9a6238;
+  --thinking-subtle: rgba(154, 98, 56, 0.08);
+  --thinking-border: rgba(154, 98, 56, 0.25);
 
-  --success: #10b981;
-  --success-subtle: rgba(16, 185, 129, 0.1);
-  --danger: #ef4444;
-  --danger-subtle: rgba(239, 68, 68, 0.1);
-  --warning: #f59e0b;
-  --warning-subtle: rgba(245, 158, 11, 0.1);
+  --success: #3e7a44;
+  --success-subtle: rgba(62, 122, 68, 0.1);
+  --danger: #b04332;
+  --danger-subtle: rgba(176, 67, 50, 0.1);
+  --warning: #9a6b12;
+  --warning-subtle: rgba(154, 107, 18, 0.1);
 
-  --text-primary: #111827;
-  --text-secondary: #4b5563;
-  --text-muted: #9ca3af;
-  --text-inverse: #ffffff;
+  --text-primary: #26211a;
+  --text-secondary: #5c5344;
+  --text-muted: #8d8271;
+  --text-inverse: #faf7ee;
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.08);
-  --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.1);
-  --shadow-xl: 0 20px 40px -12px rgba(0, 0, 0, 0.18);
-  --shadow-composer: 0 6px 24px rgba(0, 0, 0, 0.08), 0 0 0 1px var(--border-subtle);
+  --shadow-sm: 0 1px 0 rgba(38, 33, 26, 0.08);
+  --shadow-md: 0 2px 6px rgba(38, 33, 26, 0.1);
+  --shadow-lg: 0 6px 18px rgba(38, 33, 26, 0.12);
+  --shadow-xl: 0 12px 28px rgba(38, 33, 26, 0.16);
+  --shadow-composer: 0 4px 16px rgba(38, 33, 26, 0.1), 0 0 0 1px var(--border-subtle);
 
   /* Accent aliases (icons / status chips) */
-  --accent-emerald: #10b981;
-  --accent-amber: #f59e0b;
-  --accent-indigo: #6366f1;
-  --accent-pink: #ec4899;
+  --accent-emerald: #3e7a44;
+  --accent-amber: #9a6b12;
+  --accent-indigo: #8a6d1f;
+  --accent-pink: #9a6238;
 
   /* Code block surfaces (theme-aware) */
-  --code-bg: #f6f8fa;
-  --code-header-bg: #eef1f4;
-  --code-hover-bg: rgba(0, 0, 0, 0.06);
+  --code-bg: #ede7d6;
+  --code-header-bg: #e4dcc7;
+  --code-hover-bg: rgba(38, 33, 26, 0.07);
 
   /* Legacy Subcomponent Compatibility Aliases */
   --bg-primary: var(--bg-canvas);
@@ -272,10 +273,9 @@ button {
   justify-content: center;
   width: 30px;
   height: 30px;
-  border-radius: 8px;
-  background: linear-gradient(135deg, var(--primary), var(--secondary));
-  color: #ffffff;
-  box-shadow: 0 0 12px var(--primary-subtle);
+  border-radius: var(--radius-md);
+  background: var(--primary);
+  color: var(--text-inverse);
 }
 
 .brand-name {
@@ -692,14 +692,13 @@ button {
 .welcome-avatar-icon {
   width: 52px;
   height: 52px;
-  border-radius: 16px;
-  background: linear-gradient(135deg, var(--primary), var(--secondary));
+  border-radius: var(--radius-lg);
+  background: var(--primary);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #ffffff;
+  color: var(--text-inverse);
   margin-bottom: 16px;
-  box-shadow: 0 8px 24px var(--primary-subtle);
 }
 
 @keyframes welcomeRise {
@@ -4213,6 +4212,27 @@ a:focus-visible {
     width: calc(100vw - 16px);
     max-width: calc(100vw - 16px);
   }
+}
+
+/* ==========================================================================
+   Vintage Ledger overrides — squared controls, flat surfaces
+   ========================================================================== */
+.model-selector-pill,
+.topbar-search-trigger,
+.composer-send-button,
+.composer-icon-button,
+.quick-prompt-chip,
+.quick-prompt-toggle-btn,
+.model-category-tab {
+  border-radius: var(--radius-md);
+}
+
+.brand-name,
+.telemetry-modal-title,
+.export-modal-title,
+.pinned-drawer-title {
+  font-family: var(--font-heading);
+  letter-spacing: 0;
 }
 
 

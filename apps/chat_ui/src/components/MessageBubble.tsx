@@ -557,16 +557,16 @@ export const MessageBubbleImpl: React.FC<MessageBubbleProps> = ({
         style={{
           width: '36px',
           height: '36px',
-          borderRadius: '50%',
+          borderRadius: 'var(--radius-md)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           flexShrink: 0,
           background: isUser
             ? 'var(--bg-tertiary)'
-            : 'linear-gradient(135deg, #4285f4 0%, #9b51e0 50%, #e91e63 100%)',
-          color: '#ffffff',
-          boxShadow: isUser ? 'none' : '0 2px 10px rgba(66, 133, 244, 0.3)',
+            : 'var(--primary)',
+          color: isUser ? 'var(--text-secondary)' : 'var(--text-inverse)',
+          border: '1px solid var(--border-subtle)',
         }}
       >
         {isUser ? <User size={20} /> : <Sparkles size={20} />}
