@@ -401,12 +401,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
     try {
       const snap = await listTools(wsUrl);
       if (!snap.ok) { setToolsError(snap.error || 'Failed to load tools.'); return; }
-      setToolsList(snap.tools);
-      setToolsCategories(snap.categories);
-      setToolsTotal(snap.total);
-      setToolsEnabledCount(snap.enabled_count);
-    } catch (err) { setToolsError(err instanceof Error ? err.message : 'Could not load tools.'); }
-    finally { setToolsLoading(false); }
+      setToolsList(snap.tools || []);
+      setToolsCategories(snap.categories || []);
+      setToolsTotal(snap.total ?? (snap.tools || []).length);
+      setToolsEnabledCount(snap.enabled_count ?? (snap.tools || []).filter((t) => t.enabled).length);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Could not load tools.';
+      setToolsError(/failed to fetch|networkerror|load failed/i.test(msg)
+        ? 'Brain is offline — start the backend to load tools.'
+        : msg);
+    } finally { setToolsLoading(false); }
   }, [wsUrl]);
 
   const refreshMcp = useCallback(async () => {
@@ -414,10 +418,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
     try {
       const snap = await listMcpServers(wsUrl);
       if (!snap.ok) { setMcpError(snap.error || 'Failed to load MCP servers.'); return; }
-      setMcpServers(snap.servers);
-      setMcpTotalTools(snap.total_mcp_tools);
-    } catch (err) { setMcpError(err instanceof Error ? err.message : 'Could not load MCP servers.'); }
-    finally { setMcpLoading(false); }
+      setMcpServers(snap.servers || []);
+      setMcpTotalTools(snap.total_mcp_tools ?? 0);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Could not load MCP servers.';
+      setMcpError(/failed to fetch|networkerror|load failed/i.test(msg)
+        ? 'Brain is offline — start the backend to manage MCP servers.'
+        : msg);
+    } finally { setMcpLoading(false); }
   }, [wsUrl]);
 
   useEffect(() => {
@@ -425,6 +433,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
     void refreshTools();
     void refreshMcp();
   }, [isOpen, activeTab, refreshTools, refreshMcp]);
+
+  useEffect(() => {
+    if (!mcpStatus) return;
+    const t = window.setTimeout(() => setMcpStatus(''), 6000);
+    return () => window.clearTimeout(t);
+  }, [mcpStatus]);
 
   const handleToggleTool = async (tool: ToolEntry) => {
     const next = !tool.enabled;
@@ -466,11 +480,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
       setMcpFormOpen(false); setMcpFormName(''); setMcpFormCommand(''); setMcpFormUrl('');
       await refreshMcp();
       await refreshTools();
-    } catch (err) { setMcpError(err instanceof Error ? err.message : 'Failed to add MCP server.'); }
-    finally { setMcpFormSaving(false); }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to add MCP server.';
+      setMcpError(/failed to fetch|networkerror|load failed/i.test(msg)
+        ? 'Brain is offline — cannot add MCP server.'
+        : msg);
+    } finally { setMcpFormSaving(false); }
   };
 
   const handleDeleteMcp = async (name: string) => {
+    if (!window.confirm(`Remove MCP server "${name}"? It will be unregistered on reload.`)) return;
     setMcpError(''); setMcpStatus('');
     try {
       const res = await deleteMcpServer(name, wsUrl);
@@ -478,7 +497,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
       setMcpStatus(`Removed "${name}" — reloaded.`);
       await refreshMcp();
       await refreshTools();
-    } catch (err) { setMcpError(err instanceof Error ? err.message : 'Failed to delete MCP server.'); }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to delete MCP server.';
+      setMcpError(/failed to fetch|networkerror|load failed/i.test(msg)
+        ? 'Brain is offline — cannot delete MCP server.'
+        : msg);
+    }
   };
 
   const handleReloadMcp = async () => {
@@ -489,8 +513,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
       setMcpStatus(`Reloaded: ${res.servers_enabled ?? 0}/${res.servers_configured ?? 0} servers, ${res.mcp_tools_registered ?? 0} tools.`);
       await refreshMcp();
       await refreshTools();
-    } catch (err) { setMcpError(err instanceof Error ? err.message : 'Reload failed.'); }
-    finally { setMcpLoading(false); }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Reload failed.';
+      setMcpError(/failed to fetch|networkerror|load failed/i.test(msg)
+        ? 'Brain is offline — cannot reload MCP servers.'
+        : msg);
+    } finally { setMcpLoading(false); }
   };
 
   useEffect(() => {
@@ -955,7 +983,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
 
             {/* TOOLS & MCP */}
             {activeTab === 'tools' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
                 <div>
                   <h4 style={{ fontSize: '0.92rem', fontWeight: 600, color: 'var(--text-primary)', margin: '0 0 4px' }}>Registered Tools & MCP Servers</h4>
                   <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: 0 }}>
@@ -967,158 +995,177 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
                 {mcpError && <div className="inline-alert error">{mcpError}</div>}
                 {mcpStatus && <div className="inline-alert success"><CheckCircle2 size={15} /> {mcpStatus}</div>}
 
-                {/* ── Tools list ── */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
-                  <SLabel style={{ margin: 0 }}>
-                    Tools · {toolsEnabledCount}/{toolsTotal} enabled
-                    {toolsLoading && <LoaderCircle size={13} className="spin" style={{ marginLeft: 8, verticalAlign: 'middle' }} />}
-                  </SLabel>
-                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                    <SInput
-                      type="text" placeholder="Search tools…" value={toolsSearch}
-                      onChange={(e) => setToolsSearch(e.target.value)}
-                      style={{ width: '180px', fontSize: '0.78rem', padding: '6px 10px' }}
-                    />
-                    <SSelect
-                      value={toolsCategoryFilter}
-                      onChange={(e) => setToolsCategoryFilter(e.target.value)}
-                      style={{ width: '140px', fontSize: '0.78rem', padding: '6px 8px' }}
-                    >
-                      <option value="">All categories</option>
-                      {toolsCategories.map((c) => <option key={c} value={c}>{c}</option>)}
-                    </SSelect>
-                    <ActionBtn variant="ghost" onClick={() => { void refreshTools(); void refreshMcp(); }} title="Refresh">
-                      <RefreshCw size={13} className={toolsLoading ? 'spin' : ''} />
-                    </ActionBtn>
-                  </div>
-                </div>
-
-                <div style={{
-                  maxHeight: '260px', overflowY: 'auto', borderRadius: 'var(--radius-md)',
-                  border: '1px solid var(--border-subtle)', background: 'var(--bg-surface-elevated)',
-                }}>
-                  {(() => {
-                    const q = toolsSearch.trim().toLowerCase();
-                    const filtered = toolsList.filter((t) =>
-                      (!toolsCategoryFilter || t.category === toolsCategoryFilter) &&
-                      (!q || t.name.toLowerCase().includes(q) || t.description.toLowerCase().includes(q))
-                    );
-                    if (filtered.length === 0) {
-                      return <div style={{ padding: '16px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                        {toolsLoading ? 'Loading tools…' : 'No tools match.'}
-                      </div>;
-                    }
-                    return filtered.map((t) => (
-                      <div key={t.name} style={{
-                        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px',
-                        padding: '8px 12px', borderBottom: '1px solid var(--border-subtle)',
-                      }}>
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>{t.name}</span>
-                            <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'var(--bg-canvas)', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}>{t.category}</span>
-                            {t.source === 'mcp' && <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'var(--primary-subtle)', color: 'var(--primary)' }}>MCP</span>}
-                            {t.is_destructive && <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'var(--status-red-subtle, #fee2e2)', color: 'var(--status-red, #ef4444)' }}>RISKY</span>}
-                          </div>
-                          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.description}</div>
-                        </div>
-                        <ToggleSwitch checked={t.enabled} onChange={() => void handleToggleTool(t)} />
-                      </div>
-                    ));
-                  })()}
-                </div>
-
-                {/* ── MCP servers ── */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
-                  <SLabel style={{ margin: 0 }}>
-                    MCP Servers · {mcpServers.length} configured · {mcpTotalTools} tools registered
-                    {mcpLoading && <LoaderCircle size={13} className="spin" style={{ marginLeft: 8, verticalAlign: 'middle' }} />}
-                  </SLabel>
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <ActionBtn variant="ghost" onClick={() => void handleReloadMcp()} disabled={mcpLoading} title="Hot-reload MCP servers">
-                      <RefreshCw size={13} className={mcpLoading ? 'spin' : ''} /> Reload
-                    </ActionBtn>
-                    <ActionBtn variant="primary" onClick={() => setMcpFormOpen((v) => !v)}>
-                      <Plus size={13} /> Add Server
-                    </ActionBtn>
-                  </div>
-                </div>
-
-                {mcpFormOpen && (
+                {/* ── Tools section ── */}
+                <section style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                   <div style={{
-                    display: 'flex', flexDirection: 'column', gap: '10px', padding: '12px 14px',
-                    borderRadius: 'var(--radius-md)', border: '1px solid var(--primary-border)',
-                    background: 'var(--primary-subtle)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    gap: '10px', flexWrap: 'wrap',
+                    paddingBottom: '8px', borderBottom: '1px solid var(--border-subtle)',
                   }}>
-                    <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)' }}>Add external MCP server</div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                      <div>
-                        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>Name</div>
-                        <SInput value={mcpFormName} onChange={(e) => setMcpFormName(e.target.value)} placeholder="e.g. filesystem" />
-                      </div>
-                      <div>
-                        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>Transport</div>
-                        <SSelect value={mcpFormTransport} onChange={(e) => setMcpFormTransport(e.target.value as any)}>
-                          <option value="stdio">stdio (local command)</option>
-                          <option value="http">http (streamable)</option>
-                          <option value="sse">sse</option>
-                        </SSelect>
-                      </div>
+                    <div style={{ fontSize: '0.74rem', fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-muted)', fontFamily: 'var(--font-sans)', display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+                      <span>Tools · {toolsEnabledCount}/{toolsTotal} enabled</span>
+                      {toolsLoading && <LoaderCircle size={13} className="spin" />}
                     </div>
-                    {mcpFormTransport === 'stdio' ? (
-                      <div>
-                        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>Command</div>
-                        <SInput value={mcpFormCommand} onChange={(e) => setMcpFormCommand(e.target.value)} placeholder='npx -y @modelcontextprotocol/server-filesystem C:/Users' style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }} />
-                      </div>
-                    ) : (
-                      <div>
-                        <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>URL</div>
-                        <SInput value={mcpFormUrl} onChange={(e) => setMcpFormUrl(e.target.value)} placeholder="https://example.com/mcp" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }} />
-                      </div>
-                    )}
-                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-                      <ActionBtn variant="ghost" onClick={() => setMcpFormOpen(false)}>Cancel</ActionBtn>
-                      <ActionBtn variant="primary" onClick={() => void handleAddMcp()} disabled={mcpFormSaving}>
-                        {mcpFormSaving ? <LoaderCircle size={13} className="spin" /> : <Plus size={13} />} Add & Reload
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <SInput
+                        type="text" placeholder="Search tools…" value={toolsSearch}
+                        onChange={(e) => setToolsSearch(e.target.value)}
+                        style={{ width: '180px', fontSize: '0.78rem', padding: '6px 10px' }}
+                      />
+                      <SSelect
+                        value={toolsCategoryFilter}
+                        onChange={(e) => setToolsCategoryFilter(e.target.value)}
+                        style={{ width: '150px', fontSize: '0.78rem', padding: '6px 8px' }}
+                      >
+                        <option value="">All categories</option>
+                        {toolsCategories.map((c) => <option key={c} value={c}>{c}</option>)}
+                      </SSelect>
+                      <ActionBtn variant="ghost" onClick={() => { void refreshTools(); void refreshMcp(); }} title="Refresh" style={{ padding: '6px 10px' }}>
+                        <RefreshCw size={13} className={toolsLoading ? 'spin' : ''} />
                       </ActionBtn>
                     </div>
                   </div>
-                )}
 
-                <div style={{
-                  borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)',
-                  background: 'var(--bg-surface-elevated)', overflow: 'hidden',
-                }}>
-                  {mcpServers.length === 0 && !mcpLoading && (
-                    <div style={{ padding: '16px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                      No MCP servers configured. Add one above (stdio command or http URL).
+                  <div style={{
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--border-subtle)',
+                    background: 'var(--bg-surface-elevated)',
+                    overflow: 'hidden',
+                  }}>
+                    {(() => {
+                      const q = toolsSearch.trim().toLowerCase();
+                      const filtered = toolsList.filter((t) =>
+                        (!toolsCategoryFilter || t.category === toolsCategoryFilter) &&
+                        (!q || t.name.toLowerCase().includes(q) || (t.description || '').toLowerCase().includes(q))
+                      );
+                      if (filtered.length === 0) {
+                        return (
+                          <div style={{ padding: '20px 16px', fontSize: '0.8rem', color: 'var(--text-muted)', textAlign: 'center' }}>
+                            {toolsLoading ? 'Loading tools…' : toolsError ? 'Waiting for tool registry…' : 'No tools match.'}
+                          </div>
+                        );
+                      }
+                      return filtered.map((t, i) => (
+                        <div key={t.name} style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px',
+                          padding: '8px 12px',
+                          borderBottom: i < filtered.length - 1 ? '1px solid var(--border-subtle)' : 'none',
+                          background: t.enabled ? 'transparent' : 'rgba(0,0,0,0.12)',
+                        }}>
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                              <span style={{ fontSize: '0.8rem', fontWeight: 600, color: t.enabled ? 'var(--text-primary)' : 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{t.name}</span>
+                              <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'var(--bg-canvas)', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}>{t.category}</span>
+                              {t.source === 'mcp' && <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'var(--primary-subtle)', color: 'var(--primary)' }}>MCP</span>}
+                              {t.is_destructive && <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'var(--danger-subtle)', color: 'var(--danger)' }}>RISKY</span>}
+                            </div>
+                            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>{t.description || '—'}</div>
+                          </div>
+                          <ToggleSwitch checked={t.enabled} onChange={() => void handleToggleTool(t)} />
+                        </div>
+                      ));
+                    })()}
+                  </div>
+                </section>
+
+                {/* ── MCP section ── */}
+                <section style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <div style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    gap: '10px', flexWrap: 'wrap',
+                    paddingBottom: '8px', borderBottom: '1px solid var(--border-subtle)',
+                  }}>
+                    <div style={{ fontSize: '0.74rem', fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-muted)', fontFamily: 'var(--font-sans)', display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, flexWrap: 'wrap' }}>
+                      <span>MCP Servers · {mcpServers.length} configured · {mcpTotalTools} tools</span>
+                      {mcpLoading && <LoaderCircle size={13} className="spin" />}
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                      <ActionBtn variant="ghost" onClick={() => void handleReloadMcp()} disabled={mcpLoading} title="Hot-reload MCP servers" style={{ padding: '6px 12px' }}>
+                        <RefreshCw size={13} className={mcpLoading ? 'spin' : ''} /> Reload
+                      </ActionBtn>
+                      <ActionBtn variant="primary" onClick={() => setMcpFormOpen((v) => !v)} style={{ padding: '6px 12px' }}>
+                        <Plus size={13} /> {mcpFormOpen ? 'Close' : 'Add Server'}
+                      </ActionBtn>
+                    </div>
+                  </div>
+
+                  {mcpFormOpen && (
+                    <div style={{
+                      display: 'flex', flexDirection: 'column', gap: '10px', padding: '12px 14px',
+                      borderRadius: 'var(--radius-md)', border: '1px solid var(--primary-border)',
+                      background: 'var(--primary-subtle)',
+                    }}>
+                      <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-primary)' }}>Add external MCP server</div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px' }}>
+                        <div>
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>Name</div>
+                          <SInput value={mcpFormName} onChange={(e) => setMcpFormName(e.target.value)} placeholder="e.g. filesystem" />
+                        </div>
+                        <div>
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>Transport</div>
+                          <SSelect value={mcpFormTransport} onChange={(e) => setMcpFormTransport(e.target.value as any)}>
+                            <option value="stdio">stdio (local command)</option>
+                            <option value="http">http (streamable)</option>
+                            <option value="sse">sse</option>
+                          </SSelect>
+                        </div>
+                      </div>
+                      {mcpFormTransport === 'stdio' ? (
+                        <div>
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>Command</div>
+                          <SInput value={mcpFormCommand} onChange={(e) => setMcpFormCommand(e.target.value)} placeholder='npx -y @modelcontextprotocol/server-filesystem C:/Users' style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }} />
+                        </div>
+                      ) : (
+                        <div>
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginBottom: '4px' }}>URL</div>
+                          <SInput value={mcpFormUrl} onChange={(e) => setMcpFormUrl(e.target.value)} placeholder="https://example.com/mcp" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }} />
+                        </div>
+                      )}
+                      <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                        <ActionBtn variant="ghost" onClick={() => setMcpFormOpen(false)}>Cancel</ActionBtn>
+                        <ActionBtn variant="primary" onClick={() => void handleAddMcp()} disabled={mcpFormSaving}>
+                          {mcpFormSaving ? <LoaderCircle size={13} className="spin" /> : <Plus size={13} />} Add & Reload
+                        </ActionBtn>
+                      </div>
                     </div>
                   )}
-                  {mcpServers.map((s) => (
-                    <div key={s.name} style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px',
-                      padding: '10px 14px', borderBottom: '1px solid var(--border-subtle)',
-                    }}>
-                      <div style={{ minWidth: 0, flex: 1 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <span style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>{s.name}</span>
-                          <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'var(--bg-canvas)', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}>{s.transport}</span>
-                          {s.live
-                            ? <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'var(--success-subtle)', color: 'var(--success)', fontWeight: 600 }}>LIVE · {s.tools_registered}</span>
-                            : s.enabled
-                              ? <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: '#fef3c7', color: '#b45309', fontWeight: 600 }}>OFFLINE</span>
-                              : <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'var(--bg-canvas)', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}>DISABLED</span>}
-                        </div>
-                        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {s.command ? (Array.isArray(s.command) ? s.command.join(' ') : s.command) : s.url || '—'}
-                        </div>
+
+                  <div style={{
+                    borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)',
+                    background: 'var(--bg-surface-elevated)', overflow: 'hidden',
+                  }}>
+                    {mcpServers.length === 0 && !mcpLoading && (
+                      <div style={{ padding: '20px 16px', fontSize: '0.8rem', color: 'var(--text-muted)', textAlign: 'center' }}>
+                        {mcpError ? 'MCP list unavailable.' : 'No MCP servers configured. Add one above (stdio command or http URL).'}
                       </div>
-                      <ActionBtn variant="ghost" onClick={() => void handleDeleteMcp(s.name)} title="Remove server">
-                        <Trash2 size={13} />
-                      </ActionBtn>
-                    </div>
-                  ))}
-                </div>
+                    )}
+                    {mcpServers.map((s, i) => (
+                      <div key={s.name} style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px',
+                        padding: '10px 14px',
+                        borderBottom: i < mcpServers.length - 1 ? '1px solid var(--border-subtle)' : 'none',
+                      }}>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>{s.name}</span>
+                            <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'var(--bg-canvas)', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}>{s.transport}</span>
+                            {s.live
+                              ? <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'var(--success-subtle)', color: 'var(--success)', fontWeight: 600 }}>LIVE · {s.tools_registered}</span>
+                              : s.enabled
+                                ? <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'rgba(251, 191, 36, 0.15)', color: '#d97706', fontWeight: 600 }}>OFFLINE</span>
+                                : <span style={{ fontSize: '0.62rem', padding: '1px 6px', borderRadius: 'var(--radius-full)', background: 'var(--bg-canvas)', border: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}>DISABLED</span>}
+                          </div>
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>
+                            {s.command ? (Array.isArray(s.command) ? s.command.join(' ') : s.command) : s.url || '—'}
+                          </div>
+                        </div>
+                        <ActionBtn variant="ghost" onClick={() => void handleDeleteMcp(s.name)} title="Remove server" style={{ padding: '6px 10px', flexShrink: 0 }}>
+                          <Trash2 size={13} />
+                        </ActionBtn>
+                      </div>
+                    ))}
+                  </div>
+                </section>
               </div>
             )}
 
