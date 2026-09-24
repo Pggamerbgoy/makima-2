@@ -143,6 +143,18 @@ export const MermaidChart: React.FC<MermaidChartProps> = ({ chart, subType }) =>
     );
   }
 
+  if (!svgContent) {
+    return (
+      <div style={{
+        padding: '16px', borderRadius: '12px', margin: '12px 0',
+        backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-muted)',
+        fontSize: '0.82rem', textAlign: 'center',
+      }}>
+        Rendering chart…
+      </div>
+    );
+  }
+
   return (
     <div
       ref={containerRef}

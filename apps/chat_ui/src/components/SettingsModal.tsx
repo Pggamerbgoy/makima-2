@@ -69,6 +69,9 @@ const ModelSelectorPanel: React.FC<ModelSelectorPanelProps> = ({
       {savedMessage && <div className="inline-alert success"><CheckCircle2 size={15} /> {savedMessage}</div>}
 
       <div className="provider-grid">
+        {providers.length === 0 && loading && (
+          <div className="empty-provider-state">Loading providers from Makima Brain…</div>
+        )}
         {providers.length === 0 && !loading && (
           <div className="empty-provider-state">No providers returned. Check that Makima Brain is running.</div>
         )}
@@ -112,6 +115,7 @@ const ModelSelectorPanel: React.FC<ModelSelectorPanelProps> = ({
                     color: isSelected ? 'var(--primary)' : 'var(--text-primary)',
                     cursor: 'pointer',
                     transition: 'all 0.15s',
+                    maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                   }}
                   onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.borderColor = 'var(--primary-border)'; }}
                   onMouseLeave={(e) => { if (!isSelected) e.currentTarget.style.borderColor = 'var(--border-subtle)'; }}
@@ -159,8 +163,8 @@ const ModelSelectorPanel: React.FC<ModelSelectorPanelProps> = ({
       )}
 
       <div className="model-selector-footer">
-        <span>{selected?.enabled ? 'Provider enabled' : 'Provider disabled'}</span>
-        <button className="primary-action" onClick={onSave} disabled={saving || !providerId || !model.trim()} type="button">
+        <span>{providers.length === 0 ? 'Brain offline — providers unavailable' : selected?.enabled ? 'Provider enabled' : 'Provider disabled'}</span>
+        <button className="primary-action" onClick={onSave} disabled={saving || !providerId || !model.trim() || providers.length === 0} type="button" title={providers.length === 0 ? 'Start Makima Brain to apply a model' : 'Apply model'}>
           {saving ? <LoaderCircle size={16} className="spin" /> : <CheckCircle2 size={16} />}
           Apply model
         </button>
@@ -238,18 +242,18 @@ const SLabel: React.FC<{ children: React.ReactNode; style?: React.CSSProperties 
 // ── Setting Row ───────────────────────────────────────────────────────────────
 const SettingRow: React.FC<{ label: string; desc?: string; icon?: React.ReactNode; control: React.ReactNode }> = ({ label, desc, icon, control }) => (
   <div style={{
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap',
     padding: '12px 14px', borderRadius: 'var(--radius-md)',
     border: '1px solid var(--border-subtle)', background: 'var(--bg-surface-elevated)', gap: '14px',
   }}>
-    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: '200px' }}>
       {icon && <span style={{ color: 'var(--primary)', flexShrink: 0 }}>{icon}</span>}
-      <div>
+      <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: '0.84rem', fontWeight: 600, color: 'var(--text-primary)' }}>{label}</div>
         {desc && <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: '2px', lineHeight: 1.4 }}>{desc}</div>}
       </div>
     </div>
-    {control}
+    <div style={{ flexShrink: 0 }}>{control}</div>
   </div>
 );
 
@@ -351,6 +355,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
   const [pingLatency, setPingLatency]   = useState<number | null>(null);
   const [pingLoading, setPingLoading]   = useState(false);
   const [pingError, setPingError]       = useState('');
+  const [autonomyNotice, setAutonomyNotice] = useState('');
   const [ollamaModelName, setOllamaModelName] = useState('');
   const [ollamaLoading, setOllamaLoading]     = useState(false);
   const [ollamaStatus, setOllamaStatus]       = useState('');
@@ -443,6 +448,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
 
   const handleToggleTool = async (tool: ToolEntry) => {
     const next = !tool.enabled;
+    if (next && tool.is_destructive && !window.confirm(`Enable destructive tool "${tool.name}"? It can modify or delete data.`)) return;
     setToolsList((prev) => prev.map((t) => (t.name === tool.name ? { ...t, enabled: next } : t)));
     try {
       const res = await setToolEnabled(tool.name, next, wsUrl);
@@ -542,7 +548,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
       setProviders(next);
       const active = next.find((p) => p.id === preferredId) || next[0];
       if (active) { setLlmProvider(active.id); setModel((c) => active.models.includes(c) ? c : active.model); setBaseUrl(active.baseUrl || ''); }
-    } catch (err) { setProviderError(err instanceof Error ? err.message : 'Could not load providers.'); }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Could not load providers.';
+      setProviderError(/failed to fetch|networkerror|load failed/i.test(msg)
+        ? 'Brain is offline — start the backend to load providers.'
+        : msg);
+    }
     finally { setProvidersLoading(false); }
   }, [wsUrl]);
 
@@ -600,7 +611,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
       }
       onSave({ ...settings, llmProvider: saved.id, model: saved.model, apiKeys: nextApiKeys });
       setProviderSaved(`${saved.name} · ${saved.model} is active.`);
-    } catch (err) { setProviderError(err instanceof Error ? err.message : 'Could not save provider.'); }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Could not save provider.';
+      setProviderError(/failed to fetch|networkerror|load failed/i.test(msg)
+        ? 'Brain is offline — provider not saved.'
+        : msg);
+    }
     finally { setProvidersSaving(false); }
   };
 
@@ -704,7 +720,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
         onClick={(e) => e.stopPropagation()}
       >
         {/* ── SIDEBAR ── */}
-        <div style={{
+        <div className="settings-modal-sidebar" style={{
           width: '210px', flexShrink: 0,
           background: 'var(--bg-canvas)', borderRight: '1px solid var(--border-subtle)',
           padding: '20px 12px', display: 'flex', flexDirection: 'column', gap: '4px',
@@ -713,7 +729,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
             <div style={{ width: 28, height: 28, borderRadius: 'var(--radius-sm)', background: 'var(--primary-subtle)', border: '1px solid var(--primary-border)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--primary)', flexShrink: 0 }}>
               <Sliders size={15} />
             </div>
-            <div>
+            <div className="settings-sidebar-head-text">
               <div style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-primary)' }}>Settings</div>
               <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Makima Intelligence</div>
             </div>
@@ -736,14 +752,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
                   fontFamily: 'inherit',
                 }}
               >
-                <Icon size={16} /><span>{tab.label}</span>
+                <Icon size={16} /><span className="settings-sidebar-label">{tab.label}</span>
               </button>
             );
           })}
 
           <div style={{ marginTop: 'auto', borderTop: '1px solid var(--border-subtle)', paddingTop: '12px' }}>
             <ActionBtn variant="danger" onClick={handleResetDefaults} style={{ width: '100%', justifyContent: 'center', fontSize: '0.75rem', padding: '8px' }}>
-              <Trash2 size={13} /> Reset Defaults
+              <Trash2 size={13} /> <span className="settings-sidebar-label">Reset Defaults</span>
             </ActionBtn>
           </div>
         </div>
@@ -906,17 +922,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
                 />
 
                 <SLabel>Autonomy — Proactive Execution</SLabel>
+                {autonomyNotice && <div className="inline-alert error">{autonomyNotice}</div>}
                 <SettingRow
                   label="Autonomous Action Execution"
                   desc="Off = never. Suggest = propose ideas only. Auto = safe tools execute autonomously; risky ones always confirm."
                   icon={<Zap size={16} />}
                   control={
-                    <div style={{ display: 'flex', gap: '6px' }}>
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                       {(['off', 'suggest', 'auto'] as const).map((m) => (
                         <button
                           key={m}
                           type="button"
-                          onClick={() => { setAutonomyMode(m); localStorage.setItem('makima_autonomy_mode', m); wsClient.setAutonomyMode(m); }}
+                          onClick={() => {
+                            setAutonomyMode(m); localStorage.setItem('makima_autonomy_mode', m);
+                            if (wsConnected) { wsClient.setAutonomyMode(m); setAutonomyNotice(''); }
+                            else { setAutonomyNotice('Brain is offline — saved on this device only, will sync on reconnect.'); }
+                          }}
                           style={{
                             padding: '5px 12px', fontSize: '0.75rem', fontWeight: autonomyMode === m ? 600 : 500,
                             borderRadius: 'var(--radius-sm)', cursor: 'pointer', textTransform: 'capitalize',
@@ -1270,6 +1291,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, settings, 
               connector={selectedConnector}
               initialKey={connectorKeys[selectedConnector.id] || ''}
               wsUrl={wsUrl}
+              offline={!wsConnected}
               onClose={() => setSelectedConnector(null)}
               onSaveKey={(val) => handleSaveConnectorKey(selectedConnector.id, val)}
               onClearKey={() => handleSaveConnectorKey(selectedConnector.id, '')}
@@ -1293,10 +1315,11 @@ const ConnectorConfigSubModal: React.FC<{
   connector: AppConnectorConfig;
   initialKey: string;
   wsUrl?: string;
+  offline?: boolean;
   onClose: () => void;
   onSaveKey: (val: string) => void;
   onClearKey: () => void;
-}> = ({ connector, initialKey, wsUrl, onClose, onSaveKey, onClearKey }) => {
+}> = ({ connector, initialKey, wsUrl, offline, onClose, onSaveKey, onClearKey }) => {
   const [val, setVal]           = useState(initialKey);
   const [showKey, setShowKey]   = useState(false);
   const [testing, setTesting]   = useState(false);
@@ -1407,6 +1430,12 @@ const ConnectorConfigSubModal: React.FC<{
         <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '16px', lineHeight: 1.5 }}>
           {connector.desc}. Enter credentials to authorize Makima OS:
         </p>
+
+        {offline && (
+          <div className="inline-alert error" style={{ marginBottom: '16px' }}>
+            Brain is offline — key is stored on this device only.
+          </div>
+        )}
 
         {oauthProvider && (
           <div

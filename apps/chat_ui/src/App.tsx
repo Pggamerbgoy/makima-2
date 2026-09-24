@@ -102,6 +102,7 @@ export const App: React.FC = () => {
   const [settingsTab, setSettingsTab] = useState<'models' | 'general' | 'connectors' | 'voice' | 'developer' | 'tools'>('models');
   const [modelPopoverOpen, setModelPopoverOpen] = useState<boolean>(false);
   const [providers, setProviders] = useState<LLMProvider[]>([]);
+  const [providersLoaded, setProvidersLoaded] = useState(false);
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [activeCanvasItem, setActiveCanvasItem] = useState<CanvasItem | null>(null);
 
@@ -226,6 +227,9 @@ export const App: React.FC = () => {
       })
       .catch((err) => {
         console.warn('[App] Could not load LLM providers on startup:', err);
+      })
+      .finally(() => {
+        if (mounted) setProvidersLoaded(true);
       });
     return () => {
       mounted = false;
@@ -1720,6 +1724,7 @@ export const App: React.FC = () => {
               isOpen
               onClose={() => setModelPopoverOpen(false)}
               providers={providers}
+              isLoading={!providersLoaded}
               activeProviderId={settings.llmProvider}
               activeModel={settings.model}
               onSelectModel={handleSelectModel}

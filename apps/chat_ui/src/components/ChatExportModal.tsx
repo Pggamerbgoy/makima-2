@@ -131,7 +131,7 @@ export const ChatExportModal: React.FC<ChatExportModalProps> = ({
   };
 
   const handleDownload = () => {
-    if (!session) return;
+    if (!session || !session.messages.length) { onToast('Nothing to export yet', 'error'); return; }
     const ext = format === 'markdown' ? 'md' : format === 'json' ? 'json' : 'txt';
     const cleanTitle = (session.title || 'makima_chat').replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
     const dateStr = new Date().toISOString().slice(0, 10);
@@ -269,7 +269,7 @@ export const ChatExportModal: React.FC<ChatExportModalProps> = ({
             <button className="export-btn outline" onClick={onClose}>
               Cancel
             </button>
-            <button className="export-btn primary" onClick={handleDownload}>
+            <button className="export-btn primary" onClick={handleDownload} disabled={!session?.messages.length} title={!session?.messages.length ? 'No messages to export yet' : 'Download file'}>
               <FileDown size={15} />
               <span>Download File</span>
             </button>

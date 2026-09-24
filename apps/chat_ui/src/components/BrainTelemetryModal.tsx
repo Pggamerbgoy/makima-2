@@ -142,7 +142,10 @@ export const BrainTelemetryModal: React.FC<BrainTelemetryModalProps> = ({
       const rtt = await wsClient.ping();
       setLatency(rtt);
     } catch (err: any) {
-      setPingError(err?.message || 'Ping timed out');
+      const msg = err?.message || 'Ping timed out';
+      setPingError(/failed to fetch|networkerror|load failed/i.test(msg)
+        ? 'Brain is offline — cannot measure latency.'
+        : msg);
       setLatency(null);
     } finally {
       setIsPinging(false);
@@ -156,7 +159,10 @@ export const BrainTelemetryModal: React.FC<BrainTelemetryModalProps> = ({
       const data = await getSystemStatus(settings.wsUrl);
       setSystemStatus(data);
     } catch (err: any) {
-      setStatusError(err?.message || 'Failed to fetch status');
+      const msg = err?.message || 'Failed to fetch status';
+      setStatusError(/failed to fetch|networkerror|load failed/i.test(msg)
+        ? 'Brain is offline — system metrics unavailable.'
+        : msg);
     } finally {
       setStatusLoading(false);
     }

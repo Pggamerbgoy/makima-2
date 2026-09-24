@@ -112,6 +112,20 @@ export const MessageBubbleImpl: React.FC<MessageBubbleProps> = ({
   const [editText, setEditText] = useState(message.text);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [showModifyMenu, setShowModifyMenu] = useState(false);
+  const modifyMenuRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!showModifyMenu) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (modifyMenuRef.current && !modifyMenuRef.current.contains(e.target as Node)) setShowModifyMenu(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowModifyMenu(false); };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [showModifyMenu]);
 
   // TTS via Makima's voice system (Gemini Live / Kokoro)
   const ttsSessionIdRef = useRef<string | null>(null);
@@ -854,10 +868,12 @@ export const MessageBubbleImpl: React.FC<MessageBubbleProps> = ({
             </button>
 
             {/* Modify Response button (Sliders) */}
-            <div style={{ position: 'relative' }}>
+            <div style={{ position: 'relative' }} ref={modifyMenuRef}>
               <button
                 onClick={() => setShowModifyMenu(!showModifyMenu)}
                 title="Modify response"
+                aria-haspopup="menu"
+                aria-expanded={showModifyMenu}
                 style={{
                   background: 'transparent',
                   border: 'none',
@@ -874,6 +890,7 @@ export const MessageBubbleImpl: React.FC<MessageBubbleProps> = ({
 
               {showModifyMenu && (
                 <div
+                  role="menu"
                   style={{
                     position: 'absolute',
                     top: '32px',
@@ -884,6 +901,8 @@ export const MessageBubbleImpl: React.FC<MessageBubbleProps> = ({
                     padding: '8px 0',
                     zIndex: 10,
                     width: '160px',
+                    maxHeight: '240px',
+                    overflowY: 'auto',
                     boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
                   }}
                 >

@@ -14,8 +14,25 @@ export const MediaLibraryPanel: React.FC<Props> = ({ wsUrl, onClose, onSelect })
   const [items, setItems] = useState<MediaLibraryEntry[]>([]);
   const [filter, setFilter] = useState<MediaKind | undefined>();
   const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  useEffect(() => { listMedia(wsUrl, filter, query).then(setItems).catch((e) => setError(e.message)); }, [wsUrl, filter, query]);
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedQuery(query), 300);
+    return () => window.clearTimeout(t);
+  }, [query]);
+  useEffect(() => {
+    setLoading(true); setError('');
+    listMedia(wsUrl, filter, debouncedQuery)
+      .then(setItems)
+      .catch((e) => {
+        const msg = e instanceof Error ? e.message : 'Failed to load media.';
+        setError(/failed to fetch|networkerror|load failed/i.test(msg)
+          ? 'Brain is offline — media library unavailable.'
+          : msg);
+      })
+      .finally(() => setLoading(false));
+  }, [wsUrl, filter, debouncedQuery]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -54,7 +71,8 @@ export const MediaLibraryPanel: React.FC<Props> = ({ wsUrl, onClose, onSelect })
           <div className="library-item-name" title={item.name}>{item.name}</div>
           <div className="library-item-actions"><button onClick={() => onSelect(item)} title="Add attachment"><Check size={15} /></button><button onClick={() => remove(item)} title="Delete"><Trash2 size={15} /></button></div>
         </article>)}</div>
-        {!items.length && !error && <div className="library-empty">No media saved yet.</div>}
+        {!items.length && !error && !loading && <div className="library-empty">No media saved yet.</div>}
+        {loading && <div className="library-empty">Loading media…</div>}
       </motion.section>
     </motion.div>
   );

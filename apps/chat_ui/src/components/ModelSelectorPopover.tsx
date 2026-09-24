@@ -20,6 +20,7 @@ interface ModelSelectorPopoverProps {
   isOpen: boolean;
   onClose: () => void;
   providers: LLMProvider[];
+  isLoading?: boolean;
   activeProviderId: string;
   activeModel: string;
   onSelectModel: (providerId: string, model: string) => void;
@@ -32,6 +33,7 @@ export const ModelSelectorPopover: React.FC<ModelSelectorPopoverProps> = ({
   isOpen,
   onClose,
   providers,
+  isLoading,
   activeProviderId,
   activeModel,
   onSelectModel,
@@ -199,7 +201,11 @@ export const ModelSelectorPopover: React.FC<ModelSelectorPopoverProps> = ({
 
         {/* Providers & Models List */}
         <div className="model-popover-scroll-area">
-          {filteredProviders.length === 0 ? (
+          {isLoading && providers.length === 0 ? (
+            <div className="model-popover-empty">
+              <p>Loading models from Makima Brain…</p>
+            </div>
+          ) : filteredProviders.length === 0 ? (
             <div className="model-popover-empty">
               <p>No matching models or providers found.</p>
               <button
