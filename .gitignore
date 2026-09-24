@@ -297,3 +297,7 @@ fetch_sections.py
 list_files.py
 list_scratch_files.py
 show_readme.py
+
+# Built frontend shells served by brain (source lives in apps/chat_ui)
+apps/brain/static/
+apps/brain/web/assets/
