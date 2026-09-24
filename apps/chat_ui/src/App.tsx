@@ -1177,7 +1177,7 @@ export const App: React.FC = () => {
           top: 16,
           left: '50%',
           transform: 'translateX(-50%)',
-          zIndex: 100,
+          zIndex: 2000,
           display: 'flex',
           flexDirection: 'column',
           gap: 8,
@@ -1444,7 +1444,7 @@ export const App: React.FC = () => {
               title="Select AI Model or Provider"
             >
               <Sparkles size={13} className="model-sparkle-icon" />
-              <span>{settings.llmProvider.toUpperCase()} · {settings.model}</span>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, maxWidth: '220px' }}>{settings.llmProvider.toUpperCase()} · {settings.model}</span>
               <span style={{ opacity: 0.6, fontSize: '0.65rem' }}>▾</span>
             </button>
 

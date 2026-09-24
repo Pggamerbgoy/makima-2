@@ -70,7 +70,7 @@ export const MarkdownTable: React.FC<{ children?: ReactNode; [key: string]: any 
       md += '| ' + matrix[r].map((cell, idx) => (cell || '').padEnd(colWidths[idx])).join(' | ') + ' |\n';
     }
 
-    navigator.clipboard?.writeText(md.trim());
+    navigator.clipboard?.writeText(md.trim())?.catch?.(() => {});
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -86,7 +86,7 @@ export const MarkdownTable: React.FC<{ children?: ReactNode; [key: string]: any 
           .join(',')
       )
       .join('\n');
-    navigator.clipboard?.writeText(csv);
+    navigator.clipboard?.writeText(csv)?.catch?.(() => {});
     setCopiedCsv(true);
     setTimeout(() => setCopiedCsv(false), 2000);
   };
@@ -199,7 +199,8 @@ export const buildCanvasMarkdownComponents = ({ onOpenCanvas, onImageClick }: Ca
     return (
       <code
         style={{
-          backgroundColor: 'rgba(255, 255, 255, 0.08)',
+          backgroundColor: 'var(--code-hover-bg)',
+          border: '1px solid var(--border-subtle)',
           padding: '2px 6px',
           borderRadius: '4px',
           fontSize: '0.88em',

@@ -126,16 +126,16 @@ export const MermaidChart: React.FC<MermaidChartProps> = ({ chart, subType }) =>
     return (
       <div style={{ 
         padding: '12px', 
-        border: '1px solid rgba(244, 67, 54, 0.4)', 
+        border: '1px solid var(--danger)', 
         borderRadius: '8px', 
-        color: '#ff8a80', 
-        backgroundColor: 'rgba(244, 67, 54, 0.08)', 
+        color: 'var(--danger)', 
+        backgroundColor: 'var(--danger-subtle)', 
         fontSize: '0.85rem',
         margin: '12px 0'
       }}>
         <strong>Mermaid Syntax Error:</strong>
         <pre style={{ marginTop: '8px', whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: '0.75rem', maxHeight: '120px', overflowY: 'auto' }}>{error}</pre>
-        <details style={{ marginTop: '8px', fontSize: '0.7rem', color: '#aaa' }}>
+        <details style={{ marginTop: '8px', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
           <summary style={{ cursor: 'pointer' }}>Show raw chart</summary>
           <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace', marginTop: '6px' }}>{chart}</pre>
         </details>
@@ -155,6 +155,8 @@ export const MermaidChart: React.FC<MermaidChartProps> = ({ chart, subType }) =>
         borderRadius: '12px',
         margin: '12px 0',
         overflowX: 'auto',
+        overflowY: 'auto',
+        maxHeight: '420px',
         boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.2)',
       }}
       dangerouslySetInnerHTML={{ __html: svgContent }}

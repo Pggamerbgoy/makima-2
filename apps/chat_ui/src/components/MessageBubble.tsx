@@ -301,7 +301,8 @@ export const MessageBubbleImpl: React.FC<MessageBubbleProps> = ({
                     return (
                       <code
                         style={{
-                          backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                          backgroundColor: 'var(--code-hover-bg)',
+                          border: '1px solid var(--border-subtle)',
                           padding: '2px 6px',
                           borderRadius: '4px',
                           fontSize: '0.88em',
@@ -430,10 +431,9 @@ export const MessageBubbleImpl: React.FC<MessageBubbleProps> = ({
                             padding: '10px 14px',
                             margin: '8px 0',
                             borderRadius: '10px',
-                            background: 'rgba(15, 23, 42, 0.65)',
+                            background: 'var(--bg-surface-elevated)',
                             border: `1px solid ${borderColor}`,
-                            backdropFilter: 'blur(8px)',
-                            boxShadow: '0 4px 14px rgba(0, 0, 0, 0.25)',
+                            boxShadow: 'var(--shadow-sm)',
                             maxWidth: '100%',
                           }}
                         >
@@ -465,8 +465,8 @@ export const MessageBubbleImpl: React.FC<MessageBubbleProps> = ({
                               onClick={() => handleCopyText(cleanPath)}
                               title="Copy File Path"
                               style={{
-                                background: 'rgba(255, 255, 255, 0.08)',
-                                border: 'none',
+                                background: 'var(--code-hover-bg)',
+                                border: '1px solid var(--border-subtle)',
                                 color: 'var(--text-muted)',
                                 padding: '6px 8px',
                                 borderRadius: '6px',
@@ -818,7 +818,7 @@ export const MessageBubbleImpl: React.FC<MessageBubbleProps> = ({
 
         {/* Action Controls for AI messages - Authentic Gemini Toolbar */}
         {!isUser && !message.isStreaming && Boolean(message.text?.trim()) && (
-          <div style={{ display: 'flex', gap: '6px', marginTop: '12px', alignItems: 'center', position: 'relative' }}>
+          <div style={{ display: 'flex', gap: '6px', marginTop: '12px', alignItems: 'center', position: 'relative', flexWrap: 'wrap' }}>
             <button
               onClick={() => handleFeedback(true)}
               title="Good response"

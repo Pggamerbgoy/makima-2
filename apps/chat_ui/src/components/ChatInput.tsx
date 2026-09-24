@@ -77,6 +77,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [isRecording, setIsRecording] = useState(false);
+  const [micError, setMicError] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -138,7 +139,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const handleDrop = (files: File[]) => { files.forEach((file) => void addFile(file)); setMenuOpen(false); };
   const { getRootProps, getInputProps, isDragActive, open } = useDropzone({ onDrop: handleDrop, accept, noClick: true, noKeyboard: true, multiple: true });
   const remove = (id: string) => setAttachments((prev) => { const item = prev.find((entry) => entry.id === id); if (item?.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(item.previewUrl); return prev.filter((entry) => entry.id !== id); });
-  const handleSend = () => { const ready = attachments.filter((entry) => entry.uploadState === 'ready' && entry.mediaId); if ((!text.trim() && !ready.length) || disabled || attachments.some((entry) => entry.uploadState === 'uploading')) return; onSendMessage(text.trim(), ready); setText(''); attachments.forEach((entry) => entry.previewUrl?.startsWith('blob:') && URL.revokeObjectURL(entry.previewUrl)); setAttachments([]); };
+  const isUploading = attachments.some((entry) => entry.uploadState === 'uploading');
+  const handleSend = () => { const ready = attachments.filter((entry) => entry.uploadState === 'ready' && entry.mediaId); if ((!text.trim() && !ready.length) || disabled || isUploading) return; onSendMessage(text.trim(), ready); setText(''); attachments.forEach((entry) => entry.previewUrl?.startsWith('blob:') && URL.revokeObjectURL(entry.previewUrl)); setAttachments([]); };
   const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => { const image = Array.from(event.clipboardData.files).find((file) => file.type.startsWith('image/')); if (image) { event.preventDefault(); void addFile(image); } };
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (filteredCommands.length > 0) {
@@ -172,14 +174,15 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   };
 
   const startRecording = async () => {
+    setMicError('');
     setIsRecording(true); onRecordingChange?.(true); wsClient.sendPTTDown();
     try { const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } }); const recorder = new MediaRecorder(stream); mediaRecorderRef.current = recorder; audioChunksRef.current = []; recorder.ondataavailable = (event) => event.data.size && audioChunksRef.current.push(event.data); recorder.onstop = () => { const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' }); void recorderBlobToPcmBase64(blob).then((audio) => wsClient.sendPTTUp(audio)).catch((err) => { console.error('[ChatInput] PCM encode failed:', err); wsClient.sendPTTUp(); }).finally(() => stream.getTracks().forEach((track) => track.stop())); }; recorder.start(); } catch (err) {
       const msg = err instanceof DOMException && err.name === 'NotAllowedError'
         ? 'Microphone permission denied. Allow mic access in browser settings.'
         : 'Could not start microphone recording.';
       console.error('[ChatInput] Recording error:', err);
-      // Show inline text near the mic button via text state (no toast API available here)
-      setText((prev) => prev || msg);
+      setMicError(msg);
+      window.setTimeout(() => setMicError(''), 6000);
       setIsRecording(false); onRecordingChange?.(false); wsClient.sendPTTUp();
     }
   };
@@ -249,7 +252,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               key="send"
               className="composer-send-button"
               onClick={handleSend}
-              disabled={disabled || (!text.trim() && !attachments.some((entry) => entry.uploadState === 'ready'))}
+              disabled={disabled || isUploading || (!text.trim() && !attachments.some((entry) => entry.uploadState === 'ready'))}
+              title={isUploading ? 'Waiting for upload to finish…' : 'Send message'}
               aria-label="Send message"
               initial={{ scale: 0.7, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
@@ -261,6 +265,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           )}
         </AnimatePresence>
       </div>
+      {micError && <div style={{ fontSize: '0.75rem', color: 'var(--danger)', padding: '4px 14px 0' }}>{micError}</div>}
       <div className="composer-hint">
         {onOpenModelSelector && (
           <button

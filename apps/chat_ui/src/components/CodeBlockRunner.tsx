@@ -34,9 +34,10 @@ export const CodeBlockRunner: React.FC<CodeBlockRunnerProps> = ({
   }, [cleanString, language]);
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(codeString);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    navigator.clipboard.writeText(codeString).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {});
   };
 
   const handleRunCode = () => {
@@ -162,7 +163,7 @@ export const CodeBlockRunner: React.FC<CodeBlockRunnerProps> = ({
       </div>
 
       {/* Code body */}
-      <pre>
+      <pre style={{ margin: 0, maxHeight: '380px', overflow: 'auto' }}>
         {highlightedHtml ? (
           <code
             className={`hljs language-${language}`}
@@ -177,18 +178,18 @@ export const CodeBlockRunner: React.FC<CodeBlockRunnerProps> = ({
       {output !== null && (
         <div
           style={{
-            borderTop: '1px solid #2a2a2a',
-            backgroundColor: '#050505',
+            borderTop: '1px solid var(--border-subtle)',
+            backgroundColor: 'var(--code-bg)',
             padding: '10px 14px',
             fontSize: '0.82rem',
             fontFamily: 'monospace',
-            color: '#4caf50',
+            color: 'var(--text-primary)',
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '6px' }}>
             <Terminal size={12} /> Console Output
           </div>
-          <pre style={{ margin: 0, padding: 0, whiteSpace: 'pre-wrap', color: output.includes('[Runtime Error]') ? '#f44336' : '#e0e0e0' }}>
+          <pre style={{ margin: 0, padding: 0, whiteSpace: 'pre-wrap', color: output.includes('[Runtime Error]') ? 'var(--danger)' : 'var(--text-primary)', maxHeight: '300px', overflow: 'auto' }}>
             {output}
           </pre>
           {(output.includes('[Python 3.12 Sandboxed]') || output.includes('[Compiler]')) && (
@@ -196,17 +197,18 @@ export const CodeBlockRunner: React.FC<CodeBlockRunnerProps> = ({
               type="button"
               onClick={() => {
                 const prompt = `Please execute this ${language} script and show the output:\n\`\`\`${language}\n${cleanString}\n\`\`\``;
-                navigator.clipboard.writeText(prompt);
-                setCopiedPrompt(true);
-                setTimeout(() => setCopiedPrompt(false), 2500);
+                navigator.clipboard.writeText(prompt).then(() => {
+                  setCopiedPrompt(true);
+                  setTimeout(() => setCopiedPrompt(false), 2500);
+                }).catch(() => {});
               }}
               style={{
                 marginTop: '10px',
                 padding: '5px 12px',
                 borderRadius: 'var(--radius-sm, 4px)',
-                background: 'rgba(66, 133, 244, 0.15)',
-                border: '1px solid rgba(66, 133, 244, 0.35)',
-                color: '#60a5fa',
+                background: 'var(--primary-subtle)',
+                border: '1px solid var(--primary-border)',
+                color: 'var(--primary)',
                 fontSize: '0.75rem',
                 fontWeight: 500,
                 cursor: 'pointer',

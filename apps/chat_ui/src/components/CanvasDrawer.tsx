@@ -98,7 +98,7 @@ export const CanvasDrawer: React.FC<CanvasDrawerProps> = ({ item, onClose }) => 
           flexShrink: 0,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0, flex: 1 }}>
           <div
             style={{
               width: 30,
@@ -114,14 +114,14 @@ export const CanvasDrawer: React.FC<CanvasDrawerProps> = ({ item, onClose }) => 
           >
             {isMarkdown ? <FileText size={15} /> : <Code size={15} />}
           </div>
-          <div>
-            <h3 style={{ fontSize: '0.86rem', fontWeight: 600, color: 'var(--text-primary)', margin: 0 }}>{item.title}</h3>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <h3 style={{ fontSize: '0.86rem', fontWeight: 600, color: 'var(--text-primary)', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.title}</h3>
             <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontFamily: 'var(--font-mono)' }}>{item.language}</span>
           </div>
         </div>
 
         {/* Action Controls */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
           {isMarkdown && (
             <div
               style={{

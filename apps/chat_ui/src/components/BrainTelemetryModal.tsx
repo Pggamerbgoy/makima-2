@@ -331,7 +331,7 @@ export const BrainTelemetryModal: React.FC<BrainTelemetryModalProps> = ({
                       : 'N/A'}
                   </span>
                 </div>
-                <div style={{ height: 4, background: 'rgba(255,255,255,0.08)', borderRadius: 2, overflow: 'hidden', margin: '4px 0 2px' }}>
+                <div style={{ height: 4, background: 'var(--border-subtle)', borderRadius: 2, overflow: 'hidden', margin: '4px 0 2px' }}>
                   <div
                     style={{
                       height: '100%',
@@ -363,7 +363,7 @@ export const BrainTelemetryModal: React.FC<BrainTelemetryModalProps> = ({
                       : 'N/A'}
                   </span>
                 </div>
-                <div style={{ height: 4, background: 'rgba(255,255,255,0.08)', borderRadius: 2, overflow: 'hidden', margin: '4px 0 2px' }}>
+                <div style={{ height: 4, background: 'var(--border-subtle)', borderRadius: 2, overflow: 'hidden', margin: '4px 0 2px' }}>
                   <div
                     style={{
                       height: '100%',
@@ -400,7 +400,7 @@ export const BrainTelemetryModal: React.FC<BrainTelemetryModalProps> = ({
                       : 'Active'}
                   </span>
                 </div>
-                <div style={{ height: 4, background: 'rgba(255,255,255,0.08)', borderRadius: 2, overflow: 'hidden', margin: '4px 0 2px' }}>
+                <div style={{ height: 4, background: 'var(--border-subtle)', borderRadius: 2, overflow: 'hidden', margin: '4px 0 2px' }}>
                   <div
                     style={{
                       height: '100%',
@@ -432,7 +432,7 @@ export const BrainTelemetryModal: React.FC<BrainTelemetryModalProps> = ({
                       : 'N/A'}
                   </span>
                 </div>
-                <div style={{ height: 4, background: 'rgba(255,255,255,0.08)', borderRadius: 2, overflow: 'hidden', margin: '4px 0 2px' }}>
+                <div style={{ height: 4, background: 'var(--border-subtle)', borderRadius: 2, overflow: 'hidden', margin: '4px 0 2px' }}>
                   <div
                     style={{
                       height: '100%',
