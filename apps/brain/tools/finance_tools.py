@@ -1,28 +1,68 @@
 import asyncio
+import json
 import logging
 import re
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 logger = logging.getLogger("makima.os.finance")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
+_DEFAULT_BASE = Path.home() / ".makima"
+_EXPENSES_PATH = _DEFAULT_BASE / "finance_expenses.json"
+
+
 class FinanceStore:
-    """High-performance, thread-safe async in-memory cache for financial records."""
-    
-    def __init__(self) -> None:
+    """Thread-safe expense store with atomic JSON persistence under ~/.makima/."""
+
+    def __init__(self, path: Optional[Path] = None) -> None:
         self._lock: Optional[asyncio.Lock] = None
-        self._expenses: List[Dict[str, Any]] = []
+        self._path: Path = Path(path) if path else _EXPENSES_PATH
+        self._expenses: List[Dict[str, Any]] = self._load()
 
     def _get_lock(self) -> asyncio.Lock:
         if self._lock is None:
             self._lock = asyncio.Lock()
         return self._lock
 
+    def _load(self) -> List[Dict[str, Any]]:
+        try:
+            if self._path.exists():
+                raw = json.loads(self._path.read_text(encoding="utf-8"))
+                if isinstance(raw, list):
+                    for item in raw:
+                        if isinstance(item, dict) and "timestamp" in item:
+                            try:
+                                item["timestamp"] = datetime.fromisoformat(str(item["timestamp"]))
+                            except (TypeError, ValueError):
+                                pass
+                    return raw
+        except (OSError, ValueError) as e:
+            logger.warning("Failed to load finance expenses from %s: %s", self._path, e)
+        return []
+
+    def _save(self) -> None:
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            payload = []
+            for e in self._expenses:
+                row = dict(e)
+                ts = row.get("timestamp")
+                if isinstance(ts, datetime):
+                    row["timestamp"] = ts.isoformat()
+                payload.append(row)
+            tmp = self._path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(self._path)
+        except OSError as e:
+            logger.error("Failed to persist finance expenses to %s: %s", self._path, e)
+
     async def add_expense(self, expense: Dict[str, Any]) -> None:
         async with self._get_lock():
             self._expenses.append(expense)
+            self._save()
 
     async def get_expenses(self, month: Optional[int] = None, year: Optional[int] = None) -> List[Dict[str, Any]]:
         async with self._get_lock():
@@ -30,7 +70,9 @@ class FinanceStore:
                 return list(self._expenses)
             return [
                 e for e in self._expenses
-                if e["timestamp"].month == month and e["timestamp"].year == year
+                if isinstance(e.get("timestamp"), datetime)
+                and e["timestamp"].month == month
+                and e["timestamp"].year == year
             ]
 
 _store = FinanceStore()

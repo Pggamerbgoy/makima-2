@@ -50,8 +50,8 @@ class MakimaMcpServer:
     async def initialize_tools(self) -> None:
         """Ensure core tools are registered if registry was not pre-populated."""
         if self.registry is None:
-            from apps.brain.tool_registry import ToolRegistry
             from apps.brain.core.tool_loader import register_core_tools
+            from apps.brain.tool_registry import ToolRegistry
 
             self.registry = ToolRegistry()
             register_core_tools(self.registry)
@@ -145,7 +145,7 @@ class MakimaMcpServer:
                     },
                 }
             except Exception as exc:
-                logger.error("Tool execution failed for '%s': %s", tool_name, exc, exc_info=True)
+                logger.exception("Tool execution failed for '%s'", tool_name)
                 return {
                     "jsonrpc": "2.0",
                     "id": req_id,

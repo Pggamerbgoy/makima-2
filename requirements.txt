@@ -34,6 +34,9 @@ grpcio-tools>=1.65.0,<2.0.0
 # 🎙️ Real-time Voice & Gemini Live (Multimodal Bidirectional Audio)
 google-genai>=2.22.0
 
+# OpenAI Agents SDK (sdk_bridge / Runner)
+openai-agents>=0.0.0
+
 # Development, Rust Binding & Testing Tools
 maturin>=1.8.0,<2.0.0
 setuptools>=75.0.0

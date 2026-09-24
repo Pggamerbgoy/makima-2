@@ -330,16 +330,24 @@ class BrowserController:
                 f"http://127.0.0.1:{port}"
             )
             pages = self._browser.contexts[0].pages if self._browser.contexts else []
-            # Smart Reuse: Scan open pages to reuse an existing YouTube/Spotify tab
+            # Smart Reuse: Scan open pages to reuse existing YouTube/Spotify/WhatsApp tabs
+            # so Makima works within the user's already-logged-in sessions (no QR re-scan needed).
             target_page = None
             for page_item in pages:
                 try:
                     p_url = page_item.url or ""
-                    if any(domain in p_url.lower() for domain in ["youtube.com", "spotify.com"]):
-                        target_page = page_item
-                        if "youtube.com" in p_url.lower():
-                            self._pages["media"] = page_item
-                        break
+                    p_url_lower = p_url.lower()
+                    if "youtube.com" in p_url_lower:
+                        self._pages["media"] = page_item
+                        if target_page is None:
+                            target_page = page_item
+                    elif "spotify.com" in p_url_lower:
+                        if target_page is None:
+                            target_page = page_item
+                    # Reuse existing WhatsApp Web tab — preserves QR login session
+                    if "web.whatsapp.com" in p_url_lower:
+                        self._pages["whatsapp"] = page_item
+                        logger.info("BrowserController: Found existing WhatsApp Web tab — reusing logged-in session.")
                 except Exception:
                     pass
             if target_page:
@@ -1296,8 +1304,13 @@ class BrowserController:
         ]
 
         try:
-            response = await self.ai_handler.generate(messages, task="vision", require_json=True)
-            parsed = self.ai_handler.try_parse_json(response.text)
+            if hasattr(self.ai_handler, "generate_structured"):
+                parsed = await self.ai_handler.generate_structured(messages, task="vision")
+                if parsed is not None and ("x" not in parsed or "y" not in parsed) and "error" not in parsed:
+                    parsed = None
+            else:
+                response = await self.ai_handler.generate(messages, task="vision", require_json=True)
+                parsed = self.ai_handler.try_parse_json(response.text)
             if parsed and "x" in parsed and "y" in parsed:
                 x_val = float(parsed["x"])
                 y_val = float(parsed["y"])

@@ -147,4 +147,4 @@ def resolve_known_folder(name: str) -> str | None:
     return None
 
 
-__all__ = ["resolve_known_folder", "normalize_folder_name"]
+__all__ = ["normalize_folder_name", "resolve_known_folder"]

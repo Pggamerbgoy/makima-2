@@ -408,21 +408,30 @@ class SkillLibrary:
         parsed: Optional[dict[str, Any]] = None
         if self.ai_handler and hasattr(self.ai_handler, "generate"):
             try:
-                response = await self.ai_handler.generate(
-                    messages=[{"role": "user", "content": prompt}],
-                    task="fast",
-                    require_json=True,
-                    temperature=0.2,
-                    max_tokens=350,
-                )
-                raw_text = getattr(response, "text", "") or ""
-                if hasattr(self.ai_handler, "try_parse_json"):
-                    parsed = self.ai_handler.try_parse_json(raw_text)
-                if not parsed:
-                    # Fallback JSON parsing
-                    m = re.search(r"\{.*\}", raw_text, re.DOTALL)
-                    if m:
-                        parsed = json.loads(m.group(0))
+                if hasattr(self.ai_handler, "generate_structured"):
+                    parsed = await self.ai_handler.generate_structured(
+                        messages=[{"role": "user", "content": prompt}],
+                        task="fast",
+                        required_keys=["name", "steps_code"],
+                        temperature=0.2,
+                        max_tokens=350,
+                    )
+                else:
+                    response = await self.ai_handler.generate(
+                        messages=[{"role": "user", "content": prompt}],
+                        task="fast",
+                        require_json=True,
+                        temperature=0.2,
+                        max_tokens=350,
+                    )
+                    raw_text = getattr(response, "text", "") or ""
+                    if hasattr(self.ai_handler, "try_parse_json"):
+                        parsed = self.ai_handler.try_parse_json(raw_text)
+                    if not parsed:
+                        # Fallback JSON parsing
+                        m = re.search(r"\{.*\}", raw_text, re.DOTALL)
+                        if m:
+                            parsed = json.loads(m.group(0))
             except Exception as llm_err:
                 logger.debug("SkillLibrary trajectory distillation LLM error: %s", llm_err)
 
@@ -648,7 +657,22 @@ class SkillLibrary:
         exec_ctx: SkillExecutionContext,
         params: dict[str, Any],
     ) -> Any:
-        """Execute verified skill steps in a restricted scope."""
+        """Execute verified skill steps in a restricted scope.
+
+        Re-runs the AST safety firewall before every exec so skills loaded from
+        disk (or otherwise injected) cannot bypass synthesis-time verification.
+        """
+        probe = Skill(
+            skill_id="_exec_probe",
+            name="_exec_probe",
+            description="",
+            trigger_patterns=[],
+            parameters_schema={},
+            steps_code=steps_code or "",
+        )
+        if not self.verify_skill_safety(probe):
+            raise PermissionError("Skill steps_code rejected by AST safety firewall before execution")
+
         local_scope: dict[str, Any] = {}
         safe_builtins = {
             "len": len, "range": range, "str": str, "int": int, "float": float,

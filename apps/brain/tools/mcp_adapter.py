@@ -130,6 +130,13 @@ class AsyncMcpMultiplexer:
                         self.process.kill()
                     except Exception:
                         pass
+                    # Always reap after kill so the transport fully closes
+                    # before the event loop shuts down (KNOWN_ISSUES #3).
+                    try:
+                        if self.process.returncode is None:
+                            await asyncio.wait_for(self.process.wait(), timeout=1.0)
+                    except Exception:
+                        pass
             self.process = None
 
     async def call_method(

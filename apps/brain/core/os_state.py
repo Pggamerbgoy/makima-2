@@ -10,7 +10,7 @@ import asyncio
 import logging
 import time
 from collections import deque
-from typing import Any, Optional
+from typing import Any, ClassVar, Self, cast
 
 try:
     import psutil
@@ -28,18 +28,19 @@ logger = logging.getLogger("makima.os_state")
 class OSWorldState:
     """Singleton. Live cache of OS state — TTL-based refresh, thread-safe."""
 
-    _instance: Optional["OSWorldState"] = None
+    _instance: ClassVar[OSWorldState | None] = None
+    _initialized: bool = False
 
     PROCESS_TTL: float = 30.0   # re-scan processes after 30s
     WINDOW_TTL:  float = 10.0   # re-scan windows after 10s
     MAX_CPU_SAMPLES: int = 300  # 5 min @ 1s = 300 samples
     MAX_ACTIONS: int = 20       # rolling last-actions log
 
-    def __new__(cls) -> "OSWorldState":
+    def __new__(cls) -> Self:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
-        return cls._instance
+        return cast(Self, cls._instance)
 
     def __init__(self) -> None:
         if self._initialized:
@@ -236,8 +237,8 @@ class OSWorldState:
                                         p_name = psutil.Process(pid).name()
                                     except Exception:
                                         p_name = ""
-                            except Exception:
-                                pass
+                            except Exception as _exc:
+                                logger.debug("suppressed: %s", _exc)
 
                         is_active = (hwnd == fg_hwnd)
                         results.append({
@@ -247,8 +248,8 @@ class OSWorldState:
                             "pid": pid,
                             "is_active": is_active,
                         })
-                    except Exception:
-                        pass
+                    except Exception as _exc:
+                        logger.debug("suppressed: %s", _exc)
                     return True
 
                 try:
@@ -277,7 +278,7 @@ class OSWorldState:
     def record_cpu_sample(self, pct: float) -> None:
         self._cpu_trend.append(pct)
 
-    def cpu_avg(self) -> Optional[float]:
+    def cpu_avg(self) -> float | None:
         if not self._cpu_trend:
             return None
         return round(sum(self._cpu_trend) / len(self._cpu_trend), 1)
@@ -322,8 +323,8 @@ class OSWorldState:
                     self._last_fg_time = now
                     self._window_transitions.append((now, title))
                 return title
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug("suppressed: %s", _exc)
         return ""
 
     def get_battery_status(self) -> dict[str, Any]:
@@ -367,18 +368,18 @@ class OSWorldState:
                                 _, pid = win32process.GetWindowThreadProcessId(hwnd)
                                 p = psutil.Process(pid)
                                 mapping[t] = p.name()
-                            except Exception:
-                                pass
+                            except Exception as _exc:
+                                logger.debug("suppressed: %s", _exc)
                 win32gui.EnumWindows(cb, None)
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug("suppressed: %s", _exc)
             return mapping
 
         return await asyncio.to_thread(_map)
 
-    async def get_active_audio_owner(self) -> Optional[str]:
+    async def get_active_audio_owner(self) -> str | None:
         """Probe live Windows Core Audio sessions to find the process currently playing audio."""
-        def _audio_probe() -> Optional[str]:
+        def _audio_probe() -> str | None:
             try:
                 from pycaw.pycaw import AudioUtilities
                 sessions = AudioUtilities.GetAllSessions()
@@ -387,8 +388,8 @@ class OSWorldState:
                         proc = session.Process
                         if proc:
                             return proc.name()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug("suppressed: %s", _exc)
 
             if psutil:
                 for proc in psutil.process_iter(['name']):
@@ -396,8 +397,8 @@ class OSWorldState:
                         name = (proc.info['name'] or '').lower()
                         if any(m in name for m in ('spotify', 'brave', 'chrome', 'msedge', 'vlc', 'foobar2000')):
                             return proc.info['name']
-                    except Exception:
-                        pass
+                    except Exception as _exc:
+                        logger.debug("suppressed: %s", _exc)
             return None
 
         return await asyncio.to_thread(_audio_probe)
@@ -411,11 +412,12 @@ class OSWorldState:
             return None
         try:
             from ctypes import POINTER, cast
+
             import comtypes
             try:
                 comtypes.CoInitialize()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug("suppressed: %s", _exc)
             from comtypes import CLSCTX_ALL
             from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
             devices = AudioUtilities.GetSpeakers()
@@ -433,11 +435,12 @@ class OSWorldState:
         pct = max(0.0, min(100.0, float(pct)))
         try:
             from ctypes import POINTER, cast
+
             import comtypes
             try:
                 comtypes.CoInitialize()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug("suppressed: %s", _exc)
             from comtypes import CLSCTX_ALL
             from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
             devices = AudioUtilities.GetSpeakers()
@@ -445,8 +448,8 @@ class OSWorldState:
             volume = cast(interface, POINTER(IAudioEndpointVolume))
             volume.SetMasterVolumeLevelScalar(pct / 100.0, None)
             return round(volume.GetMasterVolumeLevelScalar() * 100.0)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug("suppressed: %s", _exc)
 
         try:
             import ctypes
@@ -476,7 +479,7 @@ class OSWorldState:
         if not text or not isinstance(text, str):
             return
         clean = text.strip()
-        if not clean or clean == "[Clipboard is empty]" or clean.startswith("Failed to") or clean.startswith("Error"):
+        if not clean or clean == "[Clipboard is empty]" or clean.startswith(("Failed to", "Error")):
             return
         if self._clipboard_history and self._clipboard_history[-1].get("text") == clean:
             return
@@ -487,7 +490,7 @@ class OSWorldState:
             "length": len(clean),
         })
 
-    def get_latest_clipboard_history(self) -> Optional[dict[str, Any]]:
+    def get_latest_clipboard_history(self) -> dict[str, Any] | None:
         """Return the most recent non-empty clipboard record from rolling history."""
         return dict(self._clipboard_history[-1]) if self._clipboard_history else None
 
@@ -512,15 +515,15 @@ class OSWorldState:
                         current_text = str(raw or "")
             finally:
                 win32clipboard.CloseClipboard()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug("suppressed: %s", _exc)
 
         if not current_text:
             try:
                 import pyperclip
                 current_text = pyperclip.paste() or ""
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug("suppressed: %s", _exc)
 
         if current_text and current_text.strip():
             self.record_clipboard(current_text, source="system")

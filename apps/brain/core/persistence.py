@@ -8,7 +8,7 @@ import sqlite3
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Optional, Union
+from typing import Any
 
 logger = logging.getLogger("makima.core.persistence")
 
@@ -19,8 +19,8 @@ class KernelEvent:
     id: int
     timestamp: float
     event_type: str
-    task_id: Optional[str]
-    agent_name: Optional[str]
+    task_id: str | None
+    agent_name: str | None
     payload: dict
 
 
@@ -63,7 +63,7 @@ class EventStore:
             ON kernel_events(event_type)
         """)
         self._conn.commit()
-        self._write_lock: Optional[asyncio.Lock] = None
+        self._write_lock: asyncio.Lock | None = None
         self._hot_cache: deque[KernelEvent] = deque(maxlen=hot_cache_size)
 
     def _get_lock(self) -> asyncio.Lock:
@@ -74,9 +74,9 @@ class EventStore:
     def append_sync(
         self,
         event_type: str,
-        task_id: Optional[str] = None,
-        agent_name: Optional[str] = None,
-        payload: Optional[dict] = None,
+        task_id: str | None = None,
+        agent_name: str | None = None,
+        payload: dict | None = None,
     ) -> int:
         """Insert an event synchronously (for use before event loop starts or in executor)."""
         now = time.time()
@@ -119,7 +119,8 @@ class EventStore:
                 )
                 for r in rows
             ]
-            for ev in events[-self._hot_cache.maxlen:]:
+            hot_maxlen = self._hot_cache.maxlen or 0
+            for ev in events[-hot_maxlen:] if hot_maxlen else []:
                 self._hot_cache.append(ev)
             return events
         except Exception as exc:
@@ -129,9 +130,9 @@ class EventStore:
     async def append(
         self,
         event_type: str,
-        task_id: Optional[str] = None,
-        agent_name: Optional[str] = None,
-        payload: Optional[dict] = None,
+        task_id: str | None = None,
+        agent_name: str | None = None,
+        payload: dict | None = None,
     ) -> int:
         """Insert an event asynchronously (runs SQLite in executor)."""
         async with self._get_lock():
@@ -169,7 +170,7 @@ class EventStore:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, _fetch)
 
-    async def get_latest_partial(self, task_id: str) -> Optional[str]:
+    async def get_latest_partial(self, task_id: str) -> str | None:
         """Return the most recent partial text for a task (if any)."""
         events = await self.get_task_events(task_id)
         for ev in reversed(events):
@@ -208,8 +209,8 @@ class EventStore:
             if r[3]:
                 try:
                     payload = json.loads(r[3])
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug("suppressed: %s", _exc)
 
             tool_name = payload.get("tool_name") or agent_or_tool or "unknown_tool"
             evidence_tier = payload.get("evidence_tier", "UNKNOWN")
@@ -265,7 +266,7 @@ class EventStore:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.get_failure_patterns_sync, lookback_seconds, min_failures)
 
-    def compact_events_sync(self, keep_recent: int = 2000) -> dict[str, int]:
+    def compact_events_sync(self, keep_recent: int = 2000) -> dict[str, Any]:
         """
         Prune historical terminal events to prevent DB bloat, keeping the most recent events
         and running a WAL checkpoint truncate.
@@ -299,9 +300,9 @@ class EventStore:
             return {"pruned": pruned, "total_remaining": remaining}
         except Exception as exc:
             logger.warning("EventStore compaction failed: %s", exc)
-            return {"pruned": 0, "total_remaining": 0, "error": str(exc)}
+            return {"pruned": 0, "total_remaining": 0, "error": str(exc)}  # type: ignore[dict-item]
 
-    async def compact_events(self, keep_recent: int = 2000) -> dict[str, int]:
+    async def compact_events(self, keep_recent: int = 2000) -> dict[str, Any]:
         """Asynchronously compact events and checkpoint SQLite WAL."""
         async with self._get_lock():
             loop = asyncio.get_running_loop()
@@ -325,7 +326,7 @@ class EventStore:
 
     def get_recent_events_sync(
         self,
-        event_type: Union[str, int, None] = None,
+        event_type: str | int | None = None,
         limit: int = 50,
     ) -> list[KernelEvent]:
         """
@@ -333,7 +334,7 @@ class EventStore:
         Supports get_recent_events_sync("task_outcome", limit=20),
         get_recent_events_sync(limit=50), and positional limit calls.
         """
-        actual_type: Optional[str] = None
+        actual_type: str | None = None
         actual_limit: int = limit
 
         if isinstance(event_type, int):
@@ -370,7 +371,7 @@ class EventStore:
 
     async def get_recent_events(
         self,
-        event_type: Union[str, int, None] = None,
+        event_type: str | int | None = None,
         limit: int = 50,
     ) -> list[KernelEvent]:
         """Asynchronously fetch recent events (optionally filtered by event_type)."""
@@ -381,6 +382,6 @@ class EventStore:
         """Close the underlying SQLite connection."""
         try:
             self._conn.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug("suppressed: %s", _exc)
 

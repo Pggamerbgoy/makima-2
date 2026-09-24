@@ -6,7 +6,7 @@ Strongly-typed dependency injection container.
 Replaces untyped global `_modules` dictionary anti-pattern with full IDE autocompletion & type safety.
 """
 
-from typing import Any, Dict
+from typing import Any
 
 
 class S:
@@ -22,8 +22,6 @@ class S:
     ETERNAL_MEMORY = "eternal_memory"
     TOOL_REGISTRY = "tool_registry"
     CAPABILITY_MESH = "capability_mesh"
-    WORLD_STATE = "world_state"
-    CONTEXT_BUILDER = "context_builder"
     SAGA_RECOVERY = "saga_recovery"
     RECOVERY_MANAGER = "recovery_manager"
     EXECUTION_RUNTIME = "execution_runtime"
@@ -53,6 +51,7 @@ class S:
     MULTIMODAL = "multimodal"
     DURABLE_TASKS = "durable_task_engine"
     THOUGHT_PLANNER = "thought_planner"
+    PREFERENCE_ENGINE = "preference_engine"
 
 
 class ServiceRegistry:
@@ -62,7 +61,7 @@ class ServiceRegistry:
     """
 
     def __init__(self) -> None:
-        self._services: Dict[str, Any] = {}
+        self._services: dict[str, Any] = {}
 
     def register(self, name: str, instance: Any) -> None:
         """Register a named service instance."""
@@ -72,7 +71,7 @@ class ServiceRegistry:
         """Retrieve a service instance by name (dict-compatible)."""
         return self._services.get(name, default)
 
-    def update(self, services: Dict[str, Any]) -> None:
+    def update(self, services: dict[str, Any]) -> None:
         """Batch update services (legacy dict compatibility)."""
         self._services.update(services)
 
@@ -144,3 +143,7 @@ class ServiceRegistry:
     @property
     def thought_planner(self) -> Any:
         return self._services.get("thought_planner")
+
+    @property
+    def preference_engine(self) -> Any:
+        return self._services.get(S.PREFERENCE_ENGINE)

@@ -461,7 +461,10 @@ privacy:
 agent:
   max_turns: 25
   canonical_tools: []        # empty = use ALL tools from registry
-  tool_budget_tokens: 3500   # token limit for tool schemas (~3.5KB compressed footprint)
+  tool_budget_tokens: 0   # token limit for tool schemas (0 = unlimited / unbudgeted)
+  # Real triage handoffs (opt-in): MAKIMA_HANDOFFS=1 or enable_handoffs: true
+  enable_handoffs: false
+  # handoff_domains: [system, browser, code, research, messaging, media, security, devops, document, memory]
 
 agents:
   models:
@@ -528,4 +531,21 @@ server:
   rest_port: 8080
   ws_port: 8765
   host: 127.0.0.1
+# MCP servers (Agents SDK native client preferred; custom adapter is fallback).
+# Examples:
+# mcp_servers:
+#   - name: filesystem
+#     enabled: true
+#     transport: stdio
+#     command: ["npx", "-y", "@modelcontextprotocol/server-filesystem", "C:/Users"]
+#   - name: remote
+#     enabled: false
+#     transport: http   # or sse
+#     url: "https://example.com/mcp"
+#     headers: {Authorization: "Bearer ..."}
 mcp_servers: []
+
+security:
+  workspace_boundary_enabled: true
+  allowed_directories: [] # Empty list defaults to current active workspace directory
+

@@ -4,7 +4,6 @@ Location: apps/brain/core/__init__.py
 """
 
 from .app_bootstrap import AppBootstrap
-from .context_builder import ContextBuilder
 from .contracts import (
     Action,
     ActionExecutionContext,
@@ -26,7 +25,6 @@ __all__ = [
     "ExecutionResult",
     "ActionExecutionContext",
     "TaskManager",
-    "ContextBuilder",
     "ExecutionRuntime",
     "WorldStateService",
     "get_world_state",

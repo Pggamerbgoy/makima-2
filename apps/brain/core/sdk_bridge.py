@@ -23,31 +23,36 @@ import platform
 import re
 import time
 import uuid
-from typing import Any, AsyncIterator, Callable, Coroutine, Optional, Sequence, Union
+from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
+from typing import Any
 
-# Suppress noisy OpenAI tracing warnings when executing non-OpenAI local/dashscope models
-os.environ.setdefault("AGENTS_TRACING_DISABLED", "1")
+# Opt-in SDK tracing: MAKIMA_SDK_TRACING=1 (or AGENTS_TRACING_DISABLED=0).
+# Default remains off for non-OpenAI BYOK backends (avoid noisy/no-op OpenAI export).
+_SDK_TRACING_ENABLED = (
+    os.environ.get("MAKIMA_SDK_TRACING", "").strip().lower() in ("1", "true", "yes", "on")
+    or os.environ.get("AGENTS_TRACING_DISABLED", "").strip().lower() in ("0", "false", "no", "off")
+)
+if not _SDK_TRACING_ENABLED:
+    os.environ.setdefault("AGENTS_TRACING_DISABLED", "1")
+else:
+    os.environ["AGENTS_TRACING_DISABLED"] = "0"
 logging.getLogger("openai.agents").setLevel(logging.ERROR)
 
 from agents import (
     Agent,
     AgentHooks,
     GuardrailFunctionOutput,
-    Handoff,
-    InputGuardrail,
-    InputGuardrailTripwireTriggered,
-    Runner,
+    ModelRetryBackoffSettings,
+    ModelRetrySettings,
     RunHooks,
     SQLiteSession,
     handoff,
     input_guardrail,
     output_guardrail,
+    tool_input_guardrail,
 )
-from agents.run_config import RunConfig, ToolExecutionConfig
-from agents.model_settings import ModelSettings
-from agents.extensions.tool_output_trimmer import ToolOutputTrimmer
 from agents.extensions.handoff_filters import remove_all_tools
-from agents.memory.session_settings import SessionSettings
+from agents.extensions.tool_output_trimmer import ToolOutputTrimmer
 from agents.items import (
     ModelResponse,
     ResponseFunctionToolCall,
@@ -57,9 +62,15 @@ from agents.items import (
     TResponseStreamEvent,
     Usage,
 )
+from agents.memory.session_settings import SessionSettings
+from agents.model_settings import ModelSettings
 from agents.models.chatcmpl_converter import Converter
 from agents.models.interface import Model, ModelTracing
+from agents.models.multi_provider import MultiProvider, MultiProviderMap
+from agents.models.openai_provider import OpenAIProvider
+from agents.run_config import RunConfig, ToolExecutionConfig
 from agents.tool import FunctionTool, Tool, ToolContext
+from agents.tool_guardrails import ToolGuardrailFunctionOutput, ToolInputGuardrailData
 
 logger = logging.getLogger("makima.sdk_bridge")
 
@@ -67,7 +78,7 @@ logger = logging.getLogger("makima.sdk_bridge")
 def adapt_tool_call_args(
     target_fn: Callable,
     in_params: dict[str, Any],
-    user_ctx: Optional[dict[str, Any]] = None,
+    user_ctx: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Adapt keyword arguments to match target_fn signature, injecting context/ai_handler if accepted."""
     final_args = dict(in_params)
@@ -78,9 +89,112 @@ def adapt_tool_call_args(
             final_args["context"] = user_ctx
         if ("ai_handler" in sig.parameters or has_varkw) and "ai_handler" not in final_args and user_ctx and user_ctx.get("ai_handler"):
             final_args["ai_handler"] = user_ctx["ai_handler"]
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug("suppressed: %s", _exc)
     return final_args
+
+
+def get_tool_fallback_hint(failed_tool: str) -> str:
+    """
+    Returns a domain-aware hint about alternative capabilities/tools when a tool fails.
+    Guides the model to achieve the user's high-level goal using alternate strategies.
+    """
+    clean_tool = failed_tool.removeprefix("call_").removesuffix("_agent").lower()
+
+    # 1. CapabilityProbe lookup for available tools
+    available_caps: dict[str, str] = {}
+    try:
+        from .capability_probe import CapabilityProbe
+        probe = CapabilityProbe.instance()
+        snapshot = probe.probe_all()
+        for name, r in snapshot.items():
+            if r.available:
+                available_caps[name] = r.method
+    except Exception as _exc:
+        logger.debug("suppressed: %s", _exc)
+
+    # Domain classification
+    comm_keywords = ("whatsapp", "telegram", "discord", "email", "msg", "chat", "message")
+    media_keywords = ("media", "spotify", "youtube", "music", "play", "audio", "video")
+    browser_keywords = ("browser", "navigate", "click", "scrape", "fill", "web")
+    file_keywords = ("file", "directory", "write", "read", "copy", "move", "patch")
+
+    alternatives: list[str] = []
+
+    if any(k in clean_tool for k in comm_keywords):
+        domain = "messaging"
+        if "telegram" in available_caps and not clean_tool.startswith("telegram"):
+            alternatives.append("telegram_send_message")
+        if "discord" in available_caps and not clean_tool.startswith("discord"):
+            alternatives.append("discord_send_message")
+        if "chrome" in available_caps or "playwright" in available_caps:
+            alternatives.append("browser_navigate (web: web.whatsapp.com / web.telegram.org)")
+        if not alternatives:
+            alternatives.extend(["browser_navigate", "show_notification", "send_alert"])
+    elif any(k in clean_tool for k in media_keywords):
+        domain = "media"
+        if "youtube" not in clean_tool:
+            alternatives.append("media_play(platform='youtube')")
+        if "spotify" in available_caps and "spotify" not in clean_tool:
+            alternatives.append("media_play(platform='spotify')")
+        if "chrome" in available_caps or "playwright" in available_caps:
+            alternatives.append("browser_navigate")
+        alternatives.append("system_launch_app")
+    elif any(k in clean_tool for k in browser_keywords):
+        domain = "browser"
+        alternatives.extend(["web_search", "fetch_url", "http_request"])
+    elif any(k in clean_tool for k in file_keywords):
+        domain = "file"
+        alternatives.extend(["run_python_script", "read_file", "search_files"])
+    else:
+        domain = "general"
+        for name in available_caps:
+            if name not in clean_tool:
+                alternatives.append(name)
+
+    if alternatives:
+        return f"Domain: {domain}. Available alternative strategies: {', '.join(alternatives[:4])}."
+    return "Check [System Capability Snapshot] for available alternative tools."
+
+
+def format_tool_execution_result(tool_name: str, res: Any) -> str:
+    """
+    Formats tool result for LLM Runner.
+    Detects dictionary/string error states and converts them into standardized [TOOL_FAILED: <name>]
+    signals with domain fallback hints so the LLM automatically continues towards the user's goal.
+    """
+    is_err = False
+    err_detail = ""
+
+    if isinstance(res, dict):
+        status = str(res.get("status", "")).lower()
+        # "needs_confirmation" is an interactive confirmation dialog, NOT an error
+        if status in ("error", "failed", "failure"):
+            is_err = True
+            err_detail = str(res.get("message") or res.get("error") or res)
+        elif status != "needs_confirmation" and (res.get("success") is False or res.get("ok") is False):
+            is_err = True
+            err_detail = str(res.get("error") or res.get("message") or res)
+    elif isinstance(res, str):
+        s = res.strip()
+        if s.startswith("[TOOL_FAILED:"):
+            return s
+        if s.startswith(("[Tool Error", "[Agent Delegation Error")) or s.lower().startswith(("error:", "fatal:")):
+            is_err = True
+            err_detail = s
+
+    if is_err:
+        hint = get_tool_fallback_hint(tool_name)
+        return (
+            f"[TOOL_FAILED: {tool_name}] {err_detail}. "
+            f"{hint} "
+            f"DO NOT STOP or apologize. The user's goal is NOT achieved. Immediately execute an alternative strategy."
+        )
+
+    out = str(res) if not isinstance(res, (dict, list)) else json.dumps(res, ensure_ascii=False)
+    if len(out) > 3500:
+        out = out[:3500] + f"\n... [Output truncated: {len(out) - 3500} chars omitted]"
+    return out
 
 
 class ToolInvokerProxy:
@@ -89,10 +203,10 @@ class ToolInvokerProxy:
     def __init__(
         self,
         tool_name: str,
-        registry: Optional[Any] = None,
-        execution_runtime: Optional[Any] = None,
-        agent: Optional[Any] = None,
-        custom_func: Optional[Callable[..., Coroutine[Any, Any, Any]]] = None,
+        registry: Any | None = None,
+        execution_runtime: Any | None = None,
+        agent: Any | None = None,
+        custom_func: Callable[..., Coroutine[Any, Any, Any]] | None = None,
     ) -> None:
         self.tool_name = tool_name
         self.registry = registry
@@ -159,28 +273,82 @@ class ToolInvokerProxy:
                     context=user_ctx,
                     entities=entities,
                 )
-                if isinstance(res, (dict, list)):
-                    return json.dumps(res, ensure_ascii=False)
-                return str(res) if res is not None else ""
+                return format_tool_execution_result(self.tool_name, res)
             except Exception as e:
                 logger.error("[sdk_bridge] Agent delegation '%s' failed: %s", self.tool_name, e)
-                return f"[Agent Delegation Error in {self.tool_name}]: {e}"
+                hint = get_tool_fallback_hint(self.tool_name)
+                return (
+                    f"[TOOL_FAILED: {self.tool_name}] Delegation error: {e}. {hint} "
+                    f"DO NOT STOP or apologize. The user's goal is NOT achieved. Immediately execute an alternative strategy."
+                )
 
         def _adapt_call_args(target_fn: Callable, in_params: dict[str, Any]) -> dict[str, Any]:
             return adapt_tool_call_args(target_fn, in_params, user_ctx)
 
-        # 1. Direct tool execution via Custom Func
+        # 1. Primary Dispatch via ExecutionRuntime (guarantees transactional safety, SAGA rollback, undo tracking, and preference learning)
+        runtime = self.execution_runtime
+        if not runtime and self.registry and hasattr(self.registry, "_execution_runtime"):
+            runtime = self.registry._execution_runtime
+
+        if runtime is not None and hasattr(runtime, "execute_action"):
+            is_runtime_capable = False
+            if self.registry and hasattr(self.registry, "get_tool"):
+                is_runtime_capable = bool(
+                    self.registry.get_tool(self.tool_name)
+                    or self.registry.get_tool(f"system_{self.tool_name}")
+                    or (self.registry.get_tool(self.tool_name[7:]) if self.tool_name.startswith("system_") else None)
+                )
+            elif hasattr(runtime, "tool_registry") and runtime.tool_registry and hasattr(runtime.tool_registry, "get_tool"):
+                is_runtime_capable = bool(
+                    runtime.tool_registry.get_tool(self.tool_name)
+                    or runtime.tool_registry.get_tool(f"system_{self.tool_name}")
+                    or (runtime.tool_registry.get_tool(self.tool_name[7:]) if self.tool_name.startswith("system_") else None)
+                )
+
+            if is_runtime_capable or not self.custom_func:
+                try:
+                    from .contracts import Action
+
+                    action = Action(
+                        action_id=f"act_sdk_{self.tool_name}_{uuid.uuid4().hex[:8]}",
+                        task_id=real_task_id,
+                        capability_name=self.tool_name,
+                        parameters=params,
+                    )
+                    exec_res = await runtime.execute_action(action=action)
+                    if getattr(exec_res, "is_success", True):
+                        out = getattr(exec_res, "tool_output", "") or ""
+                        return format_tool_execution_result(self.tool_name, out)
+                    err_msg = getattr(exec_res, 'error', 'Action execution failed')
+                    hint = get_tool_fallback_hint(self.tool_name)
+                    return (
+                        f"[TOOL_FAILED: {self.tool_name}] {err_msg}. {hint} "
+                        f"DO NOT STOP or apologize. The user's goal is NOT achieved. Immediately execute an alternative strategy."
+                    )
+                except Exception as e:
+                    logger.error(
+                        "[sdk_bridge] ExecutionRuntime failed for '%s': %s",
+                        self.tool_name,
+                        e,
+                    )
+                    # Fall through to direct fallback if runtime threw unhandled exception
+
+        # 2. Fallback: Direct tool execution via Custom Func
         if self.custom_func is not None:
             try:
                 call_args = _adapt_call_args(self.custom_func, params)
                 res = self.custom_func(**call_args)
                 if inspect.isawaitable(res):
                     res = await res
-                return str(res) if not isinstance(res, (dict, list)) else json.dumps(res, ensure_ascii=False)
+                return format_tool_execution_result(self.tool_name, res)
             except Exception as e:
-                return f"[Tool Error in {self.tool_name}]: {e}"
+                hint = get_tool_fallback_hint(self.tool_name)
+                return (
+                    f"[TOOL_FAILED: {self.tool_name}] {e}. {hint} "
+                    f"DO NOT STOP or apologize. The user's goal is NOT achieved. Immediately execute an alternative strategy."
+                )
 
-        # 2. Direct tool execution via Registry tool lookup
+        # 3. Fallback: Direct tool execution via Registry tool lookup
         if self.registry is not None and hasattr(self.registry, "get_tool"):
             meta = (
                 self.registry.get_tool(self.tool_name)
@@ -193,69 +361,46 @@ class ToolInvokerProxy:
                     res = meta.func(**call_args)
                     if inspect.isawaitable(res):
                         res = await res
-                    out = str(res) if not isinstance(res, (dict, list)) else json.dumps(res, ensure_ascii=False)
-                    if len(out) > 3500:
-                        out = out[:3500] + f"\n... [Output truncated: {len(out) - 3500} chars omitted]"
-                    return out
+                    return format_tool_execution_result(self.tool_name, res)
                 except Exception as e:
-                    return f"[Tool Error in {self.tool_name}]: {e}"
+                    hint = get_tool_fallback_hint(self.tool_name)
+                    return (
+                        f"[TOOL_FAILED: {self.tool_name}] {e}. {hint} "
+                        f"DO NOT STOP or apologize. The user's goal is NOT achieved. Immediately execute an alternative strategy."
+                    )
 
-        # 3. Dispatch via Agent's _use_tool (if bound to agent)
+        # 4. Fallback: Dispatch via Agent's _use_tool (if bound to agent)
         if self.agent is not None and hasattr(self.agent, "_use_tool"):
             try:
                 res = await self.agent._use_tool(self.tool_name, **params)
-                if isinstance(res, (dict, list)):
-                    return json.dumps(res, ensure_ascii=False)
-                return str(res) if res is not None else ""
+                return format_tool_execution_result(self.tool_name, res)
             except Exception as e:
                 logger.error(
                     "[sdk_bridge] Agent tool '%s' execution failed: %s",
                     self.tool_name,
                     e,
                 )
-                return f"[Tool Error in {self.tool_name}]: {e}"
-
-        # 4. Dispatch via ExecutionRuntime (fallback)
-        runtime = self.execution_runtime
-        if not runtime and self.registry and hasattr(self.registry, "_execution_runtime"):
-            runtime = self.registry._execution_runtime
-
-        if runtime is not None and hasattr(runtime, "execute_action"):
-            try:
-                from .contracts import Action
-
-                action = Action(
-                    action_id=f"act_sdk_{self.tool_name}_{uuid.uuid4().hex[:8]}",
-                    task_id=real_task_id,
-                    capability_name=self.tool_name,
-                    parameters=params,
+                hint = get_tool_fallback_hint(self.tool_name)
+                return (
+                    f"[TOOL_FAILED: {self.tool_name}] {e}. {hint} "
+                    f"DO NOT STOP or apologize. The user's goal is NOT achieved. Immediately execute an alternative strategy."
                 )
-                exec_res = await runtime.execute_action(action=action)
-                if getattr(exec_res, "is_success", True):
-                    out = getattr(exec_res, "tool_output", "") or ""
-                    if isinstance(out, (dict, list)):
-                        return json.dumps(out, ensure_ascii=False)
-                    return str(out)
-                return f"[Failed] {getattr(exec_res, 'error', 'Action execution failed')}"
-            except Exception as e:
-                logger.error(
-                    "[sdk_bridge] ExecutionRuntime failed for '%s': %s",
-                    self.tool_name,
-                    e,
-                )
-                return f"[Tool Error in {self.tool_name}]: {e}"
 
-        return f"[Tool Error]: No execution handler registered for tool '{self.tool_name}'"
+        hint = get_tool_fallback_hint(self.tool_name)
+        return (
+            f"[TOOL_FAILED: {self.tool_name}] No execution handler registered. {hint} "
+            f"DO NOT STOP or apologize. The user's goal is NOT achieved. Immediately execute an alternative strategy."
+        )
 
 
 def to_sdk_function_tool(
     tool_name: str,
-    registry: Optional[Any] = None,
-    execution_runtime: Optional[Any] = None,
-    agent: Optional[Any] = None,
-    description: Optional[str] = None,
-    schema: Optional[dict[str, Any]] = None,
-    func: Optional[Callable[..., Coroutine[Any, Any, Any]]] = None,
+    registry: Any | None = None,
+    execution_runtime: Any | None = None,
+    agent: Any | None = None,
+    description: str | None = None,
+    schema: dict[str, Any] | None = None,
+    func: Callable[..., Coroutine[Any, Any, Any]] | None = None,
 ) -> FunctionTool:
     """
     Convert a Makima tool definition into an OpenAI Agents SDK FunctionTool.
@@ -271,8 +416,6 @@ def to_sdk_function_tool(
     tool_schema: dict[str, Any] = schema or {}
     custom_fn = func
 
-    tool_category = "general"
-    tool_tags: list[str] = []
     if registry is not None:
         meta = (
             registry.get_tool(clean_name)
@@ -287,8 +430,6 @@ def to_sdk_function_tool(
                 tool_schema = getattr(meta, "schema", {})
             if not custom_fn:
                 custom_fn = getattr(meta, "func", None)
-            tool_category = getattr(meta, "category", "general")
-            tool_tags = getattr(meta, "task_tags", []) or []
 
     if agent is not None:
         if not tool_desc and hasattr(agent, "_TOOL_DESCRIPTIONS") and isinstance(agent._TOOL_DESCRIPTIONS, dict):
@@ -307,10 +448,6 @@ def to_sdk_function_tool(
                 lines = handler.__doc__.strip().splitlines()
                 if lines:
                     tool_desc = lines[0]
-        if hasattr(agent, "DOMAIN_LANE"):
-            tool_category = getattr(agent, "DOMAIN_LANE", "general")
-        elif hasattr(agent, "TAGS"):
-            tool_tags = getattr(agent, "TAGS", []) or []
 
     if not tool_desc:
         tool_desc = f"Makima OS tool: {clean_name}"
@@ -345,15 +482,17 @@ def to_sdk_function_tool(
                     ):
                         continue
                     type_name = "string"
-                    if param.annotation is int:
+                    ann = param.annotation
+                    ann_str = ann if isinstance(ann, str) else getattr(ann, "__name__", str(ann))
+                    if ann is int or ann_str in ("int", "integer"):
                         type_name = "integer"
-                    elif param.annotation is float:
+                    elif ann is float or ann_str in ("float", "number"):
                         type_name = "number"
-                    elif param.annotation is bool:
+                    elif ann is bool or ann_str in ("bool", "boolean"):
                         type_name = "boolean"
-                    elif param.annotation in (list, "list[str]", "list[int]"):
+                    elif ann is list or (isinstance(ann_str, str) and ann_str.startswith("list")):
                         type_name = "array"
-                    elif param.annotation in (dict, "dict[str, Any]"):
+                    elif ann is dict or (isinstance(ann_str, str) and ann_str.startswith("dict")):
                         type_name = "object"
                     synthesized_props[p_name] = {"type": type_name, "description": f"Parameter '{p_name}'"}
                     if param.default is inspect.Parameter.empty:
@@ -364,8 +503,8 @@ def to_sdk_function_tool(
                         "properties": synthesized_props,
                         "required": required_params,
                     }
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug("suppressed: %s", _exc)
 
     invoker = ToolInvokerProxy(
         tool_name=clean_name,
@@ -381,31 +520,33 @@ def to_sdk_function_tool(
         params_json_schema=tool_schema,
         on_invoke_tool=invoker,
         strict_json_schema=False,
+        tool_input_guardrails=[tool_args_injection_guard],
     )
 
 
 def _load_agent_config() -> dict[str, Any]:
     """Loads agent configuration from configs/default.yaml."""
     try:
-        import yaml
         from pathlib import Path
+
+        import yaml
         cfg_path = Path(__file__).resolve().parents[3] / "configs" / "default.yaml"
         if cfg_path.exists():
             with open(cfg_path, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f)
                 if isinstance(data, dict):
                     return data.get("agent") or data.get("agents") or {}
-    except Exception:
-        pass
+    except Exception as _exc:
+        logger.debug("suppressed: %s", _exc)
     return {}
 
 
 def to_sdk_tools(
     tool_names: Sequence[Any],
-    registry: Optional[Any] = None,
-    execution_runtime: Optional[Any] = None,
-    agent: Optional[Any] = None,
-    config: Optional[dict[str, Any]] = None,
+    registry: Any | None = None,
+    execution_runtime: Any | None = None,
+    agent: Any | None = None,
+    config: dict[str, Any] | None = None,
 ) -> list[FunctionTool]:
     """
     Batch convert Makima tool names or ToolMeta objects into SDK FunctionTool objects.
@@ -419,16 +560,16 @@ def to_sdk_tools(
 
     cfg = config if config is not None else _load_agent_config()
     canonical_tools_cfg = (
-        cfg.get("canonical_tools")
+        (cfg.get("canonical_tools") or [])
         if "canonical_tools" in cfg
-        else (cfg.get("agent") or {}).get("canonical_tools") or []
+        else ((cfg.get("agent") or {}).get("canonical_tools") or [])
     )
     raw_budget = (
         cfg.get("tool_budget_tokens")
         if "tool_budget_tokens" in cfg
         else (cfg.get("agent") or {}).get("tool_budget_tokens")
     )
-    tool_budget_tokens = int(raw_budget) if raw_budget is not None else 3500
+    tool_budget_tokens = int(raw_budget) if raw_budget is not None else 0
     canonical_filter_active = bool(canonical_tools_cfg)
     canonical_set = set(canonical_tools_cfg) if canonical_filter_active else set()
 
@@ -508,8 +649,8 @@ class MakimaModel(Model):
         self,
         ai_handler: Any,
         task: str = "general",
-        model_name: Optional[str] = None,
-        agent_name: Optional[str] = None,
+        model_name: str | None = None,
+        agent_name: str | None = None,
     ) -> None:
         self.ai_handler = ai_handler
         self.task = task
@@ -518,23 +659,23 @@ class MakimaModel(Model):
 
     async def get_response(
         self,
-        system_instructions: Optional[str],
-        input: Union[str, list[TResponseInputItem]],
+        system_instructions: str | None,
+        input: str | list[TResponseInputItem],
         model_settings: Any,
         tools: list[Tool],
         output_schema: Any,
         handoffs: list[Any],
         tracing: ModelTracing,
         *,
-        previous_response_id: Optional[str] = None,
-        conversation_id: Optional[str] = None,
-        prompt: Optional[Any] = None,
+        previous_response_id: str | None = None,
+        conversation_id: str | None = None,
+        prompt: Any | None = None,
     ) -> ModelResponse:
         """
         Translates SDK input and tool specifications to Makima's message format,
         calls ai_handler.generate(), and formats the result as a ModelResponse.
         """
-        messages: list[dict[str, Any]] = []
+        messages: list[Any] = []
 
         # 1. Convert input items using SDK's Converter
         try:
@@ -561,21 +702,15 @@ class MakimaModel(Model):
                 if system_instructions not in existing_sys:
                     messages[0]["content"] = f"{existing_sys}\n\n{system_instructions}".strip()
 
-        # 3. Build Tools manifest for ai_handler
-        tools_manifest: list[dict[str, Any]] = []
+        # 3. Build Tools & Handoffs manifest for ai_handler
+        tools_manifest: list[Any] = []
         for t in tools:
             try:
                 openai_t = Converter.tool_to_openai(t)
                 tools_manifest.append(openai_t)
             except Exception as t_err:
                 logger.debug("[sdk_bridge] Could not convert tool '%s': %s", getattr(t, "name", "?"), t_err)
-
-        for h in handoffs:
-            try:
-                openai_h = Converter.convert_handoff_tool(h)
-                tools_manifest.append(openai_h)
-            except Exception as h_err:
-                logger.debug("[sdk_bridge] Could not convert handoff tool: %s", h_err)
+        tools_manifest.extend(_handoffs_to_openai_tools(handoffs))
 
         # 4. Invoke Makima's NEXUS LLM Gateway
         kwargs: dict[str, Any] = {}
@@ -589,24 +724,29 @@ class MakimaModel(Model):
         if effective_model:
             kwargs["model"] = effective_model
         if hasattr(model_settings, "temperature") and getattr(model_settings, "temperature", None) is not None:
-            kwargs["temperature"] = getattr(model_settings, "temperature")
+            kwargs["temperature"] = model_settings.temperature
         if hasattr(model_settings, "max_tokens") and getattr(model_settings, "max_tokens", None) is not None:
-            kwargs["max_tokens"] = getattr(model_settings, "max_tokens")
+            kwargs["max_tokens"] = model_settings.max_tokens
 
         # Multi-user isolation & BYOK: Inject per-request client credentials and overrides
         try:
             from .orchestration_engine import client_request_context
-            req_ctx = client_request_context.get({}) or {}
+            req_ctx = client_request_context.get(None) or {}
             if req_ctx.get("provider"):
                 kwargs["provider"] = req_ctx["provider"]
             if req_ctx.get("api_key"):
                 kwargs["api_key"] = req_ctx["api_key"]
             if req_ctx.get("base_url"):
                 kwargs["base_url"] = req_ctx["base_url"]
-            if req_ctx.get("model") and "model" not in kwargs:
+            if req_ctx.get("model"):
                 kwargs["model"] = req_ctx["model"]
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug("suppressed: %s", _exc)
+
+        logger.info(
+            "[sdk_bridge] Invoking NEXUS AI gateway with task=%s provider=%s model=%s",
+            self.task, kwargs.get("provider"), kwargs.get("model")
+        )
 
         resp = await self.ai_handler.generate(
             messages=messages,
@@ -642,29 +782,29 @@ class MakimaModel(Model):
                 if extracted_tcs:
                     raw_tool_calls = extracted_tcs
                     raw_text = cleaned_t
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug("suppressed: %s", _exc)
 
         output_items: list[Any] = []
 
-        # Build map of valid tool & handoff names for this agent turn
+        # Build map of valid tool names for this agent turn (tools + handoff tools)
         valid_tool_map: dict[str, str] = {}
         for t in tools:
             t_name = getattr(t, "name", None)
             if not t_name and hasattr(Converter, "tool_to_openai"):
                 try:
                     t_name = Converter.tool_to_openai(t).get("function", {}).get("name")
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug("suppressed: %s", _exc)
             if t_name:
                 valid_tool_map[t_name.lower()] = t_name
                 if t_name.startswith("system_"):
                     valid_tool_map[t_name[7:].lower()] = t_name
                 else:
                     valid_tool_map[f"system_{t_name}".lower()] = t_name
-        for h in handoffs:
-            h_name = getattr(h, "name", None) or getattr(h, "tool_name", None)
-            if h_name:
+        for h in handoffs or []:
+            h_name = getattr(h, "tool_name", None)
+            if isinstance(h_name, str) and h_name:
                 valid_tool_map[h_name.lower()] = h_name
 
         # Canonical cross-agent synonym aliases
@@ -780,8 +920,8 @@ class MakimaModel(Model):
                         pj = await pj
                     if isinstance(pj, dict):
                         parsed_json = pj
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug("suppressed: %s", _exc)
 
             if not isinstance(parsed_json, dict):
                 try:
@@ -789,12 +929,13 @@ class MakimaModel(Model):
                     if (cleaned_text.startswith("{") and cleaned_text.endswith("}")) or (cleaned_text.startswith("```json") and cleaned_text.endswith("```")):
                         stripped = re.sub(r"^```json\s*|\s*```$", "", cleaned_text).strip()
                         parsed_json = json.loads(stripped)
-                except Exception:
+                except Exception as parse_err:
+                    logger.debug("[sdk_bridge] embedded JSON parse failed: %s", parse_err)
                     parsed_json = None
 
             if isinstance(parsed_json, dict) and any(k in parsed_json for k in ("tool", "action", "function")):
-                fn_name = parsed_json.get("tool") or parsed_json.get("action") or parsed_json.get("function")
-                fn_str = str(fn_name).lower() if fn_name else ""
+                embedded_fn = parsed_json.get("tool") or parsed_json.get("action") or parsed_json.get("function")
+                fn_str = str(embedded_fn or "").lower()
                 if fn_str in ("complete", "finish", "done", "response", "reply", "none", "null", ""):
                     reply_text = str(parsed_json.get("reply") or parsed_json.get("message") or parsed_json.get("content") or raw_text).strip()
                     output_items.append(
@@ -814,7 +955,7 @@ class MakimaModel(Model):
                         )
                     )
                 else:
-                    resolved_b = valid_tool_map.get(str(fn_name).lower())
+                    resolved_b = valid_tool_map.get(str(embedded_fn).lower())
 
                     if resolved_b:
                         params = parsed_json.get("params") or parsed_json.get("arguments") or parsed_json.get("parameters") or {}
@@ -880,17 +1021,17 @@ class MakimaModel(Model):
 
     async def stream_response(
         self,
-        system_instructions: Optional[str],
-        input: Union[str, list[TResponseInputItem]],
+        system_instructions: str | None,
+        input: str | list[TResponseInputItem],
         model_settings: Any,
         tools: list[Tool],
         output_schema: Any,
         handoffs: list[Any],
         tracing: ModelTracing,
         *,
-        previous_response_id: Optional[str] = None,
-        conversation_id: Optional[str] = None,
-        prompt: Optional[Any] = None,
+        previous_response_id: str | None = None,
+        conversation_id: str | None = None,
+        prompt: Any | None = None,
     ) -> AsyncIterator[TResponseStreamEvent]:
         """
         Streaming response adapter for OpenAI Agents SDK.
@@ -899,22 +1040,23 @@ class MakimaModel(Model):
         """
         from openai.types.responses import (
             Response,
+            ResponseCompletedEvent,
+            ResponseFunctionCallArgumentsDeltaEvent,
+            ResponseFunctionCallArgumentsDoneEvent,
             ResponseOutputItemAddedEvent,
             ResponseOutputItemDoneEvent,
             ResponseTextDeltaEvent,
             ResponseTextDoneEvent,
-            ResponseFunctionCallArgumentsDeltaEvent,
-            ResponseFunctionCallArgumentsDoneEvent,
-            ResponseCompletedEvent,
         )
 
         # 1. Convert input items to message dicts
-        messages: list[dict[str, Any]] = []
+        messages: list[Any] = []
         try:
             raw_msgs = Converter.items_to_messages(input, model=self.model_name)
             for m in raw_msgs:
                 messages.append(dict(m))
-        except Exception:
+        except Exception as conv_err:
+            logger.debug("[sdk_bridge] Fallback message conversion for stream input: %s", conv_err)
             if isinstance(input, str):
                 messages.append({"role": "user", "content": input})
             elif isinstance(input, list):
@@ -934,20 +1076,14 @@ class MakimaModel(Model):
                     messages[0]["content"] = f"{existing_sys}\n\n{system_instructions}".strip()
 
         # 3. Build Tools & Handoffs manifest
-        tools_manifest: list[dict[str, Any]] = []
+        tools_manifest: list[Any] = []
         for t in tools:
             try:
                 openai_t = Converter.tool_to_openai(t)
                 tools_manifest.append(openai_t)
             except Exception as t_err:
                 logger.debug("[sdk_bridge] Could not convert tool '%s': %s", getattr(t, "name", "?"), t_err)
-
-        for h in handoffs:
-            try:
-                openai_h = Converter.convert_handoff_tool(h)
-                tools_manifest.append(openai_h)
-            except Exception as h_err:
-                logger.debug("[sdk_bridge] Could not convert handoff tool: %s", h_err)
+        tools_manifest.extend(_handoffs_to_openai_tools(handoffs))
 
         kwargs: dict[str, Any] = {}
         if tools_manifest:
@@ -960,13 +1096,28 @@ class MakimaModel(Model):
         if effective_model:
             kwargs["model"] = effective_model
         if hasattr(model_settings, "temperature") and getattr(model_settings, "temperature", None) is not None:
-            kwargs["temperature"] = getattr(model_settings, "temperature")
+            kwargs["temperature"] = model_settings.temperature
         if hasattr(model_settings, "max_tokens") and getattr(model_settings, "max_tokens", None) is not None:
-            kwargs["max_tokens"] = getattr(model_settings, "max_tokens")
+            kwargs["max_tokens"] = model_settings.max_tokens
+
+        # Multi-user isolation & BYOK: same injection as get_response (streaming path)
+        try:
+            from .orchestration_engine import client_request_context
+            req_ctx = client_request_context.get(None) or {}
+            if req_ctx.get("provider"):
+                kwargs["provider"] = req_ctx["provider"]
+            if req_ctx.get("api_key"):
+                kwargs["api_key"] = req_ctx["api_key"]
+            if req_ctx.get("base_url"):
+                kwargs["base_url"] = req_ctx["base_url"]
+            if req_ctx.get("model"):
+                kwargs["model"] = req_ctx["model"]
+        except Exception as _exc:
+            logger.debug("suppressed: %s", _exc)
 
         seq = 0
         msg_id = f"msg_{uuid.uuid4().hex[:8]}"
-        text_output_item: Optional[ResponseOutputMessage] = None
+        text_output_item: ResponseOutputMessage | None = None
         text_output_idx = 0
         full_text_chunks: list[str] = []
 
@@ -977,20 +1128,24 @@ class MakimaModel(Model):
         cur_out_idx = 0
         stream_succeeded = False
 
-        # Build map of valid tool & handoff names for this streaming turn
+        # Build map of valid tool names for this streaming turn (tools + handoffs)
         valid_tool_map: dict[str, str] = {}
         for t in tools:
             t_name = getattr(t, "name", None)
             if not t_name and hasattr(Converter, "tool_to_openai"):
                 try:
                     t_name = Converter.tool_to_openai(t).get("function", {}).get("name")
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug("suppressed: %s", _exc)
             if t_name:
                 valid_tool_map[t_name.lower()] = t_name
-        for h in handoffs:
-            h_name = getattr(h, "name", None) or getattr(h, "tool_name", None)
-            if h_name:
+                if t_name.startswith("system_"):
+                    valid_tool_map[t_name[7:].lower()] = t_name
+                else:
+                    valid_tool_map[f"system_{t_name}".lower()] = t_name
+        for h in handoffs or []:
+            h_name = getattr(h, "tool_name", None)
+            if isinstance(h_name, str) and h_name:
                 valid_tool_map[h_name.lower()] = h_name
 
         try:
@@ -1044,11 +1199,11 @@ class MakimaModel(Model):
                     fn_name = str(ev.get("name") or "").strip()
                     args_delta = ev.get("arguments_delta", "")
 
-                    # Resolve fn_name against valid tools & handoffs
+                    # Resolve fn_name against valid tools
                     resolved_fn = valid_tool_map.get(fn_name.lower()) if fn_name else None
 
                     if not resolved_fn and fn_name:
-                        logger.warning("[sdk_bridge.stream] Discarding invalid tool call '%s' (not in agent tools/handoffs)", fn_name)
+                        logger.warning("[sdk_bridge.stream] Discarding invalid tool call '%s' (not in agent tools)", fn_name)
                         continue
 
                     if tc_idx not in tool_call_items:
@@ -1127,7 +1282,6 @@ class MakimaModel(Model):
                     seq += 1
                     yield ResponseFunctionCallArgumentsDoneEvent(
                         arguments=item.arguments,
-                        name=item.name,
                         item_id=item.call_id,
                         output_index=idx,
                         sequence_number=seq,
@@ -1231,7 +1385,7 @@ class MakimaModel(Model):
             if not tool_call_items:
                 try:
                     from ..ai_handler import AIHandler
-                    cleaned_t, extracted_tcs = AIHandler.extract_embedded_tool_calls(accumulated_text)
+                    _cleaned_t, extracted_tcs = AIHandler.extract_embedded_tool_calls(accumulated_text)
                     if extracted_tcs:
                         for emb_idx, emb_tc in enumerate(extracted_tcs):
                             fn_n = emb_tc.get("name") or ""
@@ -1239,12 +1393,16 @@ class MakimaModel(Model):
                             args_s = fn_args if isinstance(fn_args, str) else json.dumps(fn_args)
                             c_id = emb_tc.get("id") or f"call_emb_{uuid.uuid4().hex[:6]}"
                             resolved_emb = valid_tool_map.get(fn_n.lower()) if fn_n else None
-                            if resolved_emb:
-                                fn_n = resolved_emb
+                            if not resolved_emb and fn_n:
+                                clean_emb = fn_n.lower().removeprefix("call_").removeprefix("tool_").removeprefix("system_")
+                                resolved_emb = valid_tool_map.get(clean_emb) or valid_tool_map.get(f"system_{clean_emb}")
+                            if not resolved_emb:
+                                logger.warning("[sdk_bridge.stream] Discarding invalid embedded tool call '%s'", fn_n)
+                                continue
                             emb_item = ResponseFunctionToolCall(
                                 arguments=args_s,
                                 call_id=c_id,
-                                name=fn_n,
+                                name=resolved_emb,
                                 type="function_call",
                             )
                             emb_out_idx = cur_out_idx
@@ -1267,15 +1425,14 @@ class MakimaModel(Model):
                             seq += 1
                             tool_call_items[len(tool_call_items)] = emb_item
                             tool_call_indices[len(tool_call_indices)] = emb_out_idx
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug("suppressed: %s", _exc)
 
         # B. Finalize tool calls
         for t_idx, tc_item in tool_call_items.items():
             t_out_idx = tool_call_indices[t_idx]
             yield ResponseFunctionCallArgumentsDoneEvent(
                 arguments=tc_item.arguments,
-                name=tc_item.name,
                 item_id=tc_item.call_id,
                 output_index=t_out_idx,
                 sequence_number=seq,
@@ -1311,9 +1468,13 @@ class MakimaModel(Model):
 def get_sdk_session(
     session_id: str,
     db_path: str = "",
-    limit: int = 12,
+    limit: int = 16,
 ) -> SQLiteSession:
-    """Return an SQLiteSession for multi-turn short-term conversational persistence with a sliding limit."""
+    """Return an SQLiteSession for multi-turn short-term conversational persistence with a sliding limit.
+
+    limit defaults to 16 to match RunConfig.session_settings (SessionSettings(limit=16)).
+    Local-only — no paid OpenAI Responses compaction session.
+    """
     canonical_path = db_path or os.path.expanduser("~/.makima/sessions.db")
     os.makedirs(os.path.dirname(canonical_path), exist_ok=True)
     return SQLiteSession(
@@ -1323,22 +1484,83 @@ def get_sdk_session(
     )
 
 
+def build_nexus_multi_provider(ai_handler: Any) -> MultiProvider:
+    """Build an Agents SDK MultiProvider from NEXUS BackendProfiles (BYOK, free/local).
+
+    - Maps each OpenAI-compatible / Ollama backend to its own OpenAIProvider via provider_map.
+    - use_responses=False: Chat Completions only — never the paid OpenAI Responses API.
+    - Primary chat path remains MakimaModel → NEXUS Pareto routing; MultiProvider is used when
+      a string model name (e.g. "groq/llama-3.3-70b") is resolved via RunConfig.model /
+      agent.model string form.
+    """
+    pmap = MultiProviderMap()
+    backends: dict[str, Any] = dict(getattr(ai_handler, "backends", None) or {})
+    registered = 0
+
+    for name, profile in backends.items():
+        if not getattr(profile, "enabled", True):
+            continue
+        adapter = str(getattr(profile, "adapter_type", "openai") or "openai").lower()
+        base_url = getattr(profile, "base_url", None)
+        if adapter not in ("openai", "ollama") or not base_url:
+            continue
+        if callable(getattr(profile, "get_api_key", None)):
+            api_key = profile.get_api_key() or ""
+        else:
+            api_key = str(getattr(profile, "api_key", "") or "")
+        base_str = str(base_url)
+        is_local = any(h in base_str for h in ("localhost", "127.0.0.1", "0.0.0.0", ":11434"))
+        if not api_key and not is_local:
+            continue
+        try:
+            provider = OpenAIProvider(
+                api_key=api_key or "not-needed",
+                base_url=base_str,
+                use_responses=False,
+            )
+            pmap.add_provider(name, provider)
+            registered += 1
+        except Exception as prov_err:
+            logger.warning("[sdk_bridge] MultiProvider skip '%s': %s", name, prov_err)
+
+    openai_prof = backends.get("openai") or backends.get("gpt4o")
+    openai_kwargs: dict[str, Any] = {"openai_use_responses": False}
+    if openai_prof is not None and getattr(openai_prof, "base_url", None):
+        key = openai_prof.get_api_key() if callable(getattr(openai_prof, "get_api_key", None)) else getattr(openai_prof, "api_key", "")
+        openai_kwargs["openai_base_url"] = str(openai_prof.base_url)
+        if key:
+            openai_kwargs["openai_api_key"] = key
+
+    mp = MultiProvider(
+        provider_map=pmap,
+        unknown_prefix_mode="model_id",
+        **openai_kwargs,
+    )
+    logger.info(
+        "[sdk_bridge] Built MultiProvider with %d BYOK prefix routes: %s",
+        registered, sorted(pmap.get_mapping().keys()),
+    )
+    return mp
+
+
 def get_default_run_config(
     max_concurrency: int = 4,
     timeout: float = 75.0,
     enable_trimmer: bool = True,
     enable_handoff_filter: bool = True,
+    ai_handler: Any = None,
 ) -> RunConfig:
     """Return a high-performance RunConfig with SDK-native optimizations:
-    1. Tracing disabled to eliminate span allocation & background processor flush overhead.
+    1. Tracing disabled by default (opt-in via MAKIMA_SDK_TRACING=1).
     2. ToolOutputTrimmer to compact large tool outputs from older turns and prevent prompt token bloat.
     3. remove_all_tools handoff filter to keep cross-agent delegation context clean.
     4. ToolExecutionConfig for parallel concurrent function tool execution.
-    5. ModelSettings enabling parallel tool calls and bounded timeouts.
+    5. ModelSettings: parallel tool calls, bounded timeout, ModelRetrySettings (1 retry + jittered backoff; NEXUS backend failover is the real retry layer).
     6. SessionSettings(limit=16) for bounded SQLite session retrieval (<1ms).
+    7. Optional MultiProvider BYOK map from NEXUS backends (ai_handler provided).
     """
-    return RunConfig(
-        tracing_disabled=True,
+    run_kwargs: dict[str, Any] = dict(
+        tracing_disabled=not _SDK_TRACING_ENABLED,
         handoff_input_filter=remove_all_tools if enable_handoff_filter else None,
         call_model_input_filter=ToolOutputTrimmer(
             recent_turns=2,
@@ -1351,10 +1573,25 @@ def get_default_run_config(
         model_settings=ModelSettings(
             parallel_tool_calls=True,
             timeout=timeout,
+            retry=ModelRetrySettings(
+                max_retries=1,
+                backoff=ModelRetryBackoffSettings(
+                    initial_delay=0.5,
+                    max_delay=4.0,
+                    multiplier=2.0,
+                    jitter=True,
+                ),
+            ),
         ),
         session_settings=SessionSettings(limit=16),
         tool_not_found_behavior="return_error_to_model",
     )
+    if ai_handler is not None:
+        try:
+            run_kwargs["model_provider"] = build_nexus_multi_provider(ai_handler)
+        except Exception as mp_err:
+            logger.warning("[sdk_bridge] MultiProvider build failed (default kept): %s", mp_err)
+    return RunConfig(**run_kwargs)
 
 
 # =============================================================================
@@ -1464,6 +1701,66 @@ async def dangerous_command_guard(ctx: Any, agent: Any, input_data: Any) -> Guar
     )
 
 
+_SECRET_LEAK_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"-----BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----"),
+    re.compile(r"\bsk-[A-Za-z0-9_\-]{16,}\b"),
+    re.compile(r"\bgsk_[A-Za-z0-9_\-]{16,}\b"),
+    re.compile(r"\bAIza[0-9A-Za-z_\-]{30,}\b"),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9\-]{10,}\b"),
+    re.compile(r"(?i)\b(?:api[_-]?key|secret|token|password)\s*[:=]\s*['\"][A-Za-z0-9_\-]{16,}['\"]"),
+)
+
+
+@output_guardrail
+async def no_secret_leak_guard(ctx: Any, agent: Any, agent_output: Any) -> GuardrailFunctionOutput:
+    """
+    OpenAI Agents SDK Output Guardrail:
+    Trip when assistant output appears to leak raw secrets/API keys.
+    """
+    text = agent_output if isinstance(agent_output, str) else str(agent_output or "")
+    for pat in _SECRET_LEAK_PATTERNS:
+        if pat.search(text):
+            return GuardrailFunctionOutput(
+                output_info="Potential secret/credential leaked in output",
+                tripwire_triggered=True,
+            )
+    return GuardrailFunctionOutput(
+        output_info="safe",
+        tripwire_triggered=False,
+    )
+
+
+def _tool_args_looks_injected(raw_args: str) -> bool:
+    """True only for prompt-injection phrases in tool args (not shell-dangerous cmds)."""
+    if not raw_args or not isinstance(raw_args, str):
+        return False
+    low = raw_args.lower()
+    return any(pattern in low for pattern in INJECTION_PATTERNS)
+
+
+@tool_input_guardrail
+async def tool_args_injection_guard(data: ToolInputGuardrailData) -> ToolGuardrailFunctionOutput:
+    """
+    SDK Tool Input Guardrail: reject tool calls whose raw args carry jailbreak /
+    instruction-override phrases. Shell-dangerous commands are left to the
+    confirmation / HITL path (not blocked here).
+    """
+    raw_args = ""
+    try:
+        ctx = getattr(data, "context", None)
+        raw_args = str(getattr(ctx, "tool_arguments", "") or "")
+    except Exception as _exc:
+        logger.debug("suppressed: %s", _exc)
+    if _tool_args_looks_injected(raw_args):
+        return ToolGuardrailFunctionOutput.reject_content(
+            "Tool call rejected: arguments contain prompt-injection / instruction-override text. Re-issue the call with only legitimate parameters.",
+            output_info="injection_in_tool_args",
+        )
+    return ToolGuardrailFunctionOutput.allow()
+
+
 # =============================================================================
 # Unified Agent Architecture (Zero Handoffs, Direct OS Tool Access)
 # =============================================================================
@@ -1500,7 +1797,23 @@ Memory & Personal Knowledge:
 - Use `memory_store` / `remember_fact` when the user asks to remember or save personal facts, preferences, contacts, or enduring instructions.
 - Use `memory_search` / `recall_memory` to recall past facts, preferences, or prior conversation context when asked.
 - Use `query_knowledge_graph` to explore relationships and connections between entities.
-- Use `memory_forget` / `forget_memory` when the user explicitly asks to remove or forget stored information."""
+- Use `memory_forget` / `forget_memory` when the user explicitly asks to remove or forget stored information.
+
+Capabilities & Self-Discovery:
+- When the user asks 'tum kya kya kar sakte ho', 'what can you do', 'apni powers batao', 'capabilities summary', or queries what tools you have, call `describe_my_capabilities` or answer directly based on your live registered tools (system control, browser automation, media playback, document generation, memory recall, live web search, AI image generation, devops, security, etc.).
+- NEVER reply with canned AI disclaimers claiming you are only a language model without computer access. You have direct control through your registered tools.
+
+Goal-First Execution & Automatic Fallback:
+- Every user request has a GOAL (send a message, play music, open a file). Your job is to achieve the GOAL, not call one specific tool.
+- The [System Capability Snapshot] in your context shows what strategies are actually available on this machine right now.
+- If a tool returns [TOOL_FAILED: ...], DO NOT stop and apologize. Immediately try the next available strategy from the snapshot.
+- Fallback chains to follow:
+  * Messaging goal: whatsapp → telegram → discord → email → tell user no messaging app is configured
+  * Media goal: media_play (YouTube/Spotify) → launch local media player → tell user
+  * Browser goal: browser_navigate (CDP attached) → browser_navigate (launch) → tell user
+  * File open goal: launch_app with correct app → computer_action to open via Explorer → tell user
+- Only tell the user "nahi ho sakta" AFTER all available strategies in the snapshot are exhausted.
+- Never expose raw tool error strings to the user — translate failures into plain Hindi/English."""
 
 
 MAKIMA_SYSTEM_PROMPT = get_makima_system_prompt()
@@ -1541,15 +1854,15 @@ def _clean_param(param_info: dict) -> dict:
 def _compress_tool_schema(tool: Any) -> Any:
     """
     Tool schema compress karo — ~75% token reduction bina functionality change kiye.
-    Removes: description (trimmed to 50 chars), title, default, examples, $schema,
+    Removes: description (trimmed to 250 chars), title, default, examples, $schema,
     $comment, additionalProperties, and all per-parameter descriptive metadata.
     Preserves: type, enum, items, $ref, const, anyOf/oneOf/allOf, required (top-level),
     nested object properties (for structured action params like computer_action).
     """
-    # 1. Trim tool description to max 50 chars
+    # 1. Trim tool description to max 250 chars
     if hasattr(tool, "description") and tool.description:
         desc = tool.description.strip()
-        tool.description = desc[:50].rstrip() if len(desc) > 50 else desc
+        tool.description = desc[:250].rstrip() if len(desc) > 250 else desc
 
     # 2. Strip schema bloat
     if hasattr(tool, "params_json_schema") and isinstance(tool.params_json_schema, dict):
@@ -1582,17 +1895,452 @@ def _compress_tool_schema(tool: Any) -> Any:
     return tool
 
 
+def _handoffs_to_openai_tools(handoffs: Any) -> list[dict[str, Any]]:
+    """Convert SDK Handoff objects into OpenAI Chat Completions tool params for NEXUS."""
+    out: list[dict[str, Any]] = []
+    for h in handoffs or []:
+        try:
+            if hasattr(Converter, "convert_handoff_tool"):
+                out.append(dict(Converter.convert_handoff_tool(h)))
+            else:
+                out.append({
+                    "type": "function",
+                    "function": {
+                        "name": getattr(h, "tool_name", ""),
+                        "description": getattr(h, "tool_description", ""),
+                        "parameters": getattr(h, "input_json_schema", {}) or {},
+                    },
+                })
+        except Exception as h_err:
+            logger.debug("[sdk_bridge] handoff tool convert failed: %s", h_err)
+    return out
+
+
+HANDOFF_DOMAIN_SPECS: dict[str, dict[str, str]] = {
+    "system": {
+        "title": "System Specialist",
+        "focus": "OS control, files, folders, apps, windows, processes, clipboard, screenshots.",
+        "hints": (
+            "You are the system control specialist. Handle OS actions (launch/open apps, "
+            "file ops, windows, processes, clipboard, screenshots) with direct tool calls. "
+            "Do not invent success — report actual tool results."
+        ),
+        "task": "system",
+    },
+    "browser": {
+        "title": "Browser Specialist",
+        "focus": "Web browsing, navigation, scraping, forms, CDP pages.",
+        "hints": (
+            "You are the browser automation specialist. Navigate, click, fill forms, and "
+            "scrape pages via registered browser tools. Prefer CDP-attached tools when available."
+        ),
+        "task": "browser",
+    },
+    "code": {
+        "title": "Code Specialist",
+        "focus": "Programming, scripts, refactoring, shell execution, git.",
+        "hints": (
+            "You are the coding specialist. Write, debug, and refactor code; run scripts via "
+            "safe execution tools. Prefer small correct steps over large speculative edits."
+        ),
+        "task": "code",
+    },
+    "research": {
+        "title": "Research Specialist",
+        "focus": "Web search, fetch URL, multi-hop research, synthesis.",
+        "hints": (
+            "You are the research specialist. Use web_search/fetch_url and related tools for "
+            "live facts, then synthesize a concise grounded answer with sources when available."
+        ),
+        "task": "research",
+    },
+    "messaging": {
+        "title": "Messaging Specialist",
+        "focus": "WhatsApp, Telegram, Discord, email drafting/dispatch, contacts.",
+        "hints": (
+            "You are the messaging specialist. Handle WhatsApp/Telegram/Discord/email goals. "
+            "Draft clearly before dispatch; use contact lookup when names are ambiguous."
+        ),
+        "task": "messaging",
+    },
+    "media": {
+        "title": "Media Specialist",
+        "focus": "YouTube/Spotify playback, local media, volume, track navigation.",
+        "hints": (
+            "You are the media specialist. Control music/video playback (YouTube/Spotify/local). "
+            "Confirm the track/app state from tool results."
+        ),
+        "task": "media",
+    },
+    "security": {
+        "title": "Security Specialist",
+        "focus": "Vulnerability scans, secret detection, injection audit.",
+        "hints": (
+            "You are the security specialist. Run scans/audits via security tools only. "
+            "Never expose secrets in output — redact keys and tokens."
+        ),
+        "task": "security",
+    },
+    "devops": {
+        "title": "DevOps Specialist",
+        "focus": "Docker, CI/CD, containers, deployment diagnostics.",
+        "hints": (
+            "You are the DevOps specialist. Manage containers/services and diagnose deployments "
+            "using registered devops tools. Prefer dry inspection before destructive actions."
+        ),
+        "task": "devops",
+    },
+    "document": {
+        "title": "Document Specialist",
+        "focus": "Excel, Word, PDF, PowerPoint generation and processing.",
+        "hints": (
+            "You are the document specialist. Create/process xlsx/docx/pdf/pptx with document tools. "
+            "Confirm paths and formats from tool results."
+        ),
+        "task": "document",
+    },
+    "memory": {
+        "title": "Memory Specialist",
+        "focus": "Recall, store, forget facts; knowledge graph queries.",
+        "hints": (
+            "You are the memory specialist. Use memory_store/memory_search/memory_forget and "
+            "knowledge graph tools for personal facts and prior context."
+        ),
+        "task": "memory",
+    },
+}
+
+DEFAULT_HANDOFF_DOMAINS: tuple[str, ...] = (
+    "system",
+    "browser",
+    "code",
+    "research",
+    "messaging",
+    "media",
+    "security",
+    "devops",
+    "document",
+    "memory",
+)
+
+
+# Shared core: every specialist also gets these (memory/personalization +
+# self-discovery), so a filtered specialist is never helpless outside its domain.
+SHARED_SPECIALIST_TOOLS: tuple[str, ...] = (
+    "memory_search",
+    "describe_my_capabilities",
+)
+
+# Per-domain tool selector overlay (P1). Category/agent_hints alone are too
+# coarse (e.g. `system` stamps 61 tools), so name keywords refine the cut.
+# Domain files are untouched — all selection lives here.
+DOMAIN_TOOL_SELECTORS: dict[str, dict[str, Any]] = {
+    "system": {
+        "categories": {"system", "filesystem", "network"},
+        "agent_hints": {"system"},
+        "keywords": (
+            "file", "folder", "dir", "app", "launch", "window", "process",
+            "cpu", "ram", "disk", "clipboard", "screenshot", "notification",
+            "volume", "power", "service", "snapshot", "undo", "organize",
+            "clean", "keyboard", "mouse", "computer", "screen", "port",
+            "adapter", "battery", "specs", "stats",
+        ),
+    },
+    "browser": {
+        "categories": {"browser", "web"},
+        "agent_hints": {"browser"},
+        "keywords": (
+            "browser", "navigat", "click", "scrap", "cdp", "page", "tab",
+            "fill", "fetch", "search_installed",
+        ),
+    },
+    "code": {
+        "categories": set(),
+        "agent_hints": {"code"},
+        "keywords": (
+            "python", "shell", "script", "patch", "git", "code",
+            "execute", "run_", "refactor", "interpret",
+        ),
+    },
+    "research": {
+        "categories": {"web"},
+        "agent_hints": {"research"},
+        "keywords": ("search", "fetch", "rss", "research", "news", "report"),
+    },
+    "messaging": {
+        "categories": {"communication"},
+        "agent_hints": {"messaging"},
+        "keywords": (
+            "whatsapp", "telegram", "discord", "email", "message",
+            "contact", "send", "notify", "chat",
+        ),
+    },
+    "media": {
+        "categories": {"media"},
+        "agent_hints": {"media"},
+        "keywords": (
+            "media", "play", "music", "spotify", "youtube", "audio",
+            "video", "track", "volume", "pause", "resume",
+        ),
+    },
+    "security": {
+        "categories": {"security"},
+        "agent_hints": {"security"},
+        "keywords": ("secur", "scan", "vuln", "secret", "audit", "port", "threat"),
+    },
+    "devops": {
+        "categories": {"devops"},
+        "agent_hints": set(),
+        "keywords": ("docker", "deploy", "container", "service", "pipeline", "ci_"),
+    },
+    "document": {
+        "categories": {"document"},
+        "agent_hints": {"document"},
+        "keywords": (
+            "document", "excel", "word", "pdf", "ppt", "docx", "xlsx",
+            "sheet", "slide", "report",
+        ),
+    },
+    "memory": {
+        "categories": {"memory"},
+        "agent_hints": set(),
+        "keywords": (
+            "memory", "remember", "recall", "forget", "knowledge",
+            "fact", "entity",
+        ),
+    },
+}
+
+# Minimum filtered tools before falling back to the full set (never helpless).
+MIN_DOMAIN_TOOLS = 5
+
+
+def _select_tool_names_for_domain(
+    tool_items: Sequence[Any],
+    domain: str,
+    registry: Any | None = None,
+) -> list[str]:
+    """Select tool names for a specialist domain (categories ∪ hints ∪ keywords ∪ shared core)."""
+    all_names: list[str] = []
+    meta_by_name: dict[str, Any] = {}
+    for item in tool_items or []:
+        if isinstance(item, dict):
+            raw_name = item.get("name")
+            meta = None
+        else:
+            raw_name = getattr(item, "name", item) if item else None
+            meta = item if hasattr(item, "category") or hasattr(item, "agent_hints") else None
+        if not raw_name or not isinstance(raw_name, str):
+            continue
+        all_names.append(raw_name)
+        if meta is not None:
+            meta_by_name[raw_name] = meta
+
+    name_set = set(all_names)
+    if registry is not None and hasattr(registry, "get_tool"):
+        for n in all_names:
+            if n not in meta_by_name:
+                try:
+                    m = registry.get_tool(n)
+                except Exception as _exc:
+                    logger.debug("suppressed: %s", _exc)
+                    m = None
+                if m is not None:
+                    meta_by_name[n] = m
+
+    sel = DOMAIN_TOOL_SELECTORS.get(domain) or {}
+    cats = {str(c).lower() for c in sel.get("categories", set())}
+    hints = {str(h).lower() for h in sel.get("agent_hints", set())}
+    keywords = [str(k).lower() for k in sel.get("keywords", ())]
+
+    picked: list[str] = []
+    for name in all_names:
+        low = name.lower()
+        if name in SHARED_SPECIALIST_TOOLS:
+            picked.append(name)
+            continue
+        if any(k in low for k in keywords):
+            picked.append(name)
+            continue
+        meta = meta_by_name.get(name)
+        if meta is not None:
+            cat = str(getattr(meta, "category", "") or "").lower()
+            if cat and cat in cats:
+                picked.append(name)
+                continue
+            meta_hints = getattr(meta, "agent_hints", None) or []
+            try:
+                hint_set = {str(h).lower() for h in meta_hints}
+            except Exception as _exc:
+                logger.debug("suppressed: %s", _exc)
+                hint_set = set()
+            if hints and (hint_set & hints):
+                picked.append(name)
+                continue
+
+    # Shared core only counts when actually present in the registry set.
+    picked = [p for p in picked if p in name_set]
+    # Deduplicate, preserve order.
+    seen: set[str] = set()
+    unique = [p for p in picked if not (p in seen or seen.add(p))]
+    if len(unique) < MIN_DOMAIN_TOOLS:
+        return list(all_names)
+    return unique
+
+
+def _agent_section(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return the agent config section, accepting flat, full-yaml, or section dicts."""
+    cfg = config if config is not None else _load_agent_config()
+    if not isinstance(cfg, dict):
+        return {}
+    if "enable_handoffs" in cfg or "handoff_domains" in cfg:
+        return cfg
+    nested = cfg.get("agent")
+    return nested if isinstance(nested, dict) else {}
+
+
+def _handoffs_enabled(config: dict[str, Any] | None = None) -> bool:
+    """Opt-in real triage handoffs via env MAKIMA_HANDOFFS=1 or agent.enable_handoffs."""
+    env = os.environ.get("MAKIMA_HANDOFFS", "").strip().lower()
+    if env in ("1", "true", "yes", "on"):
+        return True
+    if env in ("0", "false", "no", "off"):
+        return False
+    cfg = config if config is not None else _load_agent_config()
+    return bool(_agent_section(cfg).get("enable_handoffs", False))
+
+
+def _resolve_handoff_domains(config: dict[str, Any] | None = None) -> list[str]:
+    cfg = config if config is not None else _load_agent_config()
+    raw = _agent_section(cfg).get("handoff_domains")
+    if isinstance(raw, str):
+        domains = [d.strip().lower() for d in raw.split(",") if d.strip()]
+    elif isinstance(raw, (list, tuple)):
+        domains = [str(d).strip().lower() for d in raw]
+    else:
+        domains = list(DEFAULT_HANDOFF_DOMAINS)
+    return [d for d in domains if d in HANDOFF_DOMAIN_SPECS]
+
+
+def make_specialist_agent(
+    domain: str,
+    ai_handler: Any,
+    tool_registry: Any | None = None,
+    ws_broadcast: Callable | None = None,
+    orchestrator: Any | None = None,
+    task: str = "fast_chat",
+    config: dict[str, Any] | None = None,
+    all_tools: list[Any] | None = None,
+    domain_tools_only: bool = True,
+) -> Agent:
+    """Build a domain specialist Agent with domain-filtered tools + focused instructions.
+
+    domain_tools_only (P1): specialist sees only its domain slice (+ shared core)
+    instead of all 122 tools — smaller prompt, sharper decisions, same capability
+    across handoffs. Falls back to the full set when the slice is too small.
+    """
+    spec = HANDOFF_DOMAIN_SPECS.get(domain) or HANDOFF_DOMAIN_SPECS["system"]
+    reg = tool_registry or (getattr(orchestrator, "tool_registry", None) if orchestrator else None)
+    if domain_tools_only and reg is not None and hasattr(reg, "get_all"):
+        base_items = reg.get_all()
+        selected = _select_tool_names_for_domain(base_items, domain, reg)
+        sdk_tools = to_sdk_tools(selected, registry=reg, config=config)
+        logger.info(
+            "[sdk_bridge] Specialist '%s': %d/%d tools (filtered)",
+            domain, len(sdk_tools), len(base_items),
+        )
+    elif all_tools is not None:
+        if domain_tools_only:
+            want = set(
+                _select_tool_names_for_domain(
+                    [getattr(t, "name", "") for t in all_tools], domain, reg
+                )
+            )
+            filtered = [t for t in all_tools if getattr(t, "name", None) in want]
+            sdk_tools = filtered if len(filtered) >= MIN_DOMAIN_TOOLS else list(all_tools)
+        else:
+            sdk_tools = list(all_tools)
+    else:
+        tool_items: list[Any] = []
+        sdk_tools = to_sdk_tools(tool_items, registry=reg, config=config)
+
+    domain_task = spec.get("task") or task
+    model = MakimaModel(ai_handler, task=domain_task, agent_name=f"{domain}_specialist")
+    return Agent(
+        name=spec.get("title") or f"{domain.title()} Specialist",
+        instructions=(
+            f"{spec.get('hints', '')}\n\n"
+            f"Domain focus: {spec.get('focus', domain)}\n"
+            "Stay in this domain. If the request clearly belongs elsewhere, answer briefly "
+            "and stop — the triage agent decides handoffs."
+        ),
+        tools=sdk_tools,
+        model=model,
+        hooks=MakimaAgentHooks(ws_broadcast),
+        input_guardrails=[dangerous_command_guard],
+        output_guardrails=[no_secret_leak_guard],
+        handoffs=[],
+    )
+
+
+def build_domain_handoffs(
+    ai_handler: Any,
+    tool_registry: Any | None = None,
+    ws_broadcast: Callable | None = None,
+    orchestrator: Any | None = None,
+    task: str = "fast_chat",
+    config: dict[str, Any] | None = None,
+    all_tools: list[Any] | None = None,
+    domains: Sequence[str] | None = None,
+) -> tuple[list[Any], dict[str, Agent]]:
+    """Create specialist agents + SDK Handoff entries for triage routing."""
+    chosen = list(domains) if domains is not None else _resolve_handoff_domains(config)
+    specialists: dict[str, Agent] = {}
+    handoffs: list[Any] = []
+    for domain in chosen:
+        if domain not in HANDOFF_DOMAIN_SPECS:
+            continue
+        try:
+            specialist = make_specialist_agent(
+                domain,
+                ai_handler=ai_handler,
+                tool_registry=tool_registry,
+                ws_broadcast=ws_broadcast,
+                orchestrator=orchestrator,
+                task=task,
+                config=config,
+                all_tools=all_tools,
+            )
+            specialists[domain] = specialist
+            handoffs.append(
+                handoff(
+                    specialist,
+                    tool_name_override=f"transfer_to_{domain}_specialist",
+                    tool_description_override=(
+                        f"Hand off to the {HANDOFF_DOMAIN_SPECS[domain]['title']} for "
+                        f"{HANDOFF_DOMAIN_SPECS[domain]['focus']}"
+                    ),
+                )
+            )
+        except Exception as ho_err:
+            logger.warning("[sdk_bridge] handoff build failed for '%s': %s", domain, ho_err)
+    return handoffs, specialists
+
+
 def make_unified_agent(
     ai_handler: Any,
-    tool_registry: Optional[Any] = None,
-    ws_broadcast: Optional[Callable] = None,
-    orchestrator: Optional[Any] = None,
+    tool_registry: Any | None = None,
+    ws_broadcast: Callable | None = None,
+    orchestrator: Any | None = None,
     task: str = "fast_chat",
-    config: Optional[dict[str, Any]] = None,
+    config: dict[str, Any] | None = None,
+    enable_handoffs: bool | None = None,
 ) -> Agent:
     """
-    Constructs the single unified Makima Agent equipped with ALL tools directly.
-    Zero handoffs, zero specialist silos, zero pre-execution viability checks.
+    Constructs the primary Makima Agent equipped with ALL tools directly.
+    Default path: handoffs=[] (unified single-agent). Opt-in real triage handoffs via
+    MAKIMA_HANDOFFS=1 or agent.enable_handoffs — domain specialists share tools and
+    receive transfer_to_*_specialist handoff tools.
     task parameter dynamically routes model selection (Groq for fast_chat, Gemini Flash for vision/long-context, OpenRouter for fallback)
     via ai_handler Pareto cascades.
     """
@@ -1613,29 +2361,47 @@ def make_unified_agent(
 
     agent_cfg = config if config is not None else getattr(orchestrator, "config", None)
     sdk_tools = to_sdk_tools(tool_items, registry=reg, config=agent_cfg)
-    sdk_tools = [_compress_tool_schema(t) for t in sdk_tools]
     model = MakimaModel(ai_handler, task=task, agent_name="makima")
     agent_hooks = MakimaAgentHooks(ws_broadcast)
+
+    handoffs: list[Any] = []
+    want_handoffs = _handoffs_enabled(agent_cfg) if enable_handoffs is None else bool(enable_handoffs)
+    if want_handoffs:
+        handoffs, _specialists = build_domain_handoffs(
+            ai_handler=ai_handler,
+            tool_registry=reg,
+            ws_broadcast=ws_broadcast,
+            orchestrator=orchestrator,
+            task=task,
+            config=agent_cfg,
+            all_tools=list(sdk_tools),
+        )
+        logger.info(
+            "[sdk_bridge] Triage handoffs enabled: %d specialists (%s)",
+            len(handoffs),
+            ", ".join(sorted(_specialists.keys())),
+        )
 
     return Agent(
         name="Makima",
         instructions=get_makima_system_prompt(),
-        tools=sdk_tools,
+        tools=list(sdk_tools),
         model=model,
         hooks=agent_hooks,
         input_guardrails=[dangerous_command_guard],
-        handoffs=[],
+        output_guardrails=[no_secret_leak_guard],
+        handoffs=handoffs,
     )
 
 
 def make_triage_agent(
     ai_handler: Any,
-    orchestrator: Optional[Any] = None,
-    ws_broadcast: Optional[Callable] = None,
-    tool_registry: Optional[Any] = None,
-    personality: Optional[Any] = None,
+    orchestrator: Any | None = None,
+    ws_broadcast: Callable | None = None,
+    tool_registry: Any | None = None,
+    personality: Any | None = None,
     task: str = "fast_chat",
-    config: Optional[dict[str, Any]] = None,
+    config: dict[str, Any] | None = None,
 ) -> Agent:
     """Backward compatibility alias: routes directly to make_unified_agent."""
     return make_unified_agent(
@@ -1654,14 +2420,14 @@ def make_triage_agent(
 
 class MakimaAgentHooks(AgentHooks):
     """Agent-scoped hooks passed to Agent(hooks=...)."""
-    def __init__(self, ws_broadcast: Optional[Callable] = None) -> None:
+    def __init__(self, ws_broadcast: Callable | None = None) -> None:
         self.ws_broadcast = ws_broadcast
 
 
 def _extract_call_id(context: Any, call: Any = None) -> str:
     """Extract call_id safely across all OpenAI Agents SDK context & call variants."""
-    if hasattr(context, "_makima_call_id") and getattr(context, "_makima_call_id"):
-        return str(getattr(context, "_makima_call_id"))
+    if hasattr(context, "_makima_call_id") and context._makima_call_id:
+        return str(context._makima_call_id)
     if hasattr(context, "tool_call") and context.tool_call:
         tc = context.tool_call
         cid = getattr(tc, "call_id", None) or getattr(tc, "id", None)
@@ -1690,11 +2456,22 @@ class MakimaRunHooks(RunHooks):
     # Max times the same tool+args fingerprint can be called consecutively before loop detection fires.
     MAX_CONSECUTIVE_IDENTICAL_CALLS: int = 3
 
-    def __init__(self, ws_broadcast: Optional[Callable] = None, task_id: str = "") -> None:
+    def __init__(
+        self,
+        ws_broadcast: Callable | None = None,
+        task_id: str = "",
+        plan_milestones: list[dict[str, Any]] | None = None,
+        tool_registry: Any | None = None,
+        confirm_timeout_s: float = 60.0,
+    ) -> None:
         self.ws_broadcast = ws_broadcast
         self.task_id = task_id
         self.turn_count: int = 0
         self.completed_steps: list[dict[str, Any]] = []
+        self.plan_milestones: list[dict[str, Any]] = list(plan_milestones or [])
+        self._current_milestone_idx: int = 0
+        self.tool_registry = tool_registry
+        self.confirm_timeout_s = confirm_timeout_s
         # Parallel execution & loop detection tracking
         self._lock = asyncio.Lock()
         self._active_calls: dict[str, dict[str, Any]] = {}
@@ -1703,7 +2480,7 @@ class MakimaRunHooks(RunHooks):
     async def on_agent_start(self, context: Any, agent: Any) -> None:
         if self.ws_broadcast and self.task_id:
             try:
-                from ..ws_protocol import WSMessage, ServerMessageType, PROTOCOL_VERSION
+                from ..ws_protocol import PROTOCOL_VERSION, ServerMessageType, WSMessage
                 await self.ws_broadcast(WSMessage(
                     v=PROTOCOL_VERSION,
                     type=ServerMessageType.AGENT_STARTED,
@@ -1717,7 +2494,7 @@ class MakimaRunHooks(RunHooks):
         self.turn_count += 1
         if self.ws_broadcast and self.task_id:
             try:
-                from ..ws_protocol import WSMessage, ServerMessageType, PROTOCOL_VERSION
+                from ..ws_protocol import PROTOCOL_VERSION, ServerMessageType, WSMessage
                 await self.ws_broadcast(WSMessage(
                     v=PROTOCOL_VERSION,
                     type=ServerMessageType.AGENT_DONE,
@@ -1726,6 +2503,17 @@ class MakimaRunHooks(RunHooks):
                 ))
             except Exception as e:
                 logger.debug("[MakimaRunHooks] on_agent_end error: %s", e)
+
+        # Mark all pending/in_progress milestones completed when agent finishes
+        if self.ws_broadcast and self.task_id and self.plan_milestones:
+            for ms in self.plan_milestones:
+                if ms.get("status") in ("pending", "in_progress"):
+                    ms["status"] = "completed"
+                    try:
+                        from ..ws_protocol import build_plan_step_update
+                        await self.ws_broadcast(build_plan_step_update(self.task_id, ms["id"], "completed"))
+                    except Exception as _exc:
+                        logger.debug("suppressed: %s", _exc)
 
     async def on_handoff(self, context: Any, from_agent: Any, to_agent: Any) -> None:
         if self.ws_broadcast and self.task_id:
@@ -1738,15 +2526,48 @@ class MakimaRunHooks(RunHooks):
             except Exception as e:
                 logger.debug("[MakimaRunHooks] on_handoff error: %s", e)
 
+    async def emit_tool_progress(
+        self,
+        tool_name: str,
+        progress: float,
+        message: str = "",
+        call_id: str | None = None,
+        agent: str | None = None,
+    ) -> None:
+        """Emit real-time fractional progress (0-100%) for an active tool execution to UI."""
+        if self.ws_broadcast and self.task_id:
+            try:
+                from ..ws_protocol import build_tool_call_progress
+                msg = build_tool_call_progress(
+                    task_id=self.task_id,
+                    tool_name=tool_name,
+                    progress=int(progress),
+                    message=message,
+                    call_id=call_id or "",
+                    agent=agent or "",
+                )
+                await self.ws_broadcast(msg)
+            except Exception as e:
+                logger.debug("[MakimaRunHooks] emit_tool_progress error: %s", e)
+
     async def on_tool_start(self, context: Any, agent: Any, tool: Any, call: Any = None) -> None:
         tool_name = getattr(tool, "name", None) or getattr(context, "tool_name", None) or str(tool)
         call_id = _extract_call_id(context, call) or f"call_{uuid.uuid4().hex[:8]}"
         try:
-            setattr(context, "_makima_call_id", call_id)
-        except Exception:
-            pass
+            context._makima_call_id = call_id
+        except Exception as _exc:
+            logger.debug("suppressed: %s", _exc)
         if isinstance(context, dict) and not context.get("_makima_call_id"):
             context["_makima_call_id"] = call_id
+
+        # Provide progress reporter callback on context for long-running tools
+        progress_cb = lambda pct, msg="": asyncio.create_task(self.emit_tool_progress(tool_name, pct, msg, call_id=call_id))
+        try:
+            context.report_progress = progress_cb
+        except Exception as _exc:
+            logger.debug("suppressed: %s", _exc)
+        if isinstance(context, dict):
+            context["report_progress"] = progress_cb
 
         # --- Extract call arguments from ToolContext or call object ---
         args_dict: dict[str, Any] = {}
@@ -1763,7 +2584,8 @@ class MakimaRunHooks(RunHooks):
         elif isinstance(raw_args, str):
             try:
                 args_dict = json.loads(raw_args)
-            except Exception:
+            except Exception as parse_err:
+                logger.debug("[MakimaRunHooks] tool args JSON parse failed: %s", parse_err)
                 args_dict = {"raw": raw_args}
 
         # --- Required-argument validation (warn loudly; SDK handles the actual error) ---
@@ -1771,8 +2593,8 @@ class MakimaRunHooks(RunHooks):
         try:
             schema = getattr(tool, "params_json_schema", None) or getattr(tool, "schema", None) or {}
             required = schema.get("required", [])
-        except Exception:
-            pass
+        except Exception as _exc:
+            logger.debug("suppressed: %s", _exc)
         missing = [r for r in required if r not in args_dict]
         if missing:
             logger.warning(
@@ -1814,8 +2636,8 @@ class MakimaRunHooks(RunHooks):
                             level="error",
                             duration_ms=6000,
                         ))
-                    except Exception:
-                        pass
+                    except Exception as _exc:
+                        logger.debug("suppressed: %s", _exc)
                 raise RuntimeError(
                     f"Loop guard: '{tool_name}' called {consecutive_count}x with identical args."
                 )
@@ -1836,12 +2658,80 @@ class MakimaRunHooks(RunHooks):
             except Exception as e:
                 logger.debug("[MakimaRunHooks] on_tool_start error: %s", e)
 
+            # Update active milestone to in_progress
+            if self.plan_milestones and self._current_milestone_idx < len(self.plan_milestones):
+                cur_ms = self.plan_milestones[self._current_milestone_idx]
+                if cur_ms.get("status") == "pending":
+                    cur_ms["status"] = "in_progress"
+                    try:
+                        from ..ws_protocol import build_plan_step_update
+                        await self.ws_broadcast(build_plan_step_update(self.task_id, cur_ms["id"], "in_progress", f"Executing: {tool_name}"))
+                    except Exception as _exc:
+                        logger.debug("suppressed: %s", _exc)
+
+            # --- Check if action is destructive and requires user confirmation ---
+            is_dest = False
+            if self.tool_registry and hasattr(self.tool_registry, "get_tool"):
+                tool_meta = self.tool_registry.get_tool(tool_name)
+                if tool_meta and getattr(tool_meta, "is_destructive", False):
+                    is_dest = True
+
+            if not is_dest and tool_name in (
+                "kill_process", "delete_file", "system_power", "delete_directory",
+                "system_reboot", "system_shutdown"
+            ):
+                is_dest = True
+
+            if is_dest:
+                logger.info("[MakimaRunHooks] Tool '%s' is destructive — requesting user confirmation.", tool_name)
+                from ..ws_protocol import build_action_confirm
+                from .confirmations import ActionConfirmationManager
+
+                confirm_action = tool_name
+                confirm_id = f"{self.task_id}_{confirm_action}"
+                event = asyncio.Event()
+                res = {"approved": False}
+                entry = (event, confirm_action, res)
+                ActionConfirmationManager.register(confirm_id, entry)
+                # Only alias under bare task_id when free — parallel tools must not clobber each other
+                if self.task_id not in ActionConfirmationManager._pending_confirmations:
+                    ActionConfirmationManager.register(self.task_id, entry)
+
+                try:
+                    desc = f"Action '{tool_name}' requires confirmation with parameters: {json.dumps(args_dict, default=str)[:120]}"
+                    await self.ws_broadcast(build_action_confirm(
+                        task_id=self.task_id,
+                        action=confirm_action,
+                        description=desc,
+                        risk_level="high",
+                    ))
+                    await asyncio.wait_for(event.wait(), timeout=self.confirm_timeout_s)
+                    if not res.get("approved"):
+                        raise RuntimeError(f"[TOOL_REJECTED_BY_USER] Action '{tool_name}' was rejected by user.")
+                    logger.info("[MakimaRunHooks] Tool '%s' approved by user — proceeding.", tool_name)
+                except asyncio.TimeoutError:
+                    raise RuntimeError(f"[TOOL_REJECTED_BY_USER] Action '{tool_name}' confirmation timed out after {self.confirm_timeout_s}s.")
+                finally:
+                    ActionConfirmationManager.pop(confirm_id, None)
+                    # Drop bare task_id alias only if it still points at this confirmation
+                    alias = ActionConfirmationManager._pending_confirmations.get(self.task_id)
+                    if alias is not None and alias[0] is event:
+                        ActionConfirmationManager.pop(self.task_id, None)
+
     async def on_tool_end(self, context: Any, agent: Any, tool: Any, result: Any = None) -> None:
         call_id = _extract_call_id(context)
         tool_name = getattr(tool, "name", str(tool))
         start_time = time.time()
         agent_name = getattr(agent, "name", "agent")
         fingerprint = f"{tool_name}::empty"
+        # Default success so milestone advancement never NameErrors if broadcast path fails early
+        result_str = str(result) if result is not None else ""
+        is_ok = not result_str.startswith((
+            "[Tool Error",
+            "[TOOL_FAILED:",
+            "[TOOL_REJECTED_BY_USER",
+            "[Agent Delegation Error",
+        ))
 
         async with self._lock:
             self.turn_count += 1
@@ -1866,14 +2756,13 @@ class MakimaRunHooks(RunHooks):
                 "agent": agent_name,
                 "call_id": call_id,
                 "duration_ms": round(duration_ms, 2),
-                "result_summary": str(result)[:300] if result else "",
+                "result_summary": result_str[:300],
                 "ts": time.time(),
             })
 
         if self.ws_broadcast and self.task_id:
             try:
-                from ..ws_protocol import build_tool_call_finished
-                is_ok = not str(result).startswith("[Tool Error")
+                from ..ws_protocol import build_tool_call_finished, build_tool_completed
                 msg = build_tool_call_finished(
                     task_id=self.task_id,
                     tool_name=tool_name,
@@ -1884,16 +2773,37 @@ class MakimaRunHooks(RunHooks):
                     call_id=call_id,
                 )
                 await self.ws_broadcast(msg)
-                await self.ws_broadcast({
-                    "type": "tool_completed",
-                    "task_id": self.task_id,
-                    "tool": tool_name,
-                    "call_id": call_id,
-                    "duration_ms": round(duration_ms, 2),
-                    "result": str(result)[:300] if result else "",
-                })
+                await self.ws_broadcast(build_tool_completed(
+                    task_id=self.task_id,
+                    tool_name=tool_name,
+                    call_id=call_id,
+                    duration_ms=round(duration_ms, 2),
+                    result=result_str[:300],
+                    agent=agent_name,
+                ))
             except Exception as e:
                 logger.debug("[MakimaRunHooks] on_tool_end error: %s", e)
+
+            # Advance milestone if tracking a plan
+            if self.plan_milestones and self._current_milestone_idx < len(self.plan_milestones):
+                cur_ms = self.plan_milestones[self._current_milestone_idx]
+                if is_ok:
+                    cur_ms["status"] = "completed"
+                    try:
+                        from ..ws_protocol import build_plan_step_update
+                        await self.ws_broadcast(build_plan_step_update(self.task_id, cur_ms["id"], "completed", f"{tool_name} finished"))
+                    except Exception as _exc:
+                        logger.debug("suppressed: %s", _exc)
+                    self._current_milestone_idx += 1
+                    if self._current_milestone_idx < len(self.plan_milestones):
+                        next_ms = self.plan_milestones[self._current_milestone_idx]
+                        if next_ms.get("status") == "pending":
+                            next_ms["status"] = "in_progress"
+                            try:
+                                from ..ws_protocol import build_plan_step_update
+                                await self.ws_broadcast(build_plan_step_update(self.task_id, next_ms["id"], "in_progress"))
+                            except Exception as _exc:
+                                logger.debug("suppressed: %s", _exc)
 
 
 

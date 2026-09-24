@@ -1,11 +1,15 @@
 import asyncio
+import json
 import logging
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field, ValidationError
 
 logger = logging.getLogger("makima.brain.notification_tools")
+
+_STORE_PATH = Path.home() / ".makima" / "notifications.json"
 
 # --- Pydantic Models ---
 class Alert(BaseModel):
@@ -29,13 +33,46 @@ class WorkflowStatus(BaseModel):
     details: str
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
-# --- In-Memory Cache / Store ---
+# --- Persistent Store (atomic JSON under ~/.makima/) ---
 class NotificationStore:
-    def __init__(self):
+    def __init__(self, path: Optional[Path] = None):
+        self.path: Path = Path(path) if path else _STORE_PATH
         self.alerts: List[Alert] = []
         self.dnd_rules: List[DNDRule] = []
         self.workflows: Dict[str, WorkflowStatus] = {}
         self.lock = asyncio.Lock()
+        self._load()
+
+    def _load(self) -> None:
+        try:
+            if not self.path.exists():
+                return
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                return
+            self.alerts = [Alert.model_validate(a) for a in raw.get("alerts", []) if isinstance(a, dict)]
+            self.dnd_rules = [DNDRule.model_validate(r) for r in raw.get("dnd_rules", []) if isinstance(r, dict)]
+            self.workflows = {
+                str(k): WorkflowStatus.model_validate(v)
+                for k, v in (raw.get("workflows") or {}).items()
+                if isinstance(v, dict)
+            }
+        except (OSError, ValueError, ValidationError) as e:
+            logger.warning("Failed to load notification store from %s: %s", self.path, e)
+
+    def _save(self) -> None:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "alerts": [a.model_dump(mode="json") for a in self.alerts],
+                "dnd_rules": [r.model_dump(mode="json") for r in self.dnd_rules],
+                "workflows": {k: v.model_dump(mode="json") for k, v in self.workflows.items()},
+            }
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(self.path)
+        except OSError as e:
+            logger.error("Failed to persist notification store to %s: %s", self.path, e)
 
     def _is_dnd_active(self, priority: int) -> bool:
         now = datetime.utcnow().strftime("%H:%M")
@@ -51,12 +88,14 @@ class NotificationStore:
                 logger.info(f"Alert suppressed by DND: {alert.message}")
                 return False
             self.alerts.append(alert)
+            self._save()
             return True
 
     async def add_dnd_rule(self, rule: DNDRule) -> None:
         async with self.lock:
             self.dnd_rules = [r for r in self.dnd_rules if r.name != rule.name]
             self.dnd_rules.append(rule)
+            self._save()
 
     async def get_filtered_alerts(self, min_priority: int, unread_only: bool) -> List[Alert]:
         async with self.lock:
@@ -68,22 +107,30 @@ class NotificationStore:
     async def update_workflow(self, wf: WorkflowStatus) -> None:
         async with self.lock:
             self.workflows[wf.workflow_id] = wf
+            self._save()
 
 _store = NotificationStore()
 
 # --- Tool Implementations ---
-async def _dispatch_alert(alert: Alert) -> None:
-    """Mock dispatcher for routing alerts to external channels."""
-    logger.debug(f"Dispatching alert {alert.id} to {alert.channel}:{alert.target}")
+async def _dispatch_alert(alert: Alert) -> str:
+    """Local store only — no external channel delivery yet. Returns delivery status."""
+    logger.debug("Queued alert %s to local store for %s:%s", alert.id, alert.channel, alert.target)
+    return "queued_local"
 
 async def send_alert(message: str, priority: int, channel: str, target: str) -> Dict[str, Any]:
     try:
         alert = Alert(message=message, priority=priority, channel=channel, target=target)
         success = await _store.add_alert(alert)
         if success:
-            await _dispatch_alert(alert)
-            logger.info(f"Alert routed to {channel}/{target}: {message}")
-            return {"status": "sent", "alert_id": alert.id, "priority": alert.priority}
+            delivery = await _dispatch_alert(alert)
+            logger.info("Alert stored for %s/%s: %s", channel, target, message)
+            return {
+                "status": delivery,
+                "alert_id": alert.id,
+                "priority": alert.priority,
+                "channel": channel,
+                "note": "Persisted to local notification store only; external delivery not implemented.",
+            }
         return {"status": "suppressed", "reason": "DND active", "priority": priority}
     except ValidationError as ve:
         logger.error(f"Validation error in send_alert: {ve}")
@@ -129,7 +176,7 @@ def register_notification_tools(registry: Any) -> None:
             {
                 "name": "send_alert",
                 "func": send_alert,
-                "description": "Call this tool EXCLUSIVELY to send a prioritized alert to a specific channel/target, automatically respecting active DND rules.",
+                "description": "Store a prioritized alert in the local notification store (DND-aware). External channels (slack/email/sms/webhook) are not delivered yet — response status will be queued_local.",
                 "schema": {
                     "type": "object",
                     "properties": {

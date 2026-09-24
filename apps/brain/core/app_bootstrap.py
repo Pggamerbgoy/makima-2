@@ -17,9 +17,10 @@ import inspect
 import logging
 import time
 from collections import defaultdict, deque
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
+from typing import Any
 
 from .service_registry import S, ServiceRegistry
 
@@ -50,23 +51,23 @@ class AppBootstrap:
     Resolves dependency frontiers and initializes independent services in parallel waves.
     """
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None, ws_broadcast: Optional[Any] = None) -> None:
+    def __init__(self, config: dict[str, Any] | None = None, ws_broadcast: Any | None = None) -> None:
         self.config = config or {}
         self.ws_broadcast = ws_broadcast
         self.services = ServiceRegistry()
-        self._nodes: Dict[str, ServiceNode] = {}
-        self._start_callbacks: List[Callable] = []
-        self._stop_callbacks: List[Callable] = []
-        self._phase_timings: Dict[str, float] = {}
+        self._nodes: dict[str, ServiceNode] = {}
+        self._start_callbacks: list[Callable] = []
+        self._stop_callbacks: list[Callable] = []
+        self._phase_timings: dict[str, float] = {}
         self._background_tasks: set[asyncio.Task] = set()
 
     def _register_node(
         self,
         name: str,
         factory: Callable,
-        deps: Optional[List[str]] = None,
+        deps: list[str] | None = None,
         critical: bool = False,
-        aliases: Optional[List[str]] = None,
+        aliases: list[str] | None = None,
     ) -> None:
         self._nodes[name] = ServiceNode(
             name=name,
@@ -96,7 +97,7 @@ class AppBootstrap:
 
         # ── Wave 3: Tools, Context & Multimedia (Depends on AI, Memory, Media)
         self._register_node(
-            S.TOOL_REGISTRY, self._init_tool_registry,
+            S.TOOL_REGISTRY, self._init_tool_registry, deps=[S.SETTINGS],
         )
         self._register_node(
             S.MULTIMODAL, self._init_multimodal, deps=[S.MEDIA_STORE, S.AI_HANDLER],
@@ -105,9 +106,12 @@ class AppBootstrap:
             S.MEMORY_FORGET, self._init_memory_forget, deps=[S.AI_HANDLER, S.MEMORY],
         )
 
-        # ── Wave 4: Execution (Depends on Tools, AI, Memory) ────────────────
+        # ── Wave 4: Execution & Preference (Depends on Tools, AI, Memory) ──
         self._register_node(
-            S.EXECUTION_RUNTIME, self._init_execution_runtime, deps=[S.TOOL_REGISTRY],
+            S.PREFERENCE_ENGINE, self._init_preference_engine, deps=[S.MEMORY, S.TOOL_REGISTRY],
+        )
+        self._register_node(
+            S.EXECUTION_RUNTIME, self._init_execution_runtime, deps=[S.TOOL_REGISTRY, S.PREFERENCE_ENGINE],
         )
 
         # ── Wave 5: Skill Library ─────────────────────────────────────────────
@@ -130,6 +134,7 @@ class AppBootstrap:
                 S.AI_HANDLER, S.MEMORY,
                 S.TASK_MANAGER, S.SKILL_LIBRARY,
                 S.DURABLE_TASKS, S.TOOL_REGISTRY,
+                S.PREFERENCE_ENGINE, S.SETTINGS,
             ],
             critical=True,
             aliases=[S.COMMAND_ROUTER, S.ROUTER, S.ORCHESTRATOR],
@@ -190,12 +195,12 @@ class AppBootstrap:
                                 self.services.register(alias, res)
 
                             # Auto-discover lifecycle hooks (start, stop, close)
-                            if hasattr(res, "start") and callable(getattr(res, "start")):
-                                self._start_callbacks.append(getattr(res, "start"))
-                            if hasattr(res, "stop") and callable(getattr(res, "stop")):
-                                self._stop_callbacks.append(getattr(res, "stop"))
-                            elif hasattr(res, "close") and callable(getattr(res, "close")):
-                                self._stop_callbacks.append(getattr(res, "close"))
+                            if hasattr(res, "start") and callable(res.start):
+                                self._start_callbacks.append(res.start)
+                            if hasattr(res, "stop") and callable(res.stop):
+                                self._stop_callbacks.append(res.stop)
+                            elif hasattr(res, "close") and callable(res.close):
+                                self._stop_callbacks.append(res.close)
 
                     # Always unlock downstream dependents for the next wave
                     for neighbor in graph[name]:
@@ -291,10 +296,11 @@ class AppBootstrap:
         try:
             return AIHandler(config=runtime_config)
         except Exception as e:
-            logger.warning("AIHandler primary initialization failed (%s) — attempting safe degraded mode", e)
-            fallback_config = copy.deepcopy(runtime_config)
-            fallback_config.setdefault("llm", {})["default_provider"] = "mock"
-            return AIHandler(config=fallback_config)
+            logger.error(
+                "AIHandler initialization failed (%s) — re-raising; silent mock fallback disabled",
+                e,
+            )
+            raise
 
     async def _init_memory(self) -> Any:
         from ..eternal_memory import EternalMemory
@@ -305,31 +311,103 @@ class AppBootstrap:
 
     async def _init_tool_registry(self) -> Any:
         from ..tool_registry import ToolRegistry
-        from .context_builder import ContextBuilder
+
         # TODO: SagaRecoveryEngine will handle this
         from .tool_loader import register_core_tools
-        from .world_state import get_world_state
 
         tool_registry = ToolRegistry()
-        world_state = get_world_state()
-        context_builder = ContextBuilder()
-        self.services.register(S.WORLD_STATE, world_state)
-        self.services.register(S.CONTEXT_BUILDER, context_builder)
-
         register_core_tools(tool_registry, self.services)
 
-        # Bug 1 fix: Wire MCP servers declared in config into the ToolRegistry.
-        # Done as a background task so slow MCP subprocess startups don't block boot.
-        mcp_servers_config = self.config.get("mcp_servers") or []
+        # Restore persisted tool enable/disable overrides from settings store
+        settings_store = self.services.get(S.SETTINGS)
+        if settings_store and hasattr(settings_store, "get_settings"):
+            enabled_tools = settings_store.get_settings().get("enabled_tools") or {}
+            if isinstance(enabled_tools, dict) and enabled_tools:
+                applied = 0
+                for t_name, t_enabled in enabled_tools.items():
+                    if tool_registry.has_tool(t_name):
+                        tool_registry.set_tool_enabled(t_name, bool(t_enabled))
+                        applied += 1
+                if applied:
+                    logger.info("Restored %d tool enable/disable override(s) from settings store", applied)
+
+        # Configure Safe Workspace Boundary from security config
+        sec_cfg = self.config.get("security") or {}
+        boundary_enabled = sec_cfg.get("workspace_boundary_enabled", True)
+        allowed_dirs = sec_cfg.get("allowed_directories") or []
+        try:
+            from ..tools.system_tools import configure_workspace_boundary
+            configure_workspace_boundary(enabled=boundary_enabled, allowed_roots=allowed_dirs)
+        except Exception as e:
+            logger.warning("Could not configure workspace boundary: %s", e)
+
+        # Ensure in-memory apps FTS connection is released on shutdown (KNOWN_ISSUES #2)
+        try:
+            from ..tools.system_tools import close_apps_fts
+            self._stop_callbacks.append(close_apps_fts)
+        except Exception as e:
+            logger.debug("close_apps_fts stop-hook registration failed: %s", e)
+
+        # Wire MCP servers: static config + UI-persisted store entries (store wins on name conflict)
+        mcp_servers_config = list(self.config.get("mcp_servers") or [])
+        if settings_store and hasattr(settings_store, "get_settings"):
+            store_mcp = settings_store.get_settings().get("mcp_servers") or []
+            if isinstance(store_mcp, list) and store_mcp:
+                store_by_name = {
+                    str(s.get("name", "")).strip(): s
+                    for s in store_mcp
+                    if isinstance(s, dict) and str(s.get("name", "")).strip()
+                }
+                merged: list[dict] = []
+                seen: set[str] = set()
+                for entry in mcp_servers_config:
+                    if not isinstance(entry, dict):
+                        continue
+                    name = str(entry.get("name", "")).strip()
+                    if name and name in store_by_name:
+                        merged.append(store_by_name[name])
+                        seen.add(name)
+                    else:
+                        merged.append(entry)
+                        if name:
+                            seen.add(name)
+                for name, entry in store_by_name.items():
+                    if name not in seen:
+                        merged.append(entry)
+                mcp_servers_config = merged
         if mcp_servers_config:
-            from .tool_loader import register_mcp_tools
             import asyncio as _asyncio
+
+            from .tool_loader import register_mcp_tools
             try:
                 loop = _asyncio.get_running_loop()
                 mcp_task = loop.create_task(register_mcp_tools(tool_registry, mcp_servers_config))
                 self._background_tasks.add(mcp_task)
                 mcp_task.add_done_callback(self._background_tasks.discard)
                 logger.info("Scheduled MCP tool registration for %d server(s)", len(mcp_servers_config))
+
+                async def _cleanup_mcp_servers() -> None:
+                    servers = list(getattr(tool_registry, "_mcp_servers", None) or [])
+                    for server in servers:
+                        try:
+                            await server.cleanup()
+                        except Exception as cleanup_err:
+                            logger.warning("MCP server cleanup error: %s", cleanup_err)
+                    legacy = list(getattr(tool_registry, "_mcp_multiplexers", None) or [])
+                    for client in legacy:
+                        try:
+                            if hasattr(client, "stop"):
+                                await client.stop()
+                            elif hasattr(client, "cleanup"):
+                                await client.cleanup()
+                        except Exception as legacy_err:
+                            logger.warning("Legacy MCP client cleanup error: %s", legacy_err)
+                    if hasattr(tool_registry, "_mcp_servers"):
+                        tool_registry._mcp_servers = []
+                    if hasattr(tool_registry, "_mcp_multiplexers"):
+                        tool_registry._mcp_multiplexers = []
+
+                self._stop_callbacks.append(_cleanup_mcp_servers)
             except RuntimeError:
                 # No running loop during sync bootstrap — skip; MCP tools won't be available
                 logger.warning("No running event loop during MCP registration — MCP tools skipped at boot")
@@ -350,6 +428,13 @@ class AppBootstrap:
             eternal_memory=self.services.get(S.MEMORY),
         )
 
+    def _init_preference_engine(self) -> Any:
+        from .preference_engine import PreferenceEngine
+        return PreferenceEngine(
+            eternal_memory=self.services.get(S.MEMORY),
+            tool_registry=self.services.get(S.TOOL_REGISTRY),
+        )
+
     def _init_execution_runtime(self) -> Any:
         from .execution_runtime import ExecutionRuntime
         return ExecutionRuntime(
@@ -357,6 +442,7 @@ class AppBootstrap:
             learning_coordinator=None,
             guardrails=None,
             saga_recovery=None,
+            preference_engine=self.services.get(S.PREFERENCE_ENGINE),
         )
 
     def _init_task_manager(self) -> Any:
@@ -400,15 +486,17 @@ class AppBootstrap:
             task_manager=self.services.get(S.TASK_MANAGER),
             tool_registry=self.services.get(S.TOOL_REGISTRY),
             durable_task_engine=self.services.get(S.DURABLE_TASKS),
+            preference_engine=self.services.get(S.PREFERENCE_ENGINE),
+            settings_store=self.services.get(S.SETTINGS),
             config=self.config,
         )
-        orch.skill_library = skill_lib
         return orch
 
     def _init_voice(self) -> Any:
         import os
-        from ..voice import VoiceEngine, VoiceConfig
+
         from ..ai_handler import is_valid_api_key
+        from ..voice import VoiceConfig, VoiceEngine
 
         raw_key = (
             self.config.get("gemini_api_key")
@@ -427,6 +515,14 @@ class AppBootstrap:
             tool_registry=self.services.get(S.TOOL_REGISTRY),
             voice_config=voice_cfg,
         )
+
+        # Restore persisted wake_word_enabled from settings store
+        settings_store = self.services.get(S.SETTINGS)
+        if settings_store and hasattr(settings_store, "get_settings"):
+            persisted_wake = settings_store.get_settings().get("wake_word_enabled")
+            if persisted_wake is not None:
+                voice_engine._wake_enabled = bool(persisted_wake)
+
         self.gemini_voice = voice_engine
         self._start_callbacks.append(voice_engine.start)
         self._stop_callbacks.append(voice_engine.stop)
@@ -466,10 +562,10 @@ class AppBootstrap:
         critical = [S.AI_HANDLER, S.ORCH_ENGINE, S.TOOL_REGISTRY]
         return all(self.services.get(name) is not None for name in critical)
 
-    def get_services_health(self) -> Dict[str, Any]:
+    def get_services_health(self) -> dict[str, Any]:
         """Return a comprehensive health map of all registered services."""
         critical = [S.AI_HANDLER, S.ORCH_ENGINE, S.TOOL_REGISTRY, S.MEMORY]
-        health: Dict[str, Any] = {
+        health: dict[str, Any] = {
             "ready": self.is_ready(),
             "total_services": len(list(self.services.keys())),
             "phase_timings": dict(self._phase_timings),
@@ -513,9 +609,12 @@ class AppBootstrap:
     async def shutdown_services(self) -> None:
         """Graceful reverse shutdown sequence."""
         logger.info("Starting AppBootstrap graceful shutdown...")
-        for task in list(self._background_tasks):
-            if not task.done():
-                task.cancel()
+        bg_tasks = [t for t in list(self._background_tasks) if not t.done()]
+        for task in bg_tasks:
+            task.cancel()
+        if bg_tasks:
+            await asyncio.gather(*bg_tasks, return_exceptions=True)
+        self._background_tasks.clear()
         loop = asyncio.get_running_loop()
         for cb in reversed(self._stop_callbacks):
             try:
@@ -525,6 +624,13 @@ class AppBootstrap:
                     await loop.run_in_executor(None, cb)
             except Exception as e:
                 logger.warning("Service shutdown error: %s", e)
+        # KNOWN_ISSUES #3: let child-process exit callbacks settle before loop close
+        # so Proactor transports don't GC mid-I/O ("I/O operation on closed pipe").
+        try:
+            await asyncio.sleep(0)
+            await asyncio.sleep(0.05)
+        except Exception:
+            pass
         logger.info("AppBootstrap shutdown complete.")
 
     @asynccontextmanager

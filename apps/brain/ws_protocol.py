@@ -79,6 +79,9 @@ class ServerMessageType(str, Enum):
     AI_ERROR = "ai_error"
     THINKING_STATUS = "thinking_status"
 
+    # Canvas artifacts (server-emitted after final chunk)
+    CANVAS_ITEM = "canvas_item"
+
     # Media lifecycle.  These events are scoped by task_id so concurrent
     # uploads/generations cannot update the wrong message in the UI.
     MEDIA_UPLOAD_STARTED = "media_upload_started"
@@ -93,7 +96,11 @@ class ServerMessageType(str, Enum):
     AGENT_PROGRESS = "agent_progress"
     AGENT_GUARDRAIL_HIT = "agent_guardrail_hit"
     TOOL_CALL_STARTED = "tool_call_started"
+    TOOL_CALL_PROGRESS = "tool_call_progress"
     TOOL_CALL_FINISHED = "tool_call_finished"
+    TOOL_COMPLETED = "tool_completed"
+    PLAN_MILESTONES = "plan_milestones"
+    PLAN_STEP_UPDATE = "plan_step_update"
     
     # Action confirmation
     ACTION_CONFIRM_REQUEST = "action_confirm_request"
@@ -260,6 +267,7 @@ class ClientMessageType(str, Enum):
     VOICE_SESSION_STOP = "voice_session_stop"
     VOICE_BARGE_IN = "voice_barge_in"
     VOICE_SPEAK = "voice_speak"
+    VOICE_TTS_STOP = "voice_tts_stop"
     
     # Memory
     FORGET_ENTITY = "forget_entity"
@@ -542,8 +550,8 @@ class WebSocketEventBridge:
         try:
             if hasattr(self.ws, "close"):
                 await self.ws.close()
-        except Exception:
-            pass
+        except Exception as close_err:
+            self._logger.debug("WebSocket close suppressed: %s", close_err)
 
     async def send(self, msg: WSMessage) -> None:
         """Queue a message for zero-drop delivery."""
@@ -681,6 +689,26 @@ def build_ai_error(task_id: str, error: str, code: str = "unknown") -> WSMessage
         payload={"error": error, "code": code}, task_id=task_id,
     )
 
+def build_canvas_item(
+    task_id: str,
+    title: str = "Generated Artifact",
+    language: str = "text",
+    content: str = "",
+    item_id: str = "",
+) -> WSMessage:
+    """Server-emitted canvas/artifact event carrying a generated code/document block."""
+    return WSMessage(
+        v=PROTOCOL_VERSION,
+        type=ServerMessageType.CANVAS_ITEM,
+        task_id=task_id,
+        payload={
+            "id": item_id or f"canvas_{uuid.uuid4().hex[:12]}",
+            "title": title,
+            "language": language,
+            "content": content,
+        },
+    )
+
 
 def build_media_event(event_type: str, task_id: str, media_id: str, **payload: Any) -> WSMessage:
     """Build a task-scoped media lifecycle event."""
@@ -754,6 +782,57 @@ def build_tool_call_finished(
             "call_id": call_id,
         },
     )
+
+
+def build_tool_completed(
+    task_id: str,
+    tool_name: str,
+    call_id: str = "",
+    duration_ms: float = 0.0,
+    result: Any = "",
+    agent: str = "",
+    status: str = "done",
+) -> WSMessage:
+    """Canonical tool_completed event (replaces the legacy flat dict broadcast)."""
+    return WSMessage(
+        v=PROTOCOL_VERSION,
+        type=ServerMessageType.TOOL_COMPLETED,
+        task_id=task_id,
+        payload={
+            "tool": tool_name,
+            "tool_name": tool_name,
+            "call_id": call_id,
+            "duration_ms": round(duration_ms, 2) if duration_ms else None,
+            "result": str(result)[:300] if result is not None else "",
+            "agent": agent,
+            "status": status,
+        },
+    )
+
+
+def build_tool_call_progress(
+    task_id: str,
+    tool_name: str,
+    progress: int,
+    message: str = "",
+    call_id: str = "",
+    agent: str = "",
+) -> WSMessage:
+    """Build a real-time event for fractional progress updates during tool execution."""
+    return WSMessage(
+        v=PROTOCOL_VERSION,
+        type=ServerMessageType.TOOL_CALL_PROGRESS,
+        task_id=task_id,
+        payload={
+            "tool": tool_name,
+            "tool_name": tool_name,
+            "progress": max(0, min(100, int(progress))),
+            "message": message,
+            "call_id": call_id,
+            "agent": agent,
+        },
+    )
+
 
 def build_service_health(snapshot: dict[str, Any]) -> WSMessage:
     return WSMessage(v=PROTOCOL_VERSION, type=ServerMessageType.SERVICE_HEALTH, payload=snapshot)
@@ -977,6 +1056,26 @@ def build_ghost_webhook_received(source: str, severity: str) -> WSMessage:
     return WSMessage(
         v=PROTOCOL_VERSION, type=ServerMessageType.GHOST_WEBHOOK_RECEIVED,
         payload={"source": source, "severity": severity},
+    )
+
+
+def build_plan_milestones(task_id: str, title: str, steps: list[dict[str, Any]]) -> WSMessage:
+    """Build a plan milestone event with an ordered checklist of subtasks."""
+    return WSMessage(
+        v=PROTOCOL_VERSION,
+        type=ServerMessageType.PLAN_MILESTONES,
+        task_id=task_id,
+        payload={"title": title, "steps": steps},
+    )
+
+
+def build_plan_step_update(task_id: str, step_id: int, status: str, result_summary: str = "") -> WSMessage:
+    """Build an update event for a specific milestone step (e.g. pending -> in_progress -> completed)."""
+    return WSMessage(
+        v=PROTOCOL_VERSION,
+        type=ServerMessageType.PLAN_STEP_UPDATE,
+        task_id=task_id,
+        payload={"step_id": step_id, "status": status, "result_summary": result_summary},
     )
 
 

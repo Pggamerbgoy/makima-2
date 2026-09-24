@@ -7,7 +7,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 # Generic media/play vocabulary for upstream routing + timeout domains.
 MEDIA_KEYWORDS: frozenset[str] = frozenset({
@@ -67,16 +67,16 @@ class Task:
     intent: str = "general"
     grounded_slots: dict[str, Any] = field(default_factory=dict)
     state: TaskState = TaskState.PENDING
-    parent_task_id: Optional[str] = None
+    parent_task_id: str | None = None
     subtask_ids: list[str] = field(default_factory=list)
-    assigned_capability: Optional[str] = None
+    assigned_capability: str | None = None
     timeout_s: float = 60.0
     retry_budget: int = 2
     retries_used: int = 0
     created_at: float = field(default_factory=time.time)
-    completed_at: Optional[float] = None
-    error_message: Optional[str] = None
-    final_result: Optional[Any] = None
+    completed_at: float | None = None
+    error_message: str | None = None
+    final_result: Any | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def is_active(self) -> bool:
@@ -107,7 +107,7 @@ class Task:
             "metadata": self.metadata,
         }
 
-    def to_agent_task(self, raw_message: str = "") -> "AgentTask":
+    def to_agent_task(self, raw_message: str = "") -> AgentTask:
         """Convert this stateful Task to an immutable typed AgentTask contract."""
         return AgentTask.from_task(self, raw_message=raw_message)
 
@@ -126,7 +126,7 @@ class Action:
     is_reversible: bool = True
     preconditions: tuple[str, ...] = field(default_factory=tuple)
     expected_state: dict[str, Any] = field(default_factory=dict)
-    compensation_action: Optional[dict[str, Any]] = None
+    compensation_action: dict[str, Any] | None = None
 
     @property
     def tool_name(self) -> str:
@@ -161,7 +161,7 @@ class ExecutionResult:
     is_verified: bool = False
     evidence_tier: str = "UNVERIFIABLE"  # "DIRECT_OS_PROBE", "INVARIANT_MATCH", "UNVERIFIABLE"
     duration_ms: float = 0.0
-    error: Optional[str] = None
+    error: str | None = None
     rollback_performed: bool = False
     artifacts: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -218,7 +218,7 @@ class ActionExecutionContext:
     preconditions_satisfied: bool = True
     precondition_error: str = ""
     reversibility: str = "none"          # "none" | "snapshot" | "inverse"
-    snapshot_id: Optional[str] = None
+    snapshot_id: str | None = None
     compensation_tool: str = ""
     compensation_params: dict[str, Any] = field(default_factory=dict)
     verification_passed: bool = False
@@ -257,13 +257,13 @@ class ExecutionRecord:
     strategy: str = "direct"             # "direct" | "agent" | "conversational"
     tool_name: str = ""
     domain: str = "general"              # "media" | "system" | "browser" | "document" | "general"
-    requested_target: Optional[str] = None
-    resolved_target: Optional[str] = None
+    requested_target: str | None = None
+    resolved_target: str | None = None
     parameters: dict[str, Any] = field(default_factory=dict)
     result_summary: str = ""
     status: str = "SUCCESS"              # "SUCCESS" | "FAILED" | "CANCELLED" | "PARTIAL" | "VERIFICATION_FAILED"
     verified: bool = False
-    error: Optional[str] = None
+    error: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     # Backward compatibility helpers for dict-like access
@@ -314,12 +314,12 @@ class AgentTask:
     goal: str
     domain: str = "general"
     operation: str = ""
-    target_entity: Optional[str] = None
+    target_entity: str | None = None
     parameters: dict[str, Any] = field(default_factory=dict)
     negative_constraints: tuple[str, ...] = field(default_factory=tuple)
     dependencies: tuple[str, ...] = field(default_factory=tuple)
     context_artifacts: dict[str, Any] = field(default_factory=dict)
-    expected_outcome: Optional[str] = None
+    expected_outcome: str | None = None
     raw_message: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -393,7 +393,7 @@ class AgentResponse:
     actions_executed: list[ExecutionResult] = field(default_factory=list)
     artifacts_created: dict[str, str] = field(default_factory=dict)
     unresolved_ambiguities: list[str] = field(default_factory=list)
-    error_message: Optional[str] = None
+    error_message: str | None = None
 
 
 class GuardrailExceeded(Exception):

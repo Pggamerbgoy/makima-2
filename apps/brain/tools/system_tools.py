@@ -26,6 +26,7 @@ import ctypes
 import difflib
 import fnmatch
 import glob
+import json
 import logging
 import os
 import platform
@@ -347,6 +348,26 @@ def _ensure_apps_fts_index(force_refresh: bool = False) -> None:
 
         _APPS_CACHE = results
         _APPS_CACHE_EXPIRES = time.time() + APPS_CACHE_TTL_SECONDS
+
+
+def close_apps_fts() -> None:
+    """Release the module-level in-memory FTS5 connection (shutdown / atexit)."""
+    global _APPS_FTS_CONN
+    with _APPS_FTS_LOCK:
+        if _APPS_FTS_CONN is not None:
+            try:
+                _APPS_FTS_CONN.close()
+            except Exception:
+                pass
+            _APPS_FTS_CONN = None
+
+
+try:
+    import atexit as _atexit
+
+    _atexit.register(close_apps_fts)
+except Exception:
+    pass
 
 
 # Background pre-warm
@@ -785,6 +806,94 @@ def _resolve_fs_path(path_str: str) -> str:
     return full
 
 
+# ==============================================================================
+# SAFE WORKSPACE BOUNDARY (MCP-STYLE CHROOT PERIMETER)
+# ==============================================================================
+_workspace_boundary_enabled: bool = True
+_allowed_workspace_roots: list[str] = []
+
+
+def configure_workspace_boundary(enabled: bool = True, allowed_roots: Optional[list[str]] = None) -> None:
+    """Configure workspace security boundary."""
+    global _workspace_boundary_enabled, _allowed_workspace_roots
+    _workspace_boundary_enabled = enabled
+    if allowed_roots is not None:
+        _allowed_workspace_roots = [os.path.abspath(r) for r in allowed_roots if r]
+
+
+def _is_path_allowed_for_mutation(target_path: str) -> bool:
+    """Verify if a target path is allowed for modification under workspace boundary."""
+    global _workspace_boundary_enabled, _allowed_workspace_roots
+    if not _workspace_boundary_enabled:
+        return True
+
+    if not target_path or not str(target_path).strip():
+        return False
+
+    try:
+        import tempfile
+        target_abs = os.path.abspath(target_path)
+        target_real = os.path.realpath(target_abs)
+
+        # Windows critical system directories that are NEVER allowed for mutation:
+        win_dir = os.environ.get("WINDIR") or "C:\\Windows"
+        prog_files = os.environ.get("ProgramFiles") or "C:\\Program Files"
+        prog_files_x86 = os.environ.get("ProgramFiles(x86)") or "C:\\Program Files (x86)"
+        critical_dirs = [d for d in (win_dir, prog_files, prog_files_x86) if d]
+
+        for path_to_check in (target_abs.lower(), target_real.lower()):
+            for c_dir in critical_dirs:
+                c_clean = os.path.abspath(c_dir).lower().rstrip("\\/")
+                c_prefix = c_clean + os.sep
+                if path_to_check == c_clean or path_to_check.startswith(c_prefix):
+                    logger.warning("[SecurityBoundary] Mutation blocked on critical system directory: %s", target_path)
+                    return False
+
+        # Safe roots allowed for mutation:
+        safe_roots = [
+            os.path.abspath(os.getcwd()).lower(),
+            os.path.abspath(os.path.expanduser("~/.makima")).lower(),
+            os.path.abspath(tempfile.gettempdir()).lower(),
+        ]
+        for extra_r in _allowed_workspace_roots:
+            if extra_r:
+                safe_roots.append(os.path.abspath(extra_r).lower())
+
+        # Known folders (Desktop, Downloads) allowed if configured
+        try:
+            from ..core.known_folders import resolve_known_folder
+            desktop_dir = resolve_known_folder("desktop")
+            if desktop_dir:
+                safe_roots.append(os.path.abspath(desktop_dir).lower())
+            downloads_dir = resolve_known_folder("downloads")
+            if downloads_dir:
+                safe_roots.append(os.path.abspath(downloads_dir).lower())
+        except Exception:
+            pass
+
+        def _is_within_any_safe_root(p: str) -> bool:
+            for root in safe_roots:
+                root_clean = root.rstrip("\\/")
+                root_prefix = root_clean + os.sep
+                if p == root_clean or p.startswith(root_prefix):
+                    return True
+            return False
+
+        # BOTH absolute and real paths must be contained within safe roots
+        if not _is_within_any_safe_root(target_abs.lower()):
+            logger.warning("[SecurityBoundary] Mutation blocked: '%s' is outside safe workspace roots", target_path)
+            return False
+
+        if not _is_within_any_safe_root(target_real.lower()):
+            logger.warning("[SecurityBoundary] Mutation blocked: realpath '%s' is outside safe workspace roots", target_real)
+            return False
+
+        return True
+    except Exception as e:
+        logger.error("[SecurityBoundary] Error checking boundary for '%s': %s", target_path, e)
+        return False
+
+
 def _find_desktop() -> str:
     """Find desktop path reliably."""
     try:
@@ -813,10 +922,209 @@ async def _create_file_snapshot(src_path: str) -> Optional[str]:
             await asyncio.to_thread(shutil.copytree, src, dst, dirs_exist_ok=True)
         else:
             await asyncio.to_thread(shutil.copy2, src, dst)
+
+        # Store metadata for offline / process-restart undo
+        meta_file = os.path.join(snap_dir, f"{snap_id}.meta.json")
+        meta_data = {
+            "snapshot_id": snap_id,
+            "original_path": os.path.abspath(src),
+            "is_dir": os.path.isdir(src),
+            "timestamp": time.time(),
+        }
+        with open(meta_file, "w", encoding="utf-8") as mf:
+            json.dump(meta_data, mf)
+
         return snap_id
     except Exception as exc:
         logger.debug("Failed to create snapshot for %s: %s", src, exc)
         return None
+
+
+_system_execution_runtime_ref: Optional[Any] = None
+
+
+def set_system_execution_runtime(runtime: Any) -> None:
+    """Register active ExecutionRuntime singleton for undo tracking."""
+    global _system_execution_runtime_ref
+    _system_execution_runtime_ref = runtime
+
+
+def get_system_execution_runtime() -> Optional[Any]:
+    return _system_execution_runtime_ref
+
+
+async def restore_snapshot(
+    snapshot_id: str,
+    target_path: Optional[str] = None,
+    **kwargs: Any,
+) -> tuple[bool, str]:
+    """Restore a file or directory from snapshot store to target path with physical verification."""
+    if not snapshot_id:
+        return False, "No snapshot_id provided"
+
+    snap_dir = os.path.expanduser("~/.makima/snapshots")
+    src = os.path.join(snap_dir, snapshot_id)
+
+    dst_path = target_path
+    meta_path = os.path.join(snap_dir, f"{snapshot_id}.meta.json")
+    if not dst_path and os.path.exists(meta_path):
+        try:
+            with open(meta_path, "r", encoding="utf-8") as mf:
+                meta = json.load(mf)
+                dst_path = meta.get("original_path")
+        except Exception:
+            pass
+
+    if not dst_path:
+        return False, f"Cannot resolve target restoration path for snapshot '{snapshot_id}'"
+
+    dst = _resolve_fs_path(dst_path)
+    if not os.path.exists(src):
+        return False, f"Snapshot file '{snapshot_id}' not found in store ({snap_dir})"
+
+    def _do_restore() -> tuple[bool, str]:
+        try:
+            parent_dir = os.path.dirname(dst)
+            if parent_dir and not os.path.exists(parent_dir):
+                os.makedirs(parent_dir, exist_ok=True)
+            if os.path.isdir(src):
+                if os.path.exists(dst):
+                    shutil.rmtree(dst)
+                shutil.copytree(src, dst, dirs_exist_ok=True)
+            else:
+                shutil.copy2(src, dst)
+            if os.path.exists(dst):
+                return True, ""
+            return False, f"Post-restoration verification failed: '{dst}' does not exist after restore"
+        except Exception as exc:
+            logger.error("Snapshot restore failed for %s -> %s: %s", snapshot_id, dst, exc)
+            return False, str(exc)
+
+    return await asyncio.to_thread(_do_restore)
+
+
+async def restore_move_transaction(comp_params: dict[str, Any]) -> tuple[bool, str]:
+    """
+    Atomic move transaction compensation:
+    1. Restore source file from pre-move snapshot.
+    2. Clean up destination file if it didn't pre-exist, or restore original destination from dst_snapshot_id.
+    """
+    src_path = _resolve_fs_path(comp_params.get("source_path", ""))
+    dst_path = _resolve_fs_path(comp_params.get("destination_path", ""))
+    src_snap = comp_params.get("src_snapshot_id")
+    dst_snap = comp_params.get("dst_snapshot_id")
+    dst_existed = comp_params.get("dst_existed_before", False)
+
+    if not src_snap or not src_path:
+        return False, "Missing source snapshot or path in compensation parameters"
+
+    ok_src, err_src = await restore_snapshot(src_snap, src_path)
+    if not ok_src:
+        return False, f"Failed to restore source file: {err_src}"
+
+    if dst_existed and dst_snap and dst_path:
+        ok_dst, err_dst = await restore_snapshot(dst_snap, dst_path)
+        if not ok_dst:
+            return False, f"Failed to restore original destination file: {err_dst}"
+    elif not dst_existed and dst_path and os.path.exists(dst_path):
+        try:
+            def _clean():
+                if os.path.isdir(dst_path):
+                    shutil.rmtree(dst_path)
+                else:
+                    os.remove(dst_path)
+            await asyncio.to_thread(_clean)
+        except Exception as rm_err:
+            logger.debug("Failed cleaning destination move residue: %s", rm_err)
+
+    return True, ""
+
+
+async def rollback_organize_desktop(comp_params: dict[str, Any]) -> tuple[bool, str]:
+    """Revert organized files back to their original positions on Desktop."""
+    moves = comp_params.get("moves") or []
+    if not moves:
+        return False, "No move entries in desktop organization manifest"
+
+    def _rollback() -> int:
+        reverted = 0
+        for item in moves:
+            cur_p = item.get("to")
+            orig_p = item.get("from")
+            if cur_p and orig_p and os.path.exists(cur_p):
+                try:
+                    shutil.move(cur_p, orig_p)
+                    reverted += 1
+                except Exception as exc:
+                    logger.debug("Failed reverting file %s: %s", cur_p, exc)
+        return reverted
+
+    reverted_count = await asyncio.to_thread(_rollback)
+    return True, f"Reverted {reverted_count} file(s) back to original positions."
+
+
+async def undo_last_action(
+    steps: int = 1,
+    target_path: Optional[str] = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """
+    Revert the last filesystem or OS action (file write, delete, move, rename, desktop organize)
+    using shadow snapshots and compensation manifests.
+    Call this when the user says 'undo karo', 'undo', 'revert last action', 'galti se delete ho gaya wapas lao'.
+    """
+    runtime = get_system_execution_runtime()
+    if runtime and hasattr(runtime, "undo_last_action"):
+        res = await runtime.undo_last_action(steps=steps)
+        if res.get("status") == "success":
+            return res
+
+    # Fallback: inspect ~/.makima/snapshots/ directly
+    snap_dir = os.path.expanduser("~/.makima/snapshots")
+    if not os.path.exists(snap_dir):
+        return {"status": "error", "message": "No snapshots found to undo."}
+
+    meta_files = []
+    for f in os.listdir(snap_dir):
+        if f.endswith(".meta.json"):
+            fp = os.path.join(snap_dir, f)
+            try:
+                meta_files.append((fp, os.path.getmtime(fp)))
+            except Exception:
+                pass
+
+    if not meta_files:
+        return {"status": "error", "message": "No snapshot metadata found to undo."}
+
+    meta_files.sort(key=lambda x: x[1], reverse=True)
+
+    reverted = []
+    for meta_path, _ in meta_files[:max(1, steps)]:
+        try:
+            with open(meta_path, "r", encoding="utf-8") as mf:
+                meta = json.load(mf)
+            snap_id = meta.get("snapshot_id")
+            tgt = target_path or meta.get("original_path")
+            if snap_id and tgt:
+                ok, err = await restore_snapshot(snap_id, tgt)
+                if ok:
+                    reverted.append(f"Restored '{tgt}' from snapshot {snap_id}")
+                    try:
+                        os.remove(meta_path)
+                    except Exception:
+                        pass
+                else:
+                    reverted.append(f"Failed restoring '{tgt}': {err}")
+        except Exception as exc:
+            logger.debug("Undo fallback error: %s", exc)
+
+    if reverted:
+        return {
+            "status": "success",
+            "message": "Reverted action(s):\n" + "\n".join(reverted),
+            "reverted": reverted,
+        }
+    return {"status": "error", "message": "No actions could be reverted."}
 
 
 # ==============================================================================
@@ -1440,16 +1748,31 @@ async def _run_ps_command(script: str) -> tuple[int, str]:
         return -1, str(exc)
 
 
+# T3: volume read cache (5s TTL) — avoids a PowerShell+C# spawn per read.
+_VOLUME_CACHE: tuple[float, int] | None = None
+_VOLUME_CACHE_TTL_S = 5.0
+
+
 async def get_volume(**kwargs: Any) -> str:
     """Get current Windows host master volume level percentage."""
     if sys.platform != "win32":
         return f"System volume adjustment not supported on {sys.platform}."
+
+    global _VOLUME_CACHE
+    # T3: 5s cache — volume rarely changes between consecutive reads.
+    try:
+        cached = _VOLUME_CACHE
+        if cached and (time.monotonic() - cached[0]) < _VOLUME_CACHE_TTL_S:
+            return f"🔊 Current Master Volume: {cached[1]}%"
+    except Exception as _exc:
+        logger.debug("suppressed: %s", _exc)
 
     get_script = "Add-Type -TypeDefinition @'\n" + CORE_AUDIO_CS.strip() + "\n'@\n[Audio]::GetVol()\n"
     rc, out = await _run_ps_command(get_script)
     if rc == 0 and out:
         try:
             vol = round(float(out.strip().replace(",", ".")) * 100)
+            _VOLUME_CACHE = (time.monotonic(), vol)
             return f"🔊 Current Master Volume: {vol}%"
         except Exception:
             pass
@@ -1495,20 +1818,29 @@ async def set_volume(
         raw_delta = 10
 
     try:
+        global _VOLUME_CACHE
+        already_set = False
         if raw_delta is not None:
             d_str = re.sub(r"[^\d\-+]", "", str(raw_delta))
             try:
                 d_val = int(d_str) if d_str else 10
             except ValueError:
                 d_val = 10
-            get_script = "Add-Type -TypeDefinition @'\n" + CORE_AUDIO_CS.strip() + "\n'@\n[Audio]::GetVol()\n"
-            rc, out = await _run_ps_command(get_script)
+            # T3: single PowerShell spawn — read, adjust, set, and echo new level.
+            adj_script = (
+                "Add-Type -TypeDefinition @'\n" + CORE_AUDIO_CS.strip() + "\n'@\n"
+                f"$v=[Audio]::GetVol(); $n=[Math]::Max(0,[Math]::Min(1,$v+({d_val}/100.0))); "
+                "[Audio]::SetVol($n); $n\n"
+            )
+            rc, out = await _run_ps_command(adj_script)
             try:
-                current_pct = round(float(out.strip().replace(",", ".")) * 100)
+                new_pct = round(float(out.strip().replace(",", ".")) * 100)
             except Exception:
-                current_pct = 50
-            new_pct = max(0, min(100, current_pct + d_val))
+                new_pct = 50
             label = f"raised by {abs(d_val)}% → {new_pct}%" if d_val >= 0 else f"lowered by {abs(d_val)}% → {new_pct}%"
+            if rc == 0:
+                already_set = True
+                _VOLUME_CACHE = (time.monotonic(), new_pct)
         else:
             try:
                 pct_str = re.sub(r"[^\d]", "", str(raw_level))
@@ -1517,9 +1849,11 @@ async def set_volume(
                 new_pct = 0 if raw_level == 0 else 50
             label = f"set to {new_pct}%"
 
-        set_script = "Add-Type -TypeDefinition @'\n" + CORE_AUDIO_CS.strip() + f"\n'@\n[Audio]::SetVol({new_pct / 100.0})\n"
-        rc, _ = await _run_ps_command(set_script)
+        if not already_set:
+            set_script = "Add-Type -TypeDefinition @'\n" + CORE_AUDIO_CS.strip() + f"\n'@\n[Audio]::SetVol({new_pct / 100.0})\n"
+            rc, _ = await _run_ps_command(set_script)
         if rc == 0:
+            _VOLUME_CACHE = (time.monotonic(), new_pct)
             if act == "mute" or raw_level == 0:
                 return f"🔇 System Master Volume set to {new_pct}% (muted)."
             if act == "unmute":
@@ -1691,27 +2025,114 @@ async def get_system_specs(**kwargs: Any) -> dict[str, Any]:
     }
 
 
-async def run_python_script(path: str, **kwargs: Any) -> dict[str, Any]:
-    """Execute a Python script on disk and return exit code, stdout, and stderr."""
+async def run_python_script(
+    path: Optional[str] = None,
+    code: Optional[str] = None,
+    timeout_s: int = 30,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """
+    Execute a Python script on disk or arbitrary Python code in Makima's scratchpad sandbox.
+    Returns exit code, stdout, stderr, execution success flag, and any generated plots/images.
+    """
+    import base64
     import subprocess
     import sys
-    full_path = _resolve_fs_path(path)
-    if not os.path.exists(full_path):
-        return {"error": f"Script '{path}' not found at '{full_path}'", "exit_code": 1}
+    import uuid
 
-    def _exec():
+    raw_code = str(code).strip() if code is not None else ""
+    raw_path = str(path).strip() if path is not None else ""
+
+    if not raw_code and not raw_path:
+        return {
+            "error": "Either 'code' (inline Python string) or 'path' (script file path) must be provided.",
+            "exit_code": 1,
+            "success": False,
+        }
+
+    scratch_dir = os.path.expanduser("~/.makima/scratchpad")
+    os.makedirs(scratch_dir, exist_ok=True)
+    is_scratchpad = bool(raw_code)
+
+    if is_scratchpad:
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        file_name = f"scratch_{timestamp}_{uuid.uuid4().hex[:6]}.py"
+        full_path = os.path.join(scratch_dir, file_name)
         try:
-            res = subprocess.run([sys.executable, full_path], capture_output=True, text=True, timeout=30)
+            with open(full_path, "w", encoding="utf-8") as f:
+                f.write(raw_code)
+        except Exception as write_err:
+            return {"error": f"Failed to write scratchpad code: {write_err}", "exit_code": 1, "success": False}
+    else:
+        full_path = _resolve_fs_path(raw_path)
+        if not os.path.exists(full_path):
+            return {"error": f"Script '{raw_path}' not found at '{full_path}'", "exit_code": 1, "success": False}
+
+    run_timeout = max(1, min(int(timeout_s or 30), 120))
+
+    def _exec() -> dict[str, Any]:
+        cwd = scratch_dir if is_scratchpad else os.path.dirname(full_path) or scratch_dir
+        # Snapshot existing images before execution
+        existing_images = set()
+        if os.path.exists(cwd):
+            for entry in os.scandir(cwd):
+                if entry.is_file() and entry.name.lower().endswith((".png", ".jpg", ".jpeg", ".svg")):
+                    existing_images.add(entry.path)
+
+        env = dict(os.environ)
+        env.setdefault("MPLBACKEND", "Agg")
+
+        try:
+            res = subprocess.run(
+                [sys.executable, full_path],
+                capture_output=True,
+                text=True,
+                timeout=run_timeout,
+                cwd=cwd,
+                env=env,
+            )
+
+            # Discover newly generated images
+            new_images = []
+            if os.path.exists(cwd):
+                for entry in os.scandir(cwd):
+                    if entry.is_file() and entry.name.lower().endswith((".png", ".jpg", ".jpeg", ".svg")):
+                        if entry.path not in existing_images:
+                            try:
+                                with open(entry.path, "rb") as img_f:
+                                    b64 = base64.b64encode(img_f.read()).decode("ascii")
+                                ext = os.path.splitext(entry.name)[1].lower().replace(".", "")
+                                mime = "image/jpeg" if ext in ("jpg", "jpeg") else ("image/svg+xml" if ext == "svg" else f"image/{ext}")
+                                new_images.append({
+                                    "path": entry.path,
+                                    "filename": entry.name,
+                                    "data_url": f"data:{mime};base64,{b64}",
+                                })
+                            except Exception:
+                                new_images.append({"path": entry.path, "filename": entry.name})
+
             return {
                 "exit_code": res.returncode,
                 "stdout": res.stdout,
                 "stderr": res.stderr,
                 "success": res.returncode == 0,
+                "scratchpad_path": full_path if is_scratchpad else None,
+                "images": new_images,
             }
         except subprocess.TimeoutExpired:
-            return {"error": "Script execution timed out after 30s", "exit_code": -1}
+            return {
+                "error": f"Script execution timed out after {run_timeout}s",
+                "exit_code": -1,
+                "success": False,
+                "scratchpad_path": full_path if is_scratchpad else None,
+            }
         except Exception as e:
-            return {"error": str(e), "exit_code": 1}
+            return {
+                "error": str(e),
+                "exit_code": 1,
+                "success": False,
+                "scratchpad_path": full_path if is_scratchpad else None,
+            }
 
     return await asyncio.to_thread(_exec)
 
@@ -1866,6 +2287,7 @@ async def organize_desktop(
 
     def _execute():
         moved = 0
+        moves_manifest = []
         for item in plan:
             src = os.path.join(desktop, item["file"])
             dst_dir = os.path.join(desktop, item["to"])
@@ -1880,12 +2302,16 @@ async def organize_desktop(
             try:
                 shutil.move(src, dst)
                 moved += 1
+                moves_manifest.append({"from": src, "to": dst})
             except Exception:
                 pass
-        return moved
+        return moved, moves_manifest
 
-    moved_count = await asyncio.to_thread(_execute)
-    return f"Successfully organized {moved_count} file(s) in {folder_label}."
+    moved_count, moves_manifest = await asyncio.to_thread(_execute)
+    msg = f"Successfully organized {moved_count} file(s) in {folder_label}."
+    if moves_manifest:
+        msg += f" [Manifest: {json.dumps({'moves': moves_manifest})}]"
+    return msg
 
 
 async def system_power(action: str, **kwargs: Any) -> str:
@@ -2261,6 +2687,8 @@ async def write_file(path: str, content: str = "", **kwargs: Any) -> str:
     if not actual_path:
         return "Error: No file path provided to write."
     src = _resolve_fs_path(actual_path)
+    if not _is_path_allowed_for_mutation(src):
+        return f"❌ Security Boundary Guard: Write operation blocked on '{actual_path}'. Path is outside allowed workspace boundaries."
     parent = os.path.dirname(src)
     if parent:
         os.makedirs(parent, exist_ok=True)
@@ -2289,6 +2717,8 @@ async def copy_file(source_path: str, target_folder_or_path: str, **kwargs: Any)
     """Copy a file or folder to a destination path."""
     src = _resolve_fs_path(source_path)
     dest = _resolve_fs_path(target_folder_or_path)
+    if not _is_path_allowed_for_mutation(dest):
+        return f"❌ Security Boundary Guard: Copy destination blocked on '{target_folder_or_path}'. Path is outside allowed workspace boundaries."
     if not os.path.exists(src):
         return f"Source not found: {source_path}"
     def _copy() -> None:
@@ -2308,6 +2738,10 @@ async def move_file(source_path: str, target_folder_or_path: str, **kwargs: Any)
     """Move a file or folder from source path to target folder or path with shadow snapshot."""
     src = _resolve_fs_path(source_path)
     dest = _resolve_fs_path(target_folder_or_path)
+    if not _is_path_allowed_for_mutation(src):
+        return f"❌ Security Boundary Guard: Move source blocked on '{source_path}'. Path is outside allowed workspace boundaries."
+    if not _is_path_allowed_for_mutation(dest):
+        return f"❌ Security Boundary Guard: Move destination blocked on '{target_folder_or_path}'. Path is outside allowed workspace boundaries."
     if not os.path.exists(src):
         return f"Source not found: {source_path}"
     snap_id = await _create_file_snapshot(src)
@@ -2328,10 +2762,14 @@ async def move_file(source_path: str, target_folder_or_path: str, **kwargs: Any)
 async def rename_file(file_path: str, new_name: str, **kwargs: Any) -> str:
     """Rename a file or folder in place with shadow snapshot."""
     src = _resolve_fs_path(file_path)
+    if not _is_path_allowed_for_mutation(src):
+        return f"❌ Security Boundary Guard: Rename source blocked on '{file_path}'. Path is outside allowed workspace boundaries."
     if not os.path.exists(src):
         return f"File not found: {file_path}"
     parent = os.path.dirname(src)
     dest = os.path.join(parent, os.path.basename(new_name))
+    if not _is_path_allowed_for_mutation(dest):
+        return f"❌ Security Boundary Guard: Rename destination blocked on '{new_name}'. Path is outside allowed workspace boundaries."
     snap_id = await _create_file_snapshot(src)
     try:
         await asyncio.to_thread(os.rename, src, dest)
@@ -2478,6 +2916,8 @@ async def apply_patch(
 ) -> dict[str, Any]:
     """Surgically replace a specific unique block of code/text in a file with new content."""
     full_path = _resolve_fs_path(path)
+    if not _is_path_allowed_for_mutation(full_path):
+        return {"error": f"Security Boundary Guard: Patch operation blocked on '{path}'. Path is outside allowed workspace boundaries.", "status": "blocked"}
     if not os.path.exists(full_path):
         return {"error": f"File '{path}' not found at '{full_path}'", "status": "error"}
 
@@ -2540,6 +2980,8 @@ async def delete_file(
 ) -> dict[str, Any]:
     """Safely delete a file or directory with an automatic pre-deletion snapshot backup."""
     full_path = _resolve_fs_path(path)
+    if not _is_path_allowed_for_mutation(full_path):
+        return {"error": f"Security Boundary Guard: Deletion blocked on '{path}'. Path is outside allowed workspace boundaries.", "status": "blocked"}
     if not os.path.exists(full_path):
         return {"error": f"Path '{path}' not found at '{full_path}'", "status": "error"}
 
@@ -2607,6 +3049,63 @@ async def mouse_scroll(
 # ASTRA COMPUTER USE — Unified computer_action + click_screen_target
 # ==============================================================================
 
+SCREENSHOT_VISION_MAX_WIDTH = 960
+
+
+def _grab_screen_image(target: str = "fullscreen") -> Any:
+    """Synchronously grab a screenshot; returns a full-resolution PIL Image (or None)."""
+    from PIL import Image, ImageGrab
+
+    bbox = None
+    tgt = (target or "fullscreen").lower().strip()
+    try:
+        import win32gui as _wg
+    except Exception:
+        _wg = None
+    if tgt in ("active", "window", "active_window") and _wg:
+        try:
+            hwnd = _wg.GetForegroundWindow()
+            if hwnd and _wg.IsWindowVisible(hwnd):
+                rect = _wg.GetWindowRect(hwnd)
+                if rect and (rect[2] > rect[0]) and (rect[3] > rect[1]):
+                    bbox = rect
+        except Exception:
+            bbox = None
+    try:
+        return ImageGrab.grab(bbox=bbox)
+    except Exception:
+        try:
+            user32 = ctypes.windll.user32
+            w = user32.GetSystemMetrics(0)
+            h = user32.GetSystemMetrics(1)
+        except Exception:
+            w, h = 1920, 1080
+        return Image.new("RGB", (w, h), color=SCREENSHOT_FALLBACK_COLOR)
+
+
+def _downscale_for_vision(img: Any, max_width: int = SCREENSHOT_VISION_MAX_WIDTH) -> str:
+    """Downscale a PIL image and return base64 JPEG.
+
+    Vision diet (T1a): grounding uses normalized 0-1 coords, so a 960px JPEG
+    grounds as accurately as full-res PNG at ~1/10 payload.
+    """
+    import base64
+    import io
+
+    try:
+        from PIL import Image as _Image
+        w, h = img.size
+        if w > max_width:
+            img = img.resize((max_width, max(1, int(h * max_width / w))), _Image.LANCZOS)
+        if getattr(img, "mode", "RGB") != "RGB":
+            img = img.convert("RGB")
+    except Exception as _exc:
+        logger.debug("suppressed: %s", _exc)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=75)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
 async def computer_action(
     action: str,
     x: Optional[int] = None,
@@ -2627,7 +3126,8 @@ async def computer_action(
     Single tool for all desktop interaction actions.
 
     Actions:
-      screenshot   - Capture full desktop or active window; returns base64 PNG + resolution.
+      screenshot   - Capture full desktop or active window; saves PNG to
+                     ~/.makima/screenshots/ and returns {path, width, height}.
       mouse_move   - Move mouse cursor to (x, y) smoothly.
       click        - Left-click at (x, y).
       double_click - Double left-click at (x, y).
@@ -2640,42 +3140,27 @@ async def computer_action(
     action_clean = (action or "").lower().strip()
 
     # --- screenshot ---
+    # T1b: result carries {path, width, height} — never base64. The old base64
+    # blob was truncated to a useless 3500-char stub (~875 wasted tokens) by
+    # the tool-result formatter. Vision callers capture downscaled bytes
+    # in-memory via _downscale_for_vision instead.
     if action_clean == "screenshot":
         def _screen() -> dict[str, Any]:
-            import base64
-            from PIL import ImageGrab
+            img = _grab_screen_image(target)
+            if img is None:
+                return {"action": "screenshot", "error": "Capture failed."}
+            shot_dir = os.path.expanduser("~/.makima/screenshots")
+            os.makedirs(shot_dir, exist_ok=True)
+            file_path = os.path.join(shot_dir, f"action_{time.strftime('%Y%m%d_%H%M%S')}.png")
             try:
-                bbox = None
-                tgt = (target or "fullscreen").lower().strip()
-                if tgt in ("active", "window", "active_window") and win32gui:
-                    try:
-                        hwnd = win32gui.GetForegroundWindow()
-                        if hwnd and win32gui.IsWindowVisible(hwnd):
-                            rect = win32gui.GetWindowRect(hwnd)
-                            if rect and (rect[2] > rect[0]) and (rect[3] > rect[1]):
-                                bbox = rect
-                    except Exception:
-                        bbox = None
-                img = ImageGrab.grab(bbox=bbox)
-            except Exception:
-                try:
-                    user32 = ctypes.windll.user32
-                    w = user32.GetSystemMetrics(0)
-                    h = user32.GetSystemMetrics(1)
-                except Exception:
-                    w, h = 1920, 1080
-                from PIL import Image
-                img = Image.new("RGB", (w, h), color=SCREENSHOT_FALLBACK_COLOR)
-
-            import io
-            buf = io.BytesIO()
-            img.save(buf, format="PNG")
-            b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+                img.save(file_path, "PNG")
+            except Exception as save_err:
+                return {"action": "screenshot", "error": f"Save failed: {save_err}"}
             return {
                 "action": "screenshot",
                 "width": img.width,
                 "height": img.height,
-                "base64_png": b64,
+                "path": file_path,
             }
         try:
             return await asyncio.to_thread(_screen)
@@ -2801,7 +3286,7 @@ async def click_screen_target(
     Autonomous vision-action loop: find and click a UI element by description.
 
     Flow:
-      1. Take a full-desktop screenshot (computer_action screenshot).
+      1. Capture a full-desktop screenshot and downscale it for the vision call.
       2. Send screenshot + target_description to a vision LLM for coordinate grounding.
       3. Scale normalized coords to desktop resolution and execute click.
       4. Optionally take a follow-up screenshot and return verification result.
@@ -2812,17 +3297,16 @@ async def click_screen_target(
                 If None, attempts lazy import from orchestration context.
     verify: Whether to take a follow-up screenshot after clicking.
     """
-    # Step 1: Screenshot
-    screen_result = await computer_action(action="screenshot", target="fullscreen")
-    if "error" in screen_result:
-        return {"status": "error", "step": "screenshot", "error": screen_result["error"]}
-
-    b64_png = screen_result.get("base64_png", "")
-    width = screen_result.get("width", 1920)
-    height = screen_result.get("height", 1080)
-
-    if not b64_png:
+    # Step 1: Screenshot (full-res capture, downscaled bytes for vision only)
+    try:
+        img = await asyncio.to_thread(_grab_screen_image, "fullscreen")
+    except Exception as e:
+        return {"status": "error", "step": "screenshot", "error": str(e)}
+    if img is None:
         return {"status": "error", "step": "screenshot", "error": "Empty screenshot."}
+
+    width, height = img.size
+    b64_png = _downscale_for_vision(img)
 
     # Step 2: Vision LLM grounding
     handler = ai_handler
@@ -2850,7 +3334,7 @@ async def click_screen_target(
                     "content": [
                         {
                             "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{b64_png}"},
+                            "image_url": {"url": f"data:image/jpeg;base64,{b64_png}"},
                         },
                         {"type": "text", "text": vision_prompt},
                     ],
@@ -2900,12 +3384,12 @@ async def click_screen_target(
             "error": click_result["error"],
         }
 
-    # Step 4: Optional verification screenshot
-    verify_b64: Optional[str] = None
+    # Step 4: Optional verification screenshot (path result only — no b64 in output)
+    verify_ok = False
     if verify:
         await asyncio.sleep(0.5)  # Let UI settle
         verify_result = await computer_action(action="screenshot", target="fullscreen")
-        verify_b64 = verify_result.get("base64_png")
+        verify_ok = "error" not in verify_result
 
     return {
         "status": "ok",
@@ -2914,7 +3398,7 @@ async def click_screen_target(
         "resolution": [width, height],
         "grounding": grounding_method,
         "click": click_result,
-        "verify_screenshot_b64": verify_b64,
+        "verify_screenshot_taken": verify_ok,
     }
 
 
@@ -3550,13 +4034,15 @@ SYSTEM_TOOLS_MANIFEST = [
     {
         "name": "run_python_script",
         "func": run_python_script,
-        "description": "Execute a python script on disk and return exit code, stdout, and stderr.",
+        "description": "Execute a Python script on disk or arbitrary Python code in Makima's scratchpad sandbox. Returns stdout, stderr, exit code, and generated chart/plot images.",
         "schema": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Script path to execute"}
+                "code": {"type": "string", "description": "Arbitrary Python code to execute directly in the scratchpad (e.g. data calculations, math, plotting)."},
+                "path": {"type": "string", "description": "Script path to execute from disk if executing an existing file."},
+                "timeout_s": {"type": "integer", "description": "Execution timeout in seconds (default 30)", "default": 30},
             },
-            "required": ["path"],
+            "required": [],
         },
         "category": "system",
         "is_destructive": False,
@@ -3622,6 +4108,49 @@ SYSTEM_TOOLS_MANIFEST = [
                 },
             },
             "required": ["target_description"],
+        },
+        "category": "system",
+        "is_destructive": False,
+    },
+    {
+        "name": "undo_last_action",
+        "func": undo_last_action,
+        "description": "Revert recent filesystem or OS action(s) (file write, patch, delete, move, rename, desktop organize) using shadow snapshots and compensation manifests. Call this when the user says 'undo karo', 'undo', 'revert last action', or 'galti se delete ho gaya wapas lao'.",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "steps": {
+                    "type": "integer",
+                    "description": "Number of recent actions to revert (default 1).",
+                    "default": 1,
+                },
+                "target_path": {
+                    "type": "string",
+                    "description": "Optional specific file or directory path to restore.",
+                },
+            },
+            "required": [],
+        },
+        "category": "system",
+        "is_destructive": False,
+    },
+    {
+        "name": "restore_snapshot",
+        "func": restore_snapshot,
+        "description": "Restore a file or directory from a Makima shadow snapshot (~/.makima/snapshots/<snapshot_id>) to a target path.",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "snapshot_id": {
+                    "type": "string",
+                    "description": "The snapshot ID (e.g. snap_123456789abc_filename).",
+                },
+                "target_path": {
+                    "type": "string",
+                    "description": "The destination path where the snapshot should be restored.",
+                },
+            },
+            "required": ["snapshot_id"],
         },
         "category": "system",
         "is_destructive": False,

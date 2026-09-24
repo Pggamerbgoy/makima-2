@@ -13,7 +13,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from apps.brain.core.contracts import Task, TaskState
 from apps.brain.core.persistence import EventStore
@@ -36,7 +36,7 @@ class CheckpointedTask:
     status: str  # "active" | "paused" | "completed" | "failed"
     created_at: float
     updated_at: float
-    resume_after: Optional[float] = None
+    resume_after: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -91,7 +91,7 @@ class DurableTaskEngine:
     def __init__(
         self,
         event_store: EventStore,
-        task_manager: Optional[Any] = None,
+        task_manager: Any | None = None,
     ) -> None:
         self._event_store = event_store
         self._task_manager = task_manager
@@ -103,8 +103,13 @@ class DurableTaskEngine:
         self._init_db_sync()
 
     async def stop(self) -> None:
-        """Stop the durable task engine cleanly."""
-        pass
+        """Stop the durable task engine cleanly (close shared EventStore connection)."""
+        try:
+            store = getattr(self, "_event_store", None)
+            if store is not None and hasattr(store, "close"):
+                store.close()
+        except Exception:
+            pass
 
     def _init_db_sync(self) -> None:
         """Create the task_checkpoints table and indices synchronously."""
@@ -171,16 +176,16 @@ class DurableTaskEngine:
         self,
         task_id: str,
         prompt: str = "",
-        completed_steps: Optional[list[Any]] = None,
-        remaining_steps: Optional[list[Any]] = None,
-        context: Optional[dict[str, Any]] = None,
+        completed_steps: list[Any] | None = None,
+        remaining_steps: list[Any] | None = None,
+        context: dict[str, Any] | None = None,
         turn_count: int = 0,
         task_name: str = "",
         max_turns: int = 25,
         status: str = "active",
-        resume_after: Optional[float] = None,
+        resume_after: float | None = None,
         original_prompt: str = "",
-        resume_after_seconds: Optional[float] = None,
+        resume_after_seconds: float | None = None,
     ) -> CheckpointedTask:
         """Serialize task state to task_checkpoints table synchronously."""
         now = time.time()
@@ -290,7 +295,7 @@ class DurableTaskEngine:
         )
         return cp
 
-    def get_checkpoint_sync(self, task_id: str) -> Optional[CheckpointedTask]:
+    def get_checkpoint_sync(self, task_id: str) -> CheckpointedTask | None:
         """Load latest checkpoint for task_id synchronously."""
         cur = self._conn.execute(
             """
@@ -361,16 +366,16 @@ class DurableTaskEngine:
         self,
         task_id: str,
         prompt: str = "",
-        completed_steps: Optional[list[Any]] = None,
-        remaining_steps: Optional[list[Any]] = None,
-        context: Optional[dict[str, Any]] = None,
+        completed_steps: list[Any] | None = None,
+        remaining_steps: list[Any] | None = None,
+        context: dict[str, Any] | None = None,
         turn_count: int = 0,
         task_name: str = "",
         max_turns: int = 25,
         status: str = "active",
-        resume_after: Optional[float] = None,
+        resume_after: float | None = None,
         original_prompt: str = "",
-        resume_after_seconds: Optional[float] = None,
+        resume_after_seconds: float | None = None,
     ) -> CheckpointedTask:
         """Async wrapper for checkpoint_task_sync executing in SQLite thread pool."""
         async with self._event_store._get_lock():
@@ -392,7 +397,7 @@ class DurableTaskEngine:
                 resume_after_seconds,
             )
 
-    async def get_checkpoint(self, task_id: str) -> Optional[CheckpointedTask]:
+    async def get_checkpoint(self, task_id: str) -> CheckpointedTask | None:
         """Async lookup of checkpoint."""
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.get_checkpoint_sync, task_id)
@@ -447,7 +452,7 @@ class DurableTaskEngine:
                     logger.debug("[DurableTaskEngine] Error syncing failure with TaskManager: %s", e)
             return ok
 
-    async def resume_task(self, task_id: str) -> Optional[ResumedTask]:
+    async def resume_task(self, task_id: str) -> ResumedTask | None:
         """
         Load checkpoint from SQLite, reconstruct execution context and prompt,
         sync state with TaskManager, and return ResumedTask.
@@ -458,7 +463,7 @@ class DurableTaskEngine:
             return None
 
         # Reconstruct canonical Task contract if TaskManager available
-        task_obj: Optional[Task] = None
+        task_obj: Task | None = None
         if self._task_manager:
             task_obj = await self._task_manager.get_task(task_id)
             if not task_obj:

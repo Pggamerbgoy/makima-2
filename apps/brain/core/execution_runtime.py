@@ -14,9 +14,11 @@ import os
 import re
 import time
 import uuid
-from typing import Any, Callable, Optional, Union
+from collections import deque
+from collections.abc import Callable
+from typing import Any, ClassVar
 
-from .contracts import Action, ActionExecutionContext, ExecutionResult, Task, MEDIA_KEYWORDS
+from .contracts import MEDIA_KEYWORDS, Action, ActionExecutionContext, ExecutionResult
 
 logger = logging.getLogger("execution_runtime")
 
@@ -33,9 +35,39 @@ DOMAIN_TIMEOUT_DEFAULTS: dict[str, float] = {
 }
 
 
+class FilesystemEngineBridge:
+    """Bridge providing file restoration and compensation methods to ExecutionRuntime."""
+
+    @staticmethod
+    def _resolve(path: str) -> str:
+        try:
+            from ..tools.system_tools import _resolve_fs_path
+            return _resolve_fs_path(path)
+        except Exception:
+            return os.path.abspath(os.path.expanduser(str(path)))
+
+    @staticmethod
+    async def restore_snapshot(snapshot_id: str, target_path: str) -> tuple[bool, str]:
+        from ..tools.system_tools import restore_snapshot
+        return await restore_snapshot(snapshot_id, target_path)
+
+    @staticmethod
+    async def restore_move_transaction(comp_params: dict[str, Any]) -> tuple[bool, str]:
+        from ..tools.system_tools import restore_move_transaction
+        return await restore_move_transaction(comp_params)
+
+    @staticmethod
+    async def rollback_organize_desktop(comp_params: dict[str, Any]) -> tuple[bool, str]:
+        from ..tools.system_tools import rollback_organize_desktop
+        return await rollback_organize_desktop(comp_params)
+
+
+_fs_engine_bridge = FilesystemEngineBridge()
+
+
 def _resolve_filesystem_engine() -> Any:
-    """Legacy resolver stub (FilesystemEngine deprecated)."""
-    return None
+    """Resolver for FilesystemEngineBridge to handle SAGA snapshot & rollback compensations."""
+    return _fs_engine_bridge
 
 
 def _resolve_world_state() -> Any:
@@ -70,13 +102,14 @@ class ExecutionRuntime:
     def __init__(
         self,
         tool_registry: Any = None,
-        invariant_verifier: Optional[Any] = None,
+        invariant_verifier: Any | None = None,
         learning_coordinator: Any = None,
         guardrails: Any = None,
         recovery_manager: Any = None,
         saga_recovery: Any = None,
         kernel: Any = None,
         event_store: Any = None,
+        preference_engine: Any | None = None,
     ) -> None:
         self.tool_registry = tool_registry
         if self.tool_registry and hasattr(self.tool_registry, "set_execution_runtime"):
@@ -89,7 +122,16 @@ class ExecutionRuntime:
         self.recovery_manager = self.saga_recovery
         self.kernel = kernel
         self.event_store = event_store or getattr(kernel, "event_store", None)
+        self.preference_engine = preference_engine
         self._background_tasks: set[asyncio.Task] = set()
+        self._recent_tool_runs: deque[dict[str, Any]] = deque(maxlen=30)
+        self._undo_stack: deque[dict[str, Any]] = deque(maxlen=50)
+
+        try:
+            from ..tools.system_tools import set_system_execution_runtime
+            set_system_execution_runtime(self)
+        except Exception as reg_err:
+            logger.debug("set_system_execution_runtime registration failed: %s", reg_err)
 
     def _get_event_store(self) -> Any:
         if self.event_store is None:
@@ -100,7 +142,7 @@ class ExecutionRuntime:
         self,
         action: Action,
         res_obj: ExecutionResult,
-        ctx: Optional[ActionExecutionContext] = None,
+        ctx: ActionExecutionContext | None = None,
     ) -> None:
         """Persist SAGA incident into EventStore (~/.makima/kernel_events.db)."""
         store = self._get_event_store()
@@ -196,7 +238,7 @@ class ExecutionRuntime:
 
         return base_timeout
 
-    def get_tool_incident_summary(self, tool_name: str) -> Optional[dict[str, Any]]:
+    def get_tool_incident_summary(self, tool_name: str) -> dict[str, Any] | None:
         """Query EventStore to get diagnostic pattern summary for a specific tool."""
         store = self._get_event_store()
         if store and hasattr(store, "get_failure_patterns_sync"):
@@ -207,7 +249,7 @@ class ExecutionRuntime:
                 return None
         return None
 
-    COMMON_PARAM_ALIASES: dict[str, list[str]] = {
+    COMMON_PARAM_ALIASES: ClassVar[dict[str, list[str]]] = {
         "path": ["file_path", "filepath", "target_path", "filename", "file", "target_file", "path_str", "targetpath"],
         "file_path": ["path", "filepath", "target_path", "filename", "file", "target_file", "path_str", "targetpath"],
         "content": ["text", "body", "data", "message", "script", "code", "file_content"],
@@ -226,14 +268,14 @@ class ExecutionRuntime:
         "app_path": ["app_name", "target", "app", "application", "name"],
     }
 
-    FILE_TOOLS: frozenset[str] = frozenset({
+    FILE_TOOLS: ClassVar[frozenset[str]] = frozenset({
         "read_file", "write_file", "delete_file", "move_file", "copy_file", "rename_file",
         "profile_dataset", "execute_query", "statistical_test", "generate_chart", "export_dataset",
         "parse_document", "compile_pdf", "create_spreadsheet", "create_presentation", "convert_document",
     })
 
     @staticmethod
-    def _is_retriable(error_msg: Optional[str], retryable_keywords: tuple[str, ...]) -> bool:
+    def _is_retriable(error_msg: str | None, retryable_keywords: tuple[str, ...]) -> bool:
         """Check if an execution failure message matches configured retriable keywords."""
         if not error_msg or not retryable_keywords:
             return False
@@ -244,7 +286,7 @@ class ExecutionRuntime:
     def _validate_params(
         schema: dict[str, Any],
         params: dict[str, Any],
-        critical_params: Optional[tuple[str, ...] | list[str]] = None,
+        critical_params: tuple[str, ...] | list[str] | None = None,
     ) -> str:
         """Validate parameters against standard tool JSON-Schema subset and SAGE critical parameters."""
         if critical_params:
@@ -265,7 +307,7 @@ class ExecutionRuntime:
         if missing:
             return f"missing required parameter(s): {', '.join(missing)}"
 
-        type_names = {
+        type_names: dict[str, Any] = {
             "string": str,
             "integer": int,
             "number": (int, float),
@@ -275,10 +317,16 @@ class ExecutionRuntime:
         }
         for name, value in params.items():
             definition = properties.get(name) or {}
-            expected = type_names.get(definition.get("type"))
-            if expected and (isinstance(value, bool) and expected is not bool or
-                             not isinstance(value, expected)):
-                return f"parameter '{name}' must be of type {definition.get('type')}"
+            type_key = str(definition.get("type") or "")
+            expected = type_names.get(type_key)
+            if expected is not None:
+                type_ok = isinstance(value, expected)
+                if expected is bool:
+                    type_ok = isinstance(value, bool)
+                elif expected is int:
+                    type_ok = isinstance(value, int) and not isinstance(value, bool)
+                if not type_ok:
+                    return f"parameter '{name}' must be of type {definition.get('type')}"
             if "enum" in definition and value not in definition["enum"]:
                 return f"parameter '{name}' must be one of {definition['enum']}"
             if isinstance(value, str):
@@ -290,12 +338,12 @@ class ExecutionRuntime:
 
     def _normalize_tool_parameters(
         self,
-        tool_name_or_action: Union[str, Action, None] = None,
-        params: Optional[dict[str, Any]] = None,
-        handler: Optional[Callable] = None,
-        schema: Optional[dict[str, Any]] = None,
+        tool_name_or_action: str | Action | None = None,
+        params: dict[str, Any] | None = None,
+        handler: Callable | None = None,
+        schema: dict[str, Any] | None = None,
         *,
-        tool_name: Optional[str] = None,
+        tool_name: str | None = None,
     ) -> dict[str, Any]:
         """
         Universal Single-Pass Parameter Normalization:
@@ -307,9 +355,13 @@ class ExecutionRuntime:
         6. Local handler signature kwargs adaptation
         """
         effective_name = tool_name or ""
-        if hasattr(tool_name_or_action, "capability_name") and hasattr(tool_name_or_action, "parameters"):
-            effective_name = str(tool_name_or_action.capability_name or "")
-            params = dict(tool_name_or_action.parameters or {})
+        if isinstance(tool_name_or_action, Action) or (
+            hasattr(tool_name_or_action, "capability_name")
+            and hasattr(tool_name_or_action, "parameters")
+            and not isinstance(tool_name_or_action, str)
+        ):
+            effective_name = str(getattr(tool_name_or_action, "capability_name", "") or "")
+            params = dict(getattr(tool_name_or_action, "parameters", None) or {})
         elif isinstance(tool_name_or_action, str) and not effective_name:
             effective_name = tool_name_or_action
         params = dict(params or {})
@@ -391,7 +443,7 @@ class ExecutionRuntime:
                     clean_val = val.strip().strip("'\"")
                     if not os.path.isabs(clean_val) and not any(clean_val.startswith(p) for p in ("http://", "https://", "ms-", "file://")):
                         if clean_val.lower().startswith("desktop") or "desktop" in clean_val.lower():
-                            rel_sub = re.sub(r'^(?:desktop[\\/]|desktop\s*)', '', clean_val, flags=re.I).strip()
+                            rel_sub = re.sub(r'^(?:desktop[\\/]|desktop\s*)', '', clean_val, flags=re.IGNORECASE).strip()
                             resolved = os.path.normpath(os.path.join(desktop_path, rel_sub))
                             normalized[pk] = resolved
                         else:
@@ -411,9 +463,9 @@ class ExecutionRuntime:
                             "[execution_runtime] Dropping params %s not in handler signature for '%s'",
                             dropped, tool_name,
                         )
-                    normalized = {k: v for k, v in normalized.items() if k in expected_params}
-            except Exception:
-                pass
+                        normalized = {k: v for k, v in normalized.items() if k in expected_params}
+            except Exception as filter_err:
+                logger.debug("Parameter schema filter skipped: %s", filter_err)
 
         return normalized
 
@@ -468,8 +520,8 @@ class ExecutionRuntime:
     async def execute_action(
         self,
         action: Action,
-        context: Optional[ActionExecutionContext] = None,
-        local_tool_map: Optional[dict[str, Callable]] = None,
+        context: ActionExecutionContext | None = None,
+        local_tool_map: dict[str, Callable] | None = None,
     ) -> ExecutionResult:
         """
         Execute an Action through the canonical unified transactional lifecycle:
@@ -535,10 +587,13 @@ class ExecutionRuntime:
         tool_meta = None
         handler = (local_tool_map.get(tool_name) if local_tool_map else None)
 
-        if not handler and self.tool_registry and hasattr(self.tool_registry, "_tools"):
-            tool_meta = self.tool_registry._tools.get(tool_name)
+        if not handler and self.tool_registry:
+            if hasattr(self.tool_registry, "get_tool"):
+                tool_meta = self.tool_registry.get_tool(tool_name)
+            elif hasattr(self.tool_registry, "_tools"):
+                tool_meta = self.tool_registry._tools.get(tool_name)
             if tool_meta:
-                handler = tool_meta.func
+                handler = getattr(tool_meta, "func", tool_meta)
 
         schema = getattr(tool_meta, "schema", None) if tool_meta else None
         critical_params = getattr(tool_meta, "critical_parameters", ()) if tool_meta else ()
@@ -581,8 +636,8 @@ class ExecutionRuntime:
                 sig = inspect.signature(handler)
                 if "context" in sig.parameters:
                     params["context"] = ctx
-            except Exception:
-                pass
+            except Exception as sig_err:
+                logger.debug("Handler signature kwargs injection skipped: %s", sig_err)
 
         # ── 5. Physical Tool Invocation with Dynamic Timeout & Retry Backoff ──
         timeout_s = self._determine_timeout(action, tool_meta)
@@ -591,7 +646,7 @@ class ExecutionRuntime:
         retryable_keywords = getattr(tool_meta, "retryable_keywords", ())
 
         raw_output: Any = None
-        tool_error: Optional[str] = None
+        tool_error: str | None = None
         is_timeout: bool = False
 
         if not handler:
@@ -711,6 +766,14 @@ class ExecutionRuntime:
                 logger.debug("[execution_runtime] Post-state capture error: %s", state_err)
 
         # ── 8. Verification ──────────────────────────────────────────────────
+        is_tool_error_dict = isinstance(raw_output, dict) and (
+            raw_output.get("status") in ("error", "failed", "failure")
+            or raw_output.get("success") is False
+            or raw_output.get("ok") is False
+        )
+        if is_tool_error_dict and not tool_error and raw_output.get("status") != "needs_confirmation":
+            tool_error = str(raw_output.get("error") or raw_output.get("message") or "Tool returned failure status")
+
         if is_timeout:
             v_status = "TIMEOUT"
             v_reason = tool_error or "Execution timed out"
@@ -755,12 +818,7 @@ class ExecutionRuntime:
                     comp_func = getattr(fe, ctx.compensation_tool, None) if ctx.compensation_tool else None
 
                     if comp_func:
-                        if ctx.compensation_tool == "restore_snapshot":
-                            snap_id = ctx.compensation_params.get("snapshot_id") or ctx.snapshot_id
-                            tgt = ctx.compensation_params.get("target_path") or ""
-                            if snap_id and tgt:
-                                restored_ok, restored_err = await fe.restore_snapshot(snap_id, tgt)
-                        elif ctx.snapshot_id and "target_path" in ctx.compensation_params:
+                        if ctx.compensation_tool == "restore_snapshot" or ctx.snapshot_id and "target_path" in ctx.compensation_params:
                             snap_id = ctx.compensation_params.get("snapshot_id") or ctx.snapshot_id
                             tgt = ctx.compensation_params.get("target_path") or ""
                             if snap_id and tgt:
@@ -869,6 +927,61 @@ class ExecutionRuntime:
             artifacts=artifacts,
         )
 
+        # ── Preference Learning Hook & Auto-Override Detection ──────────────
+        now_ts = time.time()
+        pref_eng = getattr(self, "preference_engine", None)
+        if pref_eng:
+            # 1. Detect manual parameter overrides within 60s
+            if hasattr(pref_eng, "record_feedback"):
+                for prev_run in reversed(self._recent_tool_runs):
+                    if prev_run.get("tool_name") == tool_name:
+                        if (now_ts - prev_run.get("timestamp", 0)) <= 60.0:
+                            prev_p = prev_run.get("params") or {}
+                            if prev_p != params:
+                                try:
+                                    fb_res = pref_eng.record_feedback(
+                                        tool_name=tool_name,
+                                        rejected_params=prev_p,
+                                        accepted=False,
+                                        actual_params=params,
+                                    )
+                                    if inspect.isawaitable(fb_res):
+                                        await fb_res
+                                    logger.info(
+                                        "[execution_runtime] Auto-detected preference override for '%s': %s -> %s",
+                                        tool_name, prev_p, params,
+                                    )
+                                except Exception as fb_err:
+                                    logger.debug("[execution_runtime] Preference feedback error: %s", fb_err)
+                        break
+
+            # 2. Record tool execution and detect patterns
+            if hasattr(pref_eng, "record_and_detect"):
+                try:
+                    rec_res = pref_eng.record_and_detect(action, res_obj)
+                    if inspect.isawaitable(rec_res):
+                        await rec_res
+                except Exception as pref_err:
+                    logger.debug("[execution_runtime] Preference recording error: %s", pref_err)
+
+        self._recent_tool_runs.append({
+            "tool_name": tool_name,
+            "params": dict(params),
+            "timestamp": now_ts,
+        })
+
+        # ── Reversible Action Tracking (Undo Stack) ──────────────────────────
+        if is_success and (ctx.snapshot_id or ctx.compensation_tool or ctx.reversibility == "snapshot"):
+            self._undo_stack.append({
+                "action_id": action.action_id,
+                "tool_name": tool_name,
+                "params": dict(params),
+                "snapshot_id": ctx.snapshot_id,
+                "compensation_tool": ctx.compensation_tool,
+                "compensation_params": dict(ctx.compensation_params or {}),
+                "timestamp": now_ts,
+            })
+
         if not is_success:
             store = self._get_event_store()
             if store and hasattr(store, "append_sync"):
@@ -937,9 +1050,9 @@ class ExecutionRuntime:
     async def execute_tool(
         self,
         name: str,
-        params: Optional[dict[str, Any]] = None,
+        params: dict[str, Any] | None = None,
         context: Any = None,
-        task_id: Optional[str] = None,
+        task_id: str | None = None,
         **kwargs: Any,
     ) -> Any:
         """Convenience method to execute a tool by name and return raw output."""
@@ -962,7 +1075,7 @@ class ExecutionRuntime:
     async def execute_actions_parallel(
         self,
         actions: list[Action],
-        context: Optional[ActionExecutionContext] = None,
+        context: ActionExecutionContext | None = None,
         max_concurrency: int = 4,
     ) -> list[ExecutionResult]:
         """
@@ -1020,7 +1133,7 @@ class ExecutionRuntime:
         self,
         calls: list[dict[str, Any]],
         context: Any = None,
-        task_id: Optional[str] = None,
+        task_id: str | None = None,
         max_concurrency: int = 4,
     ) -> list[dict[str, Any]]:
         """
@@ -1061,4 +1174,52 @@ class ExecutionRuntime:
                 "duration_ms": res.duration_ms,
             })
         return outputs
+
+    async def undo_last_action(self, steps: int = 1) -> dict[str, Any]:
+        """
+        Revert the last N reversible action(s) from the runtime's undo stack.
+        Dispatches compensation or restores snapshots.
+        """
+        if not self._undo_stack:
+            return {"status": "error", "message": "No reversible actions recorded in the undo stack."}
+
+        reverted_items = []
+        fe = self._resolve_filesystem_engine()
+        for _ in range(min(steps, len(self._undo_stack))):
+            entry = self._undo_stack.pop()
+            tool = entry.get("tool_name")
+            snap_id = entry.get("snapshot_id")
+            comp_tool = entry.get("compensation_tool")
+            comp_params = entry.get("compensation_params") or {}
+
+            ok = False
+            err = ""
+            if fe:
+                if comp_tool and hasattr(fe, comp_tool):
+                    func = getattr(fe, comp_tool)
+                    if comp_tool == "restore_snapshot":
+                        tgt = comp_params.get("target_path") or entry.get("params", {}).get("path")
+                        ok, err = await func(snap_id, tgt)
+                    else:
+                        ok, err = await func(comp_params)
+                elif snap_id:
+                    tgt = (
+                        comp_params.get("target_path")
+                        or entry.get("params", {}).get("path")
+                        or entry.get("params", {}).get("file_path")
+                    )
+                    if tgt:
+                        ok, err = await fe.restore_snapshot(snap_id, tgt)
+            if ok:
+                reverted_items.append(f"{tool} (snapshot: {snap_id or 'compensated'})")
+            else:
+                reverted_items.append(f"{tool} (failed: {err or 'unknown'})")
+
+        if reverted_items:
+            return {
+                "status": "success",
+                "message": f"Undone {len(reverted_items)} action(s): " + ", ".join(reverted_items),
+                "reverted": reverted_items,
+            }
+        return {"status": "error", "message": "Failed to undo action: compensation failed."}
 

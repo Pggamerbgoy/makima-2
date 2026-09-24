@@ -94,7 +94,10 @@ def register_core_tools(tool_registry: Any, services: Any = None) -> None:
         Generate an image from a text prompt using OpenAI gpt-image-1.
         Saves image to ~/.makima/images/ and returns path + base64 data URL.
         """
-        import os, base64, time as _time, asyncio as _asyncio
+        import asyncio as _asyncio
+        import base64
+        import os
+        import time as _time
         clean_prompt = (prompt or "").strip()
         if not clean_prompt:
             return "[generate_image] No prompt provided."
@@ -114,8 +117,11 @@ def register_core_tools(tool_registry: Any, services: Any = None) -> None:
             )
 
         try:
-            import openai
-        except ImportError:
+            import importlib.util
+
+            if importlib.util.find_spec("openai") is None:
+                return "[generate_image] openai package not installed. Run: pip install openai"
+        except Exception:
             return "[generate_image] openai package not installed. Run: pip install openai"
 
         # Clamp n to valid range (1-4 for DALL-E-3 actually requires n=1)
@@ -125,7 +131,7 @@ def register_core_tools(tool_registry: Any, services: Any = None) -> None:
         img_size = size if size in valid_sizes else "1024x1024"
 
         def _call_openai() -> str:
-            import openai as _openai  # noqa: F811
+            import openai as _openai
             client = _openai.OpenAI(api_key=api_key)
             try:
                 resp = client.images.generate(
@@ -145,8 +151,8 @@ def register_core_tools(tool_registry: Any, services: Any = None) -> None:
             finally:
                 try:
                     client.close()
-                except Exception:
-                    pass
+                except Exception as close_err:
+                    logger.debug("OpenAI image client close failed: %s", close_err)
 
             # Save and return
             img_dir = os.path.expanduser("~/.makima/images")
@@ -238,6 +244,51 @@ def register_core_tools(tool_registry: Any, services: Any = None) -> None:
     except ImportError as e:
         logger.warning("Cannot import search_installed_apps: %s", e)
 
+    # ── describe_my_capabilities (Self-Discovery Tool) ───────────────────────
+    def _describe_capabilities(
+        category: Any = "",
+        detailed: Any = False,
+        lang: Any = "hinglish",
+        **kwargs: Any,
+    ) -> str:
+        """Describe Makima's real live capabilities and available tools from ToolRegistry."""
+        cat_str = str(category).strip() if category is not None and not isinstance(category, (dict, list)) else ""
+        cat = cat_str if cat_str and cat_str.lower() not in ("", "all", "summary", "none") else None
+        is_detailed = bool(detailed) and str(detailed).lower().strip() not in ("false", "0", "no", "off")
+        lang_str = str(lang or "hinglish").strip().lower()
+        return tool_registry.get_manifest_summary(detailed=is_detailed, lang=lang_str, category=cat)
+
+    _safe("describe_my_capabilities", lambda: {
+        "name": "describe_my_capabilities",
+        "description": "Describe Makima's real, live workstation capabilities, registered tools, and what she can do on the desktop. Call this whenever the user asks 'tum kya kya kar sakti ho', 'what can you do', 'apni powers batao', 'capabilities summary', or asks what tools exist in a specific domain (e.g. browser, media, system, documents, memory).",
+        "func": _describe_capabilities,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "description": "Optional domain filter (e.g. 'system', 'browser', 'media', 'filesystem', 'document', 'memory', 'calendar', 'finance', 'data', 'devops', 'security', 'notification', 'web', 'creative'). Leave empty for full overview.",
+                },
+                "detailed": {
+                    "type": "boolean",
+                    "description": "If true, lists individual tool names and their descriptions under each domain.",
+                    "default": False,
+                },
+                "lang": {
+                    "type": "string",
+                    "enum": ["hinglish", "en"],
+                    "description": "Language for the capability description: 'hinglish' (default) or 'en' (English).",
+                    "default": "hinglish",
+                },
+            },
+            "required": [],
+        },
+        "category": "system",
+        "agent_hints": ["system", "commander", "general", "fast_chat"],
+        "task_tags": ["system", "capabilities", "self_discovery", "manifest", "help"],
+        "priority": 1,
+    })
+
     # ── browser tool schemas (27 tools) ──────────────────────────────────────
     try:
         from ..tools.browser_tools import register_browser_tools
@@ -258,6 +309,9 @@ def register_core_tools(tool_registry: Any, services: Any = None) -> None:
         ("system", "..tools.system_tools", "register_system_tools"),
         ("document", "..tools.document_tools", "register_document_tools"),
         ("memory", "..tools.memory_tools", "register_memory_tools"),
+        ("whatsapp", "..tools.whatsapp_tools", "register_whatsapp_tools"),
+        ("telegram", "..tools.telegram_tools", "register_telegram_tools"),
+        ("reminder", "..tools.reminder_tools", "register_reminder_tools"),
     ]
     for _domain, _module_path, _fn_name in _domain_tool_loaders:
         try:
@@ -274,8 +328,8 @@ def register_core_tools(tool_registry: Any, services: Any = None) -> None:
                 sig = _inspect.signature(_fn)
                 if "services" in sig.parameters:
                     call_kwargs["services"] = services
-            except Exception:
-                pass
+            except Exception as sig_err:
+                logger.debug("Signature introspection failed for %s: %s", _fn_name, sig_err)
 
             if _inspect.iscoroutinefunction(_fn):
                 import asyncio as _asyncio
@@ -298,32 +352,166 @@ def register_core_tools(tool_registry: Any, services: Any = None) -> None:
 
 async def register_mcp_tools(tool_registry: Any, mcp_config: list) -> None:
     """
-    Bug 1 fix: Wire MCP servers into the ToolRegistry at startup.
+    Wire MCP servers into the ToolRegistry at startup.
 
-    For each enabled entry in the mcp_servers config list, spawns an
-    AsyncMcpMultiplexer subprocess, performs the MCP initialize handshake,
-    discovers available tools via tools/list, and registers them into
-    tool_registry so the SemanticPlanner's 'direct' strategy can use them.
-
-    Servers are started concurrently; per-server errors are logged and skipped
-    without blocking the remaining servers.
+    Prefers the OpenAI Agents SDK native client (agents.mcp.MCPServerStdio /
+    MCPServerStreamableHttp / MCPServerSse) when available; falls back to the
+    custom AsyncMcpMultiplexer adapter. Live server handles are stored on
+    tool_registry._mcp_servers for graceful shutdown cleanup.
     """
     if not mcp_config or not tool_registry:
         return
 
-    try:
-        from ..tools.mcp_adapter import AsyncMcpMultiplexer, AsyncMcpHttpClient, McpToolAdapter
-    except ImportError as e:
-        logger.warning("MCP adapter unavailable — skipping MCP tool registration: %s", e)
-        return
-
-    # Store live multiplexers on the registry so they're not GC'd
+    if not hasattr(tool_registry, "_mcp_servers"):
+        tool_registry._mcp_servers = []
     if not hasattr(tool_registry, "_mcp_multiplexers"):
         tool_registry._mcp_multiplexers = []
 
-    async def _start_one(entry: dict) -> None:
-        if not entry.get("enabled", True):
+    native_available = True
+    try:
+        import importlib.util as _ilu
+
+        if _ilu.find_spec("agents.mcp") is None:
+            raise ImportError("agents.mcp not found")
+    except ImportError as native_err:
+        native_available = False
+        logger.warning("agents.mcp unavailable — using custom MCP adapter: %s", native_err)
+
+    async def _register_native(server: Any, name: str) -> list[str]:
+        await server.connect()
+        try:
+            mcp_tools = await server.list_tools()
+        except Exception:
+            await server.cleanup()
+            raise
+
+        from ..tools.types import Tool, ToolDefinition, ToolPolicy
+
+        registered: list[str] = []
+        prefix = f"mcp_{name}"
+        for t in mcp_tools:
+            raw_name = getattr(t, "name", "") or ""
+            if not raw_name:
+                continue
+            tool_name = f"{prefix}_{raw_name}"
+            desc = getattr(t, "description", None) or f"MCP Tool: {raw_name}"
+            schema = getattr(t, "input_schema", None) or {
+                "type": "object",
+                "properties": {},
+            }
+            def _make_handler(srv: Any, rn: str) -> Any:
+                async def handler(**kwargs: Any) -> Any:
+                    call_res = await srv.call_tool(rn, kwargs)
+                    content = getattr(call_res, "content", None) or []
+                    texts: list[str] = []
+                    for block in content:
+                        text = getattr(block, "text", None)
+                        if text:
+                            texts.append(text)
+                    if getattr(call_res, "is_error", False):
+                        raise RuntimeError("\n".join(texts) or f"MCP tool '{rn}' failed")
+                    return "\n".join(texts) if texts else str(call_res)
+
+                return handler
+
+            tool_obj = Tool(
+                definition=ToolDefinition(name=tool_name, description=desc, parameters=schema),
+                handler=_make_handler(server, raw_name),
+                policy=ToolPolicy(timeout_s=60.0, max_retries=1),
+                category="mcp",
+            )
+            if hasattr(tool_registry, "register"):
+                tool_registry.register(tool_obj)
+            elif hasattr(tool_registry, "register_tool_obj"):
+                tool_registry.register_tool_obj(tool_obj)
+            else:
+                tool_registry.register_tool(
+                    name=tool_obj.name,
+                    description=tool_obj.description,
+                    func=tool_obj.handler,
+                    schema=tool_obj.schema,
+                    category=tool_obj.category,
+                )
+            registered.append(tool_name)
+
+        tool_registry._mcp_servers.append(server)
+        return registered
+
+    async def _start_one_native(entry: dict) -> None:
+        from typing import cast as _cast
+
+        from agents.mcp import MCPServerSse, MCPServerStdio, MCPServerStreamableHttp
+        from agents.mcp.server import (
+            MCPServerSseParams,
+            MCPServerStdioParams,
+            MCPServerStreamableHttpParams,
+        )
+
+        name = entry.get("name", "mcp")
+        command = entry.get("command")
+        url = entry.get("url")
+        env = entry.get("env") or None
+        headers = entry.get("headers") or None
+        transport = (entry.get("transport") or "").lower()
+
+        server: Any
+        if command:
+            cmd_list = [command] if isinstance(command, str) else list(command)
+            if not cmd_list or not all(isinstance(c, str) for c in cmd_list):
+                logger.warning("MCP server '%s' has invalid command parts — skipping", name)
+                return
+            stdio_params: dict[str, Any] = {"command": cmd_list[0], "args": cmd_list[1:]}
+            if env:
+                import os as _os
+                stdio_params["env"] = {
+                    **_os.environ,
+                    **{str(k): str(v) for k, v in env.items()},
+                }
+            server = MCPServerStdio(
+                params=_cast(MCPServerStdioParams, stdio_params),
+                cache_tools_list=True,
+                name=name,
+            )
+        elif url:
+            if transport == "sse":
+                sse_params: dict[str, Any] = {"url": url}
+                if headers:
+                    sse_params["headers"] = headers
+                server = MCPServerSse(
+                    params=_cast(MCPServerSseParams, sse_params),
+                    cache_tools_list=True,
+                    name=name,
+                )
+            else:
+                http_params: dict[str, Any] = {"url": url}
+                if headers:
+                    http_params["headers"] = headers
+                server = MCPServerStreamableHttp(
+                    params=_cast(MCPServerStreamableHttpParams, http_params),
+                    cache_tools_list=True,
+                    name=name,
+                )
+        else:
+            logger.warning("MCP server '%s' has no valid command or url — skipping", name)
             return
+
+        registered = await _register_native(server, name)
+        logger.info(
+            "MCP server '%s' online (agents.mcp) — registered %d tools: %s",
+            name, len(registered), registered,
+        )
+
+    async def _start_one_legacy(entry: dict) -> None:
+        try:
+            from ..tools.mcp_adapter import (
+                AsyncMcpHttpClient,
+                AsyncMcpMultiplexer,
+                McpToolAdapter,
+            )
+        except ImportError as e:
+            logger.warning("MCP adapter unavailable — skipping MCP tool registration: %s", e)
+            return
+
         name = entry.get("name", "mcp")
         command = entry.get("command")
         url = entry.get("url")
@@ -335,21 +523,46 @@ async def register_mcp_tools(tool_registry: Any, mcp_config: list) -> None:
             return
         try:
             if url:
-                client = AsyncMcpHttpClient(base_url=url, headers=headers)
+                client: Any = AsyncMcpHttpClient(base_url=url, headers=headers)
             else:
-                client = AsyncMcpMultiplexer(command=command, env=env)
+                if not command:
+                    logger.warning("MCP server '%s' has empty command — skipping", name)
+                    return
+                cmd_list = [command] if isinstance(command, str) else list(command)
+                if not all(isinstance(c, str) for c in cmd_list):
+                    logger.warning("MCP server '%s' has non-string command parts — skipping", name)
+                    return
+                client = AsyncMcpMultiplexer(command=cmd_list, env=env)
             await client.start()
             adapter = McpToolAdapter(client=client, prefix=f"mcp_{name}")
             registered = await adapter.discover_and_register(tool_registry)
-            # Hold strong references so GC doesn't kill the subprocess or client
             tool_registry._mcp_multiplexers.append(client)
             logger.info(
-                "MCP server '%s' online — registered %d tools: %s",
+                "MCP server '%s' online (legacy adapter) — registered %d tools: %s",
                 name, len(registered), registered,
             )
         except Exception as mcp_err:
             logger.error("Failed to start MCP server '%s': %s", name, mcp_err)
 
+    async def _start_one(entry: dict) -> None:
+        if not entry.get("enabled", True):
+            return
+        if native_available:
+            try:
+                await _start_one_native(entry)
+                return
+            except Exception as native_err:
+                logger.warning(
+                    "Native MCP start failed for '%s' (%s) — falling back to custom adapter",
+                    entry.get("name", "mcp"), native_err,
+                )
+        await _start_one_legacy(entry)
+
     import asyncio as _asyncio
-    await _asyncio.gather(*[_start_one(entry) for entry in mcp_config], return_exceptions=True)
+    results = await _asyncio.gather(
+        *[_start_one(entry) for entry in mcp_config], return_exceptions=True
+    )
+    for res in results:
+        if isinstance(res, Exception):
+            logger.error("MCP server startup error: %s", res)
     logger.info("MCP tool registration complete: %d server(s) processed", len(mcp_config))

@@ -8,9 +8,9 @@ Supports TTL: triples with expires_at auto-purge on next flush.
 """
 
 from __future__ import annotations
+
 import asyncio
 import logging
-from typing import Any, Optional
 
 logger = logging.getLogger("makima.memory_forget")
 
@@ -36,12 +36,20 @@ class MemoryForgetHandler:
                     f"User message: '{message}'\n"
                     f"Return ONLY a JSON object: {{\"entity\": \"<name of entity or fact>\", \"is_ambiguous\": <true/false>}}"
                 )
-                response = await self.ai_handler.generate(
-                    messages=[{"role": "user", "content": prompt}],
-                    task="fast_chat",
-                    require_json=True
-                )
-                parsed = self.ai_handler.try_parse_json(response.text)
+                if hasattr(self.ai_handler, "generate_structured"):
+                    parsed = await self.ai_handler.generate_structured(
+                        messages=[{"role": "user", "content": prompt}],
+                        task="fast_chat",
+                        required_keys=["entity"],
+                        temperature=0.2,
+                    )
+                else:
+                    response = await self.ai_handler.generate(
+                        messages=[{"role": "user", "content": prompt}],
+                        task="fast_chat",
+                        require_json=True
+                    )
+                    parsed = self.ai_handler.try_parse_json(response.text)
                 if parsed and parsed.get("entity"):
                     entity = str(parsed["entity"]).strip()
             except Exception as e:

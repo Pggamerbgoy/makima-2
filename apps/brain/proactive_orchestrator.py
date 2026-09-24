@@ -46,8 +46,8 @@ import re
 import time
 import uuid
 from collections import deque
-from pathlib import Path
 from enum import IntEnum
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger("makima.proactive")
@@ -109,26 +109,6 @@ _DANGEROUS_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
 
 _NOTIFY_HINT = ("notify", "observation", "info", "information")
 _SAFE_HINT = ("safe", "low", "low_risk", "low-risk")
-
-_DECISION_PROMPT = """You are Makima's proactive-decision engine. Based on the user's habits and \
-recent activity, decide whether Makima should proactively DO something right now (without being asked).
-
-User's habitual suggestion at this time slot: "{signal}"
-Recent tasks the user ran: {recent}
-Available agents: {agents}
-Current local time: {now}
-
-Rules:
-- "act" is false unless you are confident the action is genuinely useful RIGHT NOW. When unsure, do not act.
-- Prefer read-only/reversible actions (research summaries, reminders, opening apps, organizing copies, drafts).
-- NEVER propose: closing/killing apps, deleting anything, shutting down/restarting, sending real messages \
-to contacts, payments, credential changes. Those require explicit user request.
-- "agent" must be exactly one of the available agents.
-- "task_description" must be a complete standalone instruction for that agent (max 25 words).
-
-Respond ONLY with this JSON:
-{{"act": true/false, "category": "system|research|schedule|files", "agent": "<agent_name>", \
-"task_description": "<instruction>", "risk_hint": "notify|safe|dangerous", "rationale": "<max 15 words>"}}"""
 
 
 class ProactiveOrchestrator:
@@ -285,17 +265,35 @@ class ProactiveOrchestrator:
                 if cp.resume_after and cp.resume_after <= now:
                     logger.info("[ProactiveOrchestrator] Auto-resuming scheduled durable task %s", cp.task_id)
                     resumed = await dte.resume_task(cp.task_id)
-                    if resumed and self.orchestration_engine:
-                        if hasattr(self.orchestration_engine, "run_autonomous_goal"):
-                            task_coro = self.orchestration_engine.run_autonomous_goal(
-                                task_id=cp.task_id,
-                                goal=resumed.continuation_prompt,
-                                conversation_id=resumed.reconstructed_context.get("conversation_id", "default_session"),
-                                context=resumed.reconstructed_context,
-                            )
-                            bg_task = asyncio.create_task(task_coro)
-                            self._background_tasks.add(bg_task)
-                            bg_task.add_done_callback(self._background_tasks.discard)
+                    if resumed and self.orchestration_engine and hasattr(self.orchestration_engine, "run_autonomous_goal"):
+                        # Re-arm repeats / disarm one-shots so a fired reminder
+                        # never refires on the next tick.
+                        try:
+                            rctx = resumed.reconstructed_context or {}
+                            rep = rctx.get("repeat_interval_s") if isinstance(rctx, dict) else None
+                            if rep and float(rep) >= 60:
+                                await dte.checkpoint_task(
+                                    task_id=cp.task_id,
+                                    prompt=cp.original_prompt,
+                                    task_name=cp.task_name,
+                                    context=dict(rctx),
+                                    resume_after_seconds=float(rep),
+                                    status="active",
+                                    original_prompt=cp.original_prompt,
+                                )
+                            else:
+                                await dte.mark_completed(cp.task_id, final_result="reminder fired")
+                        except Exception as rearm_err:
+                            logger.debug("[ProactiveOrchestrator] Reminder re-arm error: %s", rearm_err)
+                        task_coro = self.orchestration_engine.run_autonomous_goal(
+                            task_id=cp.task_id,
+                            goal=resumed.continuation_prompt,
+                            conversation_id=resumed.reconstructed_context.get("conversation_id", "default_session"),
+                            context=resumed.reconstructed_context,
+                        )
+                        bg_task = asyncio.create_task(task_coro)
+                        self._background_tasks.add(bg_task)
+                        bg_task.add_done_callback(self._background_tasks.discard)
         except Exception as exc:
             logger.debug("[ProactiveOrchestrator] Durable task resume check error: %s", exc)
 
@@ -309,7 +307,8 @@ class ProactiveOrchestrator:
                 ws = get_world_state()
 
             # 1. Low battery (< 18% and not plugged)
-            bat = ws.get_battery_status()
+            from .core.os_state import get_os_state
+            bat = get_os_state().get_battery_status()
             if bat.get("has_battery") and not bat.get("power_plugged") and float(bat.get("percent", 100)) <= 18.0:
                 dedup_key = "causal_battery_critical"
                 if self._dedup_allow(dedup_key):
@@ -386,65 +385,6 @@ class ProactiveOrchestrator:
             if payload.get("ok") and ev.agent_name:
                 # TODO: ReflexionEngine will handle this
                 pass
-
-    # ── Decision layer ────────────────────────────────────────────────────────
-
-    async def _decide(self, signal: str) -> Optional[dict]:
-        if not self.ai or not hasattr(self.ai, "generate"):
-            logger.debug("Proactive decision skipped — no ai_handler")
-            return None
-        try:
-            agent_names = sorted(getattr(self.kernel, "agents", {}).keys()) if self.kernel else []
-            if not agent_names:
-                return None
-            recent = await self._recent_task_summary()
-            prompt = _DECISION_PROMPT.format(
-                signal=str(signal)[:200],
-                recent=recent or "(none recorded yet)",
-                agents=", ".join(agent_names),
-                now=time.strftime("%A %H:%M"),
-            )
-            resp = await asyncio.wait_for(
-                self.ai.generate(
-                    messages=[{"role": "user", "content": prompt}],
-                    task="intent_classification",
-                    require_json=True,
-                    temperature=0.2,
-                    max_tokens=160,
-                ),
-                timeout=10.0,
-            )
-            text = getattr(resp, "text", "") or ""
-            parsed = None
-            if hasattr(self.ai, "try_parse_json"):
-                parsed = self.ai.try_parse_json(text)
-            if not isinstance(parsed, dict):
-                m = re.search(r"\{[\s\S]*\}", text)
-                if m:
-                    parsed = json.loads(m.group(0))
-            return parsed if isinstance(parsed, dict) else None
-        except asyncio.TimeoutError:
-            logger.debug("Proactive decision timed out")
-        except Exception as e:
-            logger.error("Proactive decision failed: %s", e)
-        return None
-
-    async def _recent_task_summary(self, limit: int = 8) -> str:
-        store = getattr(self.kernel, "event_store", None) if self.kernel else None
-        if store is None:
-            return ""
-        try:
-            events = await store.get_recent_events("task_outcome", limit=limit)
-            parts = []
-            for ev in reversed(events):  # oldest → newest
-                ok = bool((ev.payload or {}).get("ok"))
-                preview = str((ev.payload or {}).get("goal") or (ev.payload or {}).get("result_preview") or "")[:80]
-                if preview:
-                    parts.append(f"{ev.agent_name}:{'ok' if ok else 'fail'} ({preview})")
-            return "; ".join(parts)
-        except Exception as e:
-            logger.debug("recent task summary failed: %s", e)
-            return ""
 
     # ── Risk classification ───────────────────────────────────────────────────
 
@@ -551,8 +491,8 @@ class ProactiveOrchestrator:
     async def _request_confirmation(self, description: str, rationale: str) -> bool:
         """Raise the standard ACTION_CONFIRM_REQUEST card and wait on BaseAgent's resolver."""
         try:
-            from .core.confirmations import ActionConfirmationManager as BaseAgent
             from . import ws_protocol
+            from .core.confirmations import ActionConfirmationManager as BaseAgent
         except Exception as e:
             logger.error("Confirmation infra unavailable: %s", e)
             return False

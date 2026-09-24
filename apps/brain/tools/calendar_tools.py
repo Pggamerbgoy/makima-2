@@ -1,7 +1,9 @@
 import asyncio
+import json
 import logging
 import uuid
 from datetime import datetime, timedelta, time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 # Zero-crash resilience: graceful fallback for date parsing
@@ -17,10 +19,14 @@ if not logger.handlers:
     handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
     logger.addHandler(handler)
 
+_EVENTS_PATH = Path.home() / ".makima" / "calendar_events.json"
+
+
 class CalendarStore:
-    """High-performance in-memory calendar store with async locking."""
-    def __init__(self):
-        self.events: List[Dict[str, Any]] = []
+    """Calendar store with async locking and atomic JSON persistence under ~/.makima/."""
+    def __init__(self, path: Optional[Path] = None):
+        self._path: Path = Path(path) if path else _EVENTS_PATH
+        self.events: List[Dict[str, Any]] = self._load()
         self._lock: Optional[asyncio.Lock] = None
 
     def _get_lock(self) -> asyncio.Lock:
@@ -28,9 +34,46 @@ class CalendarStore:
             self._lock = asyncio.Lock()
         return self._lock
 
+    def _load(self) -> List[Dict[str, Any]]:
+        try:
+            if self._path.exists():
+                raw = json.loads(self._path.read_text(encoding="utf-8"))
+                if isinstance(raw, list):
+                    for item in raw:
+                        if not isinstance(item, dict):
+                            continue
+                        for key in ("start", "end"):
+                            if key in item and isinstance(item[key], str):
+                                try:
+                                    item[key] = datetime.fromisoformat(item[key])
+                                except (TypeError, ValueError):
+                                    pass
+                    return [e for e in raw if isinstance(e, dict) and isinstance(e.get("start"), datetime) and isinstance(e.get("end"), datetime)]
+        except (OSError, ValueError) as e:
+            logger.warning("Failed to load calendar events from %s: %s", self._path, e)
+        return []
+
+    def _save(self) -> None:
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            payload = []
+            for e in self.events:
+                row = dict(e)
+                for key in ("start", "end"):
+                    val = row.get(key)
+                    if isinstance(val, datetime):
+                        row[key] = val.isoformat()
+                payload.append(row)
+            tmp = self._path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(self._path)
+        except OSError as e:
+            logger.error("Failed to persist calendar events to %s: %s", self._path, e)
+
     async def add_event(self, event: Dict[str, Any]) -> None:
         async with self._get_lock():
             self.events.append(event)
+            self._save()
 
     async def get_overlaps(self, start: datetime, end: datetime) -> List[Dict[str, Any]]:
         async with self._get_lock():

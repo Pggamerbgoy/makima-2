@@ -1070,11 +1070,9 @@ class AnthropicAdapter(BaseProviderAdapter):
             text=resp_text,
             model=data.get("model", model),
             backend=profile.name,
-            usage=TokenUsage(
-                prompt_tokens=usage.get("input_tokens", 0),
-                completion_tokens=usage.get("output_tokens", 0),
-                total_tokens=usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
-            ),
+            prompt_tokens=usage.get("input_tokens", 0),
+            completion_tokens=usage.get("output_tokens", 0),
+            total_tokens=usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
         )
 
     async def stream_events(
@@ -2374,11 +2372,11 @@ class AIHandler:
         target_canonical = self._resolve_backend_name(req_provider) if req_provider else None
         is_target = not req_provider or (target_canonical == backend_name or req_provider == backend_name)
         if is_target:
-            if "model" not in merged_kwargs and req_ctx.get("model"):
+            if req_ctx.get("model"):
                 merged_kwargs["model"] = req_ctx["model"]
-            if "api_key" not in merged_kwargs and req_ctx.get("api_key"):
+            if req_ctx.get("api_key"):
                 merged_kwargs["api_key"] = req_ctx["api_key"]
-            if "base_url" not in merged_kwargs and req_ctx.get("base_url"):
+            if req_ctx.get("base_url"):
                 merged_kwargs["base_url"] = req_ctx["base_url"]
         else:
             merged_kwargs.pop("model", None)
@@ -2458,6 +2456,10 @@ class AIHandler:
                 response.latency_ms = (time.monotonic() - _t0) * 1000.0
                 self._record_latency(backend_name, response.latency_ms)
                 profile.circuit_breaker.record_success()
+                logger.info(
+                    "[AIHandler] Completed generation via backend=%s model=%s latency=%.1fms",
+                    backend_name, response.model or profile.model, response.latency_ms,
+                )
 
                 if i > 0:
                     response.is_fallback = True
@@ -2541,11 +2543,60 @@ class AIHandler:
                 pass
 
         return LLMResponse(
-            text="âš ï¸ **No AI Model Backend Available**\n\nI need an API key to generate answers. Please go to the **Settings** page in the UI and enter your API key (Gemini, Groq, OpenRouter, or GPT-4o), or start **Ollama** locally.",
+            text="No AI Model Backend Available — I need an API key. Open Settings and add Gemini, Groq, OpenRouter, or GPT-4o, or start Ollama locally.",
             backend="fallback",
             model="none",
             is_fallback=True,
         )
+
+    async def generate_structured(
+        self,
+        messages: list[dict],
+        *,
+        task: str = "general",
+        schema: dict[str, Any] | None = None,
+        required_keys: list[str] | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        **kwargs: Any,
+    ) -> Optional[dict]:
+        """
+        Structured-output helper: native JSON mode + resilient parse + optional
+        key validation. Prefer this over raw generate(require_json=True)+try_parse_json.
+        When `schema` is set, emits a json_schema response_format hint where supported.
+        """
+        call_kwargs: dict[str, Any] = dict(kwargs)
+        if temperature is not None:
+            call_kwargs["temperature"] = temperature
+        if max_tokens is not None:
+            call_kwargs["max_tokens"] = max_tokens
+        if schema:
+            call_kwargs["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": (task.replace("_", "-") or "structured"),
+                    "schema": schema,
+                    "strict": False,
+                },
+            }
+        response = await self.generate(
+            messages=messages,
+            task=task,
+            require_json=True,
+            **call_kwargs,
+        )
+        parsed = self.try_parse_json(getattr(response, "text", "") or "")
+        if not isinstance(parsed, dict):
+            return None
+        if required_keys:
+            missing = [k for k in required_keys if k not in parsed]
+            if missing:
+                logger.warning(
+                    "Structured output missing keys %s for task=%s (backend=%s)",
+                    missing, task, getattr(response, "backend", "?"),
+                )
+                return None
+        return parsed
 
     async def chat_complete(self, messages: list[dict], task: str = "general", **kwargs: Any) -> str:
         """Helper method for simple chat completion returning text string."""
@@ -2598,11 +2649,11 @@ class AIHandler:
 
             call_kwargs = dict(kwargs)
             if is_target:
-                if "model" not in call_kwargs and req_ctx.get("model"):
+                if req_ctx.get("model"):
                     call_kwargs["model"] = req_ctx["model"]
-                if "api_key" not in call_kwargs and req_api_key:
+                if req_api_key:
                     call_kwargs["api_key"] = req_api_key
-                if "base_url" not in call_kwargs and req_ctx.get("base_url"):
+                if req_ctx.get("base_url"):
                     call_kwargs["base_url"] = req_ctx["base_url"]
             else:
                 call_kwargs.pop("model", None)

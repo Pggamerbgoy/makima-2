@@ -43,12 +43,70 @@ async def profile_dataset(file_path: str) -> str:
         return f"[Error] Profiling failed: {e}"
 
 async def execute_polars_query(file_path: str, query: str) -> str:
-    if not _HAS_POLARS: return "[Error] Polars not installed."
+    if not _HAS_POLARS:
+        return "[Error] Polars not installed."
     try:
         df = pl.read_csv(file_path) if file_path.endswith(".csv") else pl.read_parquet(file_path)
-        # Safe restricted eval context
+        import ast as _ast
+
+        tree = _ast.parse(query, mode="eval")
+        allowed_nodes = (
+            _ast.Expression,
+            _ast.Call,
+            _ast.Name,
+            _ast.Attribute,
+            _ast.Load,
+            _ast.Constant,
+            _ast.BinOp,
+            _ast.UnaryOp,
+            _ast.Compare,
+            _ast.BoolOp,
+            _ast.Subscript,
+            _ast.Slice,
+            _ast.List,
+            _ast.Tuple,
+            _ast.Dict,
+            _ast.Set,
+            _ast.Add,
+            _ast.Sub,
+            _ast.Mult,
+            _ast.Div,
+            _ast.FloorDiv,
+            _ast.Mod,
+            _ast.Pow,
+            _ast.BitAnd,
+            _ast.BitOr,
+            _ast.BitXor,
+            _ast.LShift,
+            _ast.RShift,
+            _ast.And,
+            _ast.Or,
+            _ast.Not,
+            _ast.USub,
+            _ast.UAdd,
+            _ast.Invert,
+            _ast.Eq,
+            _ast.NotEq,
+            _ast.Lt,
+            _ast.LtE,
+            _ast.Gt,
+            _ast.GtE,
+            _ast.In,
+            _ast.NotIn,
+            _ast.Is,
+            _ast.IsNot,
+        )
+        for node in _ast.walk(tree):
+            if not isinstance(node, allowed_nodes):
+                return f"[Error] Disallowed expression node: {type(node).__name__}"
+            if isinstance(node, _ast.Name) and node.id not in {"df", "pl"}:
+                if node.id not in {"len", "min", "max", "sum", "range"}:
+                    return f"[Error] Disallowed name: {node.id}"
+            if isinstance(node, _ast.Call) and isinstance(node.func, _ast.Attribute):
+                if node.func.attr.startswith("_"):
+                    return "[Error] Private attribute access denied"
         safe_builtins = {"len": len, "min": min, "max": max, "sum": sum, "range": range}
-        result = eval(query, {"__builtins__": safe_builtins, "pl": pl, "df": df})
+        result = eval(compile(tree, "<polars-query>", "eval"), {"__builtins__": safe_builtins}, {"pl": pl, "df": df})
         return str(result)
     except Exception as e:
         return f"[Error] Query execution failed: {e}"

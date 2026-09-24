@@ -17,17 +17,166 @@ import functools
 import inspect
 import json
 import logging
-import re
 import time
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Callable, Coroutine, Optional, Sequence
+from typing import Any, Optional
 
-from .tools.types import Tool, ToolCapability, ToolContext, ToolDefinition, ToolPolicy, ToolResult, GroundedSemanticSpec
+from .tools.types import Tool, ToolCapability, ToolContext
 
 logger = logging.getLogger("makima.tool_registry")
 
+_DOMAIN_TAXONOMY: dict[str, dict[str, Any]] = {
+    "system": {
+        "icon": "🖥️",
+        "title_en": "System & OS Control",
+        "title_hi": "System & OS Control",
+        "desc_en": "Launch/close apps, manage processes, snap windows, adjust volume, access clipboard, inspect system specs, and Astra-style desktop mouse/keyboard control.",
+        "desc_hi": "Apps kholna/band karna, processes manage karna, window snap, volume, clipboard, system specs aur mouse/keyboard se computer control karna.",
+        "sample_actions_en": ["launch_app", "kill_process", "manage_window", "set_volume", "get_clipboard", "computer_action", "click_screen_target"],
+        "sample_actions_hi": ["Apps launch aur close karna", "Task Manager / processes kill karna", "Window snap & focus", "Volume & Clipboard control", "Mouse click aur typing"],
+    },
+    "browser": {
+        "icon": "🌐",
+        "title_en": "Browser & Web Automation",
+        "title_hi": "Browser & Web Automation",
+        "desc_en": "Navigate websites, click elements, fill forms, extract links, scrape data, capture full-page screenshots, and manage tabs.",
+        "desc_hi": "Websites browse karna, click, type, forms bharna, links extract karna, data scrape karna aur webpage screenshots lena.",
+        "sample_actions_en": ["browser_navigate", "browser_click", "browser_fill", "browser_screenshot", "browser_extract_links", "browser_parallel_scrape"],
+        "sample_actions_hi": ["Websites open karna", "Buttons click aur text fill karna", "Web data aur links scrape karna", "Screenshots capture karna", "Tabs switch/close karna"],
+    },
+    "media": {
+        "icon": "🎵",
+        "title_en": "Media & Entertainment",
+        "title_hi": "Media & Entertainment",
+        "desc_en": "Play, pause, resume, seek, adjust volume, and skip ads on YouTube and Spotify Web Player.",
+        "desc_hi": "YouTube aur Spotify pe gaane play/pause karna, volume badhana/kam karna, track change aur ads skip karna.",
+        "sample_actions_en": ["media_play", "media_pause", "media_set_volume", "media_skip_ad", "media_next", "media_seek"],
+        "sample_actions_hi": ["YouTube & Spotify playback", "Gaana pause / play karna", "Volume adjust karna", "Ads skip karna", "Next/Previous track"],
+    },
+    "filesystem": {
+        "icon": "📁",
+        "title_en": "Files & Storage",
+        "title_hi": "Files & Storage",
+        "desc_en": "Read, write, copy, move, rename, search files, list directories, and apply code patches.",
+        "desc_hi": "Files read aur write karna, copy, move, rename, directory list aur code patches apply karna.",
+        "sample_actions_en": ["read_file", "write_file", "copy_file", "move_file", "list_directory", "search_files", "apply_patch"],
+        "sample_actions_hi": ["Files read aur save karna", "Folders browse karna", "Files search aur move karna", "Code patches apply karna"],
+    },
+    "document": {
+        "icon": "📄",
+        "title_en": "Documents & Office",
+        "title_hi": "Documents & Office",
+        "desc_en": "Create, convert, and parse professional Excel (.xlsx), Word (.docx), PDF (.pdf), and PowerPoint (.pptx) documents.",
+        "desc_hi": "Professional Excel spreadsheets, Word docs, PDF reports aur PowerPoint slides banana aur parse karna.",
+        "sample_actions_en": ["create_excel", "create_word", "create_pdf", "create_powerpoint", "parse_document", "convert_document"],
+        "sample_actions_hi": ["Excel spreadsheets (.xlsx)", "Word documents (.docx)", "PDF reports (.pdf)", "PowerPoint presentations (.pptx)"],
+    },
+    "memory": {
+        "icon": "🧠",
+        "title_en": "Memory & Knowledge",
+        "title_hi": "Memory & Personalized Knowledge",
+        "desc_en": "Remember user facts, recall personal preferences, search semantic eternal memory, and query knowledge graphs.",
+        "desc_hi": "User ki baatein aur preferences yaad rakhna, purani memories recall karna aur knowledge graph query karna.",
+        "sample_actions_en": ["remember_fact", "recall_memory", "memory_store", "memory_search", "query_knowledge_graph", "memory_forget"],
+        "sample_actions_hi": ["Personal facts yaad rakhna", "Preferences recall karna", "Knowledge graph explore karna", "Past context retrieve karna"],
+    },
+    "calendar": {
+        "icon": "📅",
+        "title_en": "Calendar & Scheduling",
+        "title_hi": "Calendar & Scheduling",
+        "desc_en": "Schedule meetings, detect time conflicts, find available meeting slots, and manage schedule blocks.",
+        "desc_hi": "Meetings schedule karna, calendar conflicts detect karna aur available time slots dhoondna.",
+        "sample_actions_en": ["schedule_meeting", "check_schedule_conflicts", "find_available_slots", "add_time_block"],
+        "sample_actions_hi": ["Meetings schedule karna", "Schedule conflicts check karna", "Free time slots dhoondna"],
+    },
+    "finance": {
+        "icon": "💰",
+        "title_en": "Finance & Budgeting",
+        "title_hi": "Finance & Expenses",
+        "desc_en": "Track daily expenses, analyze budget trends, parse receipt images with OCR, and summarize portfolios.",
+        "desc_hi": "Kharcha track karna, budget analyze karna, bill/receipt receipts OCR se scan karna aur portfolio status dekhna.",
+        "sample_actions_en": ["track_expense", "analyze_budget", "parse_receipt_ocr", "get_portfolio_summary"],
+        "sample_actions_hi": ["Expenses log karna", "Monthly budget analyze karna", "Receipt OCR scan", "Portfolio summary"],
+    },
+    "data": {
+        "icon": "📊",
+        "title_en": "Data Analysis & Visualization",
+        "title_hi": "Data Analysis & Visualization",
+        "desc_en": "Profile datasets, execute high-performance Polars queries, and generate statistical data charts.",
+        "desc_hi": "Datasets profile karna, fast queries execute karna aur visual statistical charts generate karna.",
+        "sample_actions_en": ["profile_dataset", "execute_polars_query", "generate_chart"],
+        "sample_actions_hi": ["CSV/Data profiling", "Data query execution", "Charts generate karna"],
+    },
+    "devops": {
+        "icon": "💻",
+        "title_en": "DevOps & Containers",
+        "title_hi": "DevOps & Containers",
+        "desc_en": "Inspect running Docker containers, stream container logs, and check CI/CD pipeline build statuses.",
+        "desc_hi": "Docker containers inspect karna, container logs check karna aur CI/CD pipelines ka status dekhna.",
+        "sample_actions_en": ["docker_ps", "docker_logs", "check_ci_status"],
+        "sample_actions_hi": ["Docker containers dekhna", "Container logs check karna", "CI/CD build status"],
+    },
+    "security": {
+        "icon": "🛡️",
+        "title_en": "Security & System Health",
+        "title_hi": "Security & System Health",
+        "desc_en": "Scan local/network ports, audit project dependency vulnerabilities, and detect leaked API secrets.",
+        "desc_hi": "Network ports scan karna, dependencies me vulnerabilities audit karna aur leaked secrets detect karna.",
+        "sample_actions_en": ["scan_ports", "audit_dependencies", "detect_secrets"],
+        "sample_actions_hi": ["Open ports scan karna", "Vulnerable libraries audit karna", "Hardcoded API keys & secrets dhoondna"],
+    },
+    "notification": {
+        "icon": "🔔",
+        "title_en": "Notifications & Alerts",
+        "title_hi": "Notifications & Alerts",
+        "desc_en": "Send desktop alert popups, create Do-Not-Disturb rules, filter notifications, and broadcast workflow progress.",
+        "desc_hi": "Desktop alerts bhejna, DND rules lagana aur workflow updates broadcast karna.",
+        "sample_actions_en": ["send_alert", "create_dnd_rule", "filter_notifications", "broadcast_workflow_status"],
+        "sample_actions_hi": ["Desktop notifications bhejna", "DND rules configure karna", "Workflow alerts manage karna"],
+    },
+    "web": {
+        "icon": "🔍",
+        "title_en": "Live Web Search & Network",
+        "title_hi": "Live Web Search & Network",
+        "desc_en": "Search the live internet for real-time information, fetch URL content directly, and make HTTP requests.",
+        "desc_hi": "Internet par real-time search karna, direct webpage URL content fetch karna aur HTTP requests bhejna.",
+        "sample_actions_en": ["web_search", "fetch_url", "http_request"],
+        "sample_actions_hi": ["Live Google/DuckDuckGo web search", "URL content fetch karna", "HTTP requests"],
+    },
+    "creative": {
+        "icon": "🎨",
+        "title_en": "Creative AI & Vision",
+        "title_hi": "Creative AI & Vision",
+        "desc_en": "Generate high-resolution AI artwork and illustrations from text descriptions using GPT-Image.",
+        "desc_hi": "Text prompts se high-quality AI images aur illustrations generate karna.",
+        "sample_actions_en": ["generate_image"],
+        "sample_actions_hi": ["AI Image generation from prompt"],
+    },
+}
 
-
+_CATEGORY_TO_DOMAIN: dict[str, str] = {
+    "system": "system",
+    "window": "system",
+    "process": "system",
+    "browser": "browser",
+    "media": "media",
+    "filesystem": "filesystem",
+    "file": "filesystem",
+    "document": "document",
+    "memory": "memory",
+    "calendar": "calendar",
+    "finance": "finance",
+    "data": "data",
+    "data_analyst": "data",
+    "devops": "devops",
+    "security": "security",
+    "notification": "notification",
+    "web": "web",
+    "network": "web",
+    "creative": "creative",
+    "art": "creative",
+}
 
 
 _BUILTIN_TOOL_CAPABILITIES: dict[str, Any] = {
@@ -173,7 +322,7 @@ class ToolMeta:
     """Rich metadata for a registered tool."""
     name: str
     description: str
-    func: Callable[..., Coroutine[Any, Any, Any]]
+    func: Callable[..., Awaitable[Any]]
     schema: dict
 
     # Routing metadata — used by get_manifest_for_agent() and task routing
@@ -239,6 +388,7 @@ class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, ToolMeta] = {}
         self._manifest_cache: dict[str, list[dict]] = {}
+        self._manifest_summary_cache: dict[str, str] = {}
         self._execution_runtime: Any = None
         self._unsafe_locks: dict[str, asyncio.Lock] = {}
 
@@ -259,7 +409,7 @@ class ToolRegistry:
         self,
         name: str,
         description: str,
-        func: Callable[..., Coroutine[Any, Any, Any]],
+        func: Callable[..., Awaitable[Any]],
         schema: dict,
         *,
         category: str = "general",
@@ -312,6 +462,7 @@ class ToolRegistry:
             parameter_domains=dict(parameter_domains or {}),
         )
         self._manifest_cache.clear()
+        self._manifest_summary_cache.clear()
         logger.debug("Registered tool: %s [cat=%s]", name, category)
 
     def register_dynamic_skill(self, skill: Any) -> None:
@@ -344,6 +495,7 @@ class ToolRegistry:
         if name in self._tools:
             del self._tools[name]
             self._manifest_cache.clear()
+            self._manifest_summary_cache.clear()
             logger.debug("Unregistered tool: %s", name)
             return True
         return False
@@ -353,6 +505,7 @@ class ToolRegistry:
         if name in self._tools:
             self._tools[name].enabled = enabled
             self._manifest_cache.clear()
+            self._manifest_summary_cache.clear()
             logger.debug("Set tool %s enabled=%s", name, enabled)
             return True
         return False
@@ -372,6 +525,14 @@ class ToolRegistry:
     def __contains__(self, name: str) -> bool:
         """Check if a tool is registered."""
         return name in self._tools
+
+    def get(self, name: str, default: Any = None) -> Optional[ToolMeta]:
+        """Dictionary-compatible getter for tool metadata."""
+        return self._tools.get(name, default)
+
+    def get_tool(self, name: str) -> Optional[ToolMeta]:
+        """Accessor for tool metadata by name."""
+        return self._tools.get(name)
 
     def get_capability(self, name: str, kwargs: Optional[dict[str, Any]] = None) -> Optional[ToolCapability]:
         """Resolve capability descriptor for a tool and its execution arguments."""
@@ -512,10 +673,6 @@ class ToolRegistry:
         """Check if a tool is registered."""
         return name in self._tools
 
-    def get_tool(self, name: str) -> Optional[ToolMeta]:
-        """Retrieve tool metadata by name."""
-        return self._tools.get(name)
-
     def list_tools(self) -> list[ToolMeta]:
         return list(self._tools.values())
 
@@ -560,6 +717,161 @@ class ToolRegistry:
     def get_manifest_for_agent(self, agent_name: str) -> list[dict]:
         """Agent-filtered manifest."""
         return self._build_manifest(agent_name)
+
+    def get_manifest_summary_dict(self) -> dict[str, Any]:
+        """
+        Returns a structured dictionary breakdown of all registered and enabled capabilities,
+        grouped by functional domains with tool counts, representative capabilities,
+        and active tool lists.
+        """
+        enabled_tools = [t for t in self._tools.values() if t.enabled]
+        domain_groups: dict[str, list[ToolMeta]] = {}
+
+        for tool in enabled_tools:
+            cat_norm = (tool.category or "general").strip().lower()
+            domain_key = _CATEGORY_TO_DOMAIN.get(cat_norm, cat_norm)
+            domain_groups.setdefault(domain_key, []).append(tool)
+
+        domains_result: dict[str, Any] = {}
+        ordered_keys = list(_DOMAIN_TAXONOMY.keys()) + [k for k in domain_groups.keys() if k not in _DOMAIN_TAXONOMY]
+
+        for d_key in ordered_keys:
+            tools_in_group = domain_groups.get(d_key, [])
+            if not tools_in_group:
+                continue
+
+            meta = _DOMAIN_TAXONOMY.get(d_key, {
+                "icon": "🔧",
+                "title_en": d_key.replace("_", " ").title(),
+                "title_hi": d_key.replace("_", " ").title(),
+                "desc_en": f"Specialized capabilities for {d_key}.",
+                "desc_hi": f"{d_key} se jude specialized operations.",
+                "sample_actions_en": [t.name for t in tools_in_group[:5]],
+                "sample_actions_hi": [t.name for t in tools_in_group[:5]],
+            })
+
+            domains_result[d_key] = {
+                "icon": meta.get("icon", "🔧"),
+                "title_en": meta.get("title_en", d_key.title()),
+                "title_hi": meta.get("title_hi", d_key.title()),
+                "count": len(tools_in_group),
+                "desc_en": meta.get("desc_en", ""),
+                "desc_hi": meta.get("desc_hi", ""),
+                "sample_actions_en": meta.get("sample_actions_en", []),
+                "sample_actions_hi": meta.get("sample_actions_hi", []),
+                "tools": [
+                    {
+                        "name": t.name,
+                        "description": (t.description or "").split("\n")[0].strip(),
+                        "is_destructive": bool(getattr(t, "is_destructive", False)),
+                    }
+                    for t in sorted(tools_in_group, key=lambda x: x.name)
+                ],
+            }
+
+        return {
+            "total_registered_tools": len(self._tools),
+            "total_enabled_tools": len(enabled_tools),
+            "total_domains": len(domains_result),
+            "domains": domains_result,
+        }
+
+    def get_manifest_summary(
+        self,
+        detailed: bool = False,
+        lang: str = "hinglish",
+        category: Optional[str] = None,
+    ) -> str:
+        """
+        Generate a human-facing executive summary of Makima's live capabilities.
+
+        Args:
+            detailed: If True, lists individual tool names and descriptions under each domain.
+            lang: Language for the output ('hinglish'/'hindi' or 'en'/'english').
+            category: Optional domain filter (e.g. 'browser', 'media', 'system').
+
+        Returns:
+            Formatted Markdown string ready for direct display or LLM grounding.
+        """
+        is_detailed = bool(detailed) and str(detailed).lower().strip() not in ("false", "0", "no", "off")
+        is_english = str(lang or "hinglish").lower().strip() in ("en", "english")
+        clean_cat = str(category).strip() if category is not None and not isinstance(category, (dict, list)) else ""
+        norm_cat = clean_cat.lower() if clean_cat.lower() not in ("all", "summary", "none", "") else ""
+
+        cache_key = f"{is_detailed}:{is_english}:{norm_cat}"
+        if cache_key in self._manifest_summary_cache:
+            return self._manifest_summary_cache[cache_key]
+
+        data = self.get_manifest_summary_dict()
+        total_enabled = data["total_enabled_tools"]
+        domains = data["domains"]
+
+        if total_enabled == 0:
+            msg = "No tools are currently registered or enabled in Makima." if is_english else "Makima me filhaal koi tools registered ya enabled nahi hain."
+            return msg
+
+        # Handle category filtering
+        if norm_cat:
+            domain_key = _CATEGORY_TO_DOMAIN.get(norm_cat, norm_cat)
+            domain_info = domains.get(domain_key)
+            if not domain_info:
+                avail = ", ".join(domains.keys())
+                if is_english:
+                    return f"Domain '{category}' not found. Available domains: {avail}."
+                return f"'{category}' domain nahi mila. Available domains: {avail}."
+
+            title = domain_info["title_en"] if is_english else domain_info["title_hi"]
+            icon = domain_info["icon"]
+            count = domain_info["count"]
+            desc = domain_info["desc_en"] if is_english else domain_info["desc_hi"]
+
+            count_label = f"{count} tool" if count == 1 else f"{count} tools"
+            domain_lines = [
+                f"{icon} **{title} ({count_label})**",
+                f"{desc}\n",
+            ]
+            domain_lines.append("Tools:" if is_english else "Is domain me ye tools available hain:")
+            for tool_item in domain_info["tools"]:
+                domain_lines.append(f"- `{tool_item['name']}`: {tool_item['description']}")
+
+            result = "\n".join(domain_lines)
+            self._manifest_summary_cache[cache_key] = result
+            return result
+
+        # Full summary
+        summary_lines: list[str] = []
+        if is_english:
+            summary_lines.append(
+                f"I can perform around {total_enabled} capabilities directly on your desktop system:\n"
+            )
+        else:
+            summary_lines.append(
+                f"Main aapke system pe lagbhag {total_enabled} tools ke saath ye saari capabilities handle kar sakti hoon:\n"
+            )
+
+        for d_key, d_info in domains.items():
+            icon = d_info["icon"]
+            title = d_info["title_en"] if is_english else d_info["title_hi"]
+            count = d_info["count"]
+            count_label = f"{count} tool" if count == 1 else f"{count} tools"
+            desc = d_info["desc_en"] if is_english else d_info["desc_hi"]
+
+            line = f"- {icon} **{title} ({count_label})**: {desc}"
+            summary_lines.append(line)
+
+            if is_detailed:
+                for tool_item in d_info["tools"]:
+                    summary_lines.append(f"  - `{tool_item['name']}`: {tool_item['description']}")
+
+        if not is_detailed:
+            if is_english:
+                summary_lines.append("\nYou can directly ask me to execute any of these tasks on your workstation!")
+            else:
+                summary_lines.append("\nAap mujhse inme se koi bhi kaam directly bol kar karwa sakte ho!")
+
+        result = "\n".join(summary_lines)
+        self._manifest_summary_cache[cache_key] = result
+        return result
 
 
     def get_all(self) -> list[ToolMeta]:

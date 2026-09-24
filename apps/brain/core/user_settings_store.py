@@ -12,18 +12,20 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 logger = logging.getLogger("makima.settings_store")
 
-_DEFAULT_SETTINGS: Dict[str, Any] = {
+_DEFAULT_SETTINGS: dict[str, Any] = {
     "privacy_mode": False,
     "backup_path": "",
     "default_llm_backend": "",
     "theme": "dark",
+    "enabled_tools": {},      # {tool_name: bool} — UI tool enable/disable overrides
+    "mcp_servers": [],        # [ {name, enabled, transport, command?, url?, env?, headers?} ]
 }
 
-_DEFAULT_INTEGRATION_FIELDS: Dict[str, Dict[str, str]] = {
+_DEFAULT_INTEGRATION_FIELDS: dict[str, dict[str, str]] = {
     "telegram": {"bot_token": ""},
     "whatsapp": {"phone": ""},
     "github": {"api_key": ""},
@@ -52,8 +54,8 @@ class UserSettingsStore:
         self._base.mkdir(parents=True, exist_ok=True)
         self._settings_path = self._base / "settings.json"
         self._integrations_path = self._base / "integrations.json"
-        self._settings: Dict[str, Any] = self._load(self._settings_path, _DEFAULT_SETTINGS.copy())
-        self._integrations: Dict[str, Dict[str, str]] = self._load(
+        self._settings: dict[str, Any] = self._load(self._settings_path, _DEFAULT_SETTINGS.copy())
+        self._integrations: dict[str, dict[str, str]] = self._load(
             self._integrations_path,
             {k: dict(v) for k, v in _DEFAULT_INTEGRATION_FIELDS.items()},
         )
@@ -79,23 +81,23 @@ class UserSettingsStore:
 
     # ── General settings ─────────────────────────────────────────────────────
 
-    def get_settings(self) -> Dict[str, Any]:
+    def get_settings(self) -> dict[str, Any]:
         return dict(self._settings)
 
-    def update_settings(self, updates: Dict[str, Any]) -> None:
+    def update_settings(self, updates: dict[str, Any]) -> None:
         self._settings.update(updates)
         self._save(self._settings_path, self._settings)
 
     # -- LLM provider settings ---------------------------------------------
 
-    def get_llm_overrides(self) -> Dict[str, Dict[str, Any]]:
+    def get_llm_overrides(self) -> dict[str, dict[str, Any]]:
         """Return persisted provider overrides without exposing unrelated secrets."""
         OBSOLETE_MODELS = {
             "qwen-turbo": "qwen3.8-27b",
             "qwen-plus": "qwen3.8-27b",
             "qwen3.6-flash-2026-04-16": "qwen3.8-27b",
         }
-        overrides: Dict[str, Dict[str, Any]] = {}
+        overrides: dict[str, dict[str, Any]] = {}
         for integration_id, fields in self._integrations.items():
             if not integration_id.startswith("llm:") or not isinstance(fields, dict):
                 continue
@@ -112,7 +114,7 @@ class UserSettingsStore:
             overrides[provider] = entry
         return overrides
 
-    def save_llm_provider(self, provider: str, fields: Dict[str, Any]) -> None:
+    def save_llm_provider(self, provider: str, fields: dict[str, Any]) -> None:
         """Persist an LLM provider config separately from general UI settings."""
         safe_fields = {
             key: (value.strip() if isinstance(value, str) else value)
@@ -124,19 +126,19 @@ class UserSettingsStore:
 
     # ── Integration credentials ───────────────────────────────────────────────
 
-    def get_integration_fields(self, integration_id: str) -> Dict[str, str]:
+    def get_integration_fields(self, integration_id: str) -> dict[str, str]:
         return dict(self._integrations.get(integration_id, {}))
 
-    def get_integration_raw(self, integration_id: str) -> Dict[str, str]:
+    def get_integration_raw(self, integration_id: str) -> dict[str, str]:
         return dict(self._integrations.get(integration_id, {}))
 
-    def save_integration(self, integration_id: str, fields: Dict[str, str]) -> None:
+    def save_integration(self, integration_id: str, fields: dict[str, str]) -> None:
         existing = self._integrations.setdefault(integration_id, {})
         existing.update(fields)
         self._save(self._integrations_path, self._integrations)
         logger.info("Saved integration config for: %s", integration_id)
 
-    def save_integration_fields(self, integration_id: str, fields: Dict[str, Any]) -> None:
+    def save_integration_fields(self, integration_id: str, fields: dict[str, Any]) -> None:
         """Alias for save_integration for caller compatibility."""
         self.save_integration(integration_id, fields)
 

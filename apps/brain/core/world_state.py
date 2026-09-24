@@ -1,15 +1,22 @@
 """
-Makima OS v9.0 — Canonical World State Service
-Facade over domain state providers (OS, Windows, Processes, Filesystem, Audio) with explicit invalidation.
+Makima OS v9.0 — World State Service (slim facade).
+
+Keeps ONLY what os_state cannot do alone:
+  1. TTL-cached multi-domain snapshots (get_snapshot + probes) — used by
+     ExecutionRuntime pre/post-state verification.
+  2. Domain fan-out invalidation (invalidate) — used by ExecutionRuntime.
+  3. Mental-state bridge (get_mental_state) — used by ProactiveOrchestrator.
+
+Everything else (foreground window, CPU, processes, windows, battery,
+clipboard, audio) lives in os_state — call get_os_state() directly.
 """
 from __future__ import annotations
 
-import inspect
 import logging
 import os
 import threading
 import time
-from typing import Any, Optional
+from typing import Any, ClassVar, Self, cast
 
 from .os_state import get_os_state
 
@@ -18,21 +25,20 @@ logger = logging.getLogger("makima.world_state")
 
 class WorldStateService:
     """
-    Unified facade for querying external world state.
-    Encapsulates domain providers with explicit event-driven invalidation hooks.
-    All consumers query WorldStateService rather than directly invoking OS providers.
+    Slim facade: snapshots + invalidation + mental-state bridge.
+    For live OS values (windows, CPU, battery, clipboard), use os_state directly.
     """
 
-    _instance: Optional["WorldStateService"] = None
-    _init_lock: threading.Lock = threading.Lock()
+    _instance: ClassVar[WorldStateService | None] = None
+    _init_lock: ClassVar[threading.Lock] = threading.Lock()
 
-    def __new__(cls) -> "WorldStateService":
+    def __new__(cls) -> Self:
         if cls._instance is None:
             with cls._init_lock:
                 if cls._instance is None:
                     cls._instance = super().__new__(cls)
                     cls._instance._initialized = False
-        return cls._instance
+        return cast(Self, cls._instance)
 
     def __init__(self) -> None:
         if getattr(self, "_initialized", False):
@@ -45,9 +51,12 @@ class WorldStateService:
     async def get_snapshot(self, domain: str = "os", force: bool = False) -> dict[str, Any]:
         """Get an immutable snapshot of domain state."""
         now = time.monotonic()
-        if not force and domain in self._cache:
-            if (now - self._cache_ts.get(domain, 0.0)) < self.DEFAULT_TTL:
-                return dict(self._cache[domain])
+        if (
+            not force
+            and domain in self._cache
+            and (now - self._cache_ts.get(domain, 0.0)) < self.DEFAULT_TTL
+        ):
+            return dict(self._cache[domain])
 
         snapshot: dict[str, Any] = {}
         if domain in ("os", "system"):
@@ -66,91 +75,6 @@ class WorldStateService:
         self._cache[domain] = snapshot
         self._cache_ts[domain] = now
         return dict(snapshot)
-
-    def get_foreground_window(self) -> str:
-        """Query active foreground window title via OS domain provider."""
-        try:
-            return get_os_state().get_foreground_window()
-        except Exception as e:
-            logger.warning("[world_state] get_foreground_window failed: %s", e)
-            return ""
-
-    async def get_active_audio_owner(self) -> Optional[str]:
-        """Query application currently producing audio."""
-        try:
-            res = get_os_state().get_active_audio_owner()
-            if inspect.isawaitable(res):
-                return await res
-            return res
-        except Exception as e:
-            logger.warning("[world_state] get_active_audio_owner failed: %s", e)
-            return None
-
-    def cpu_avg(self) -> Optional[float]:
-        """Query CPU usage 5-minute rolling average."""
-        try:
-            return get_os_state().cpu_avg()
-        except Exception as e:
-            logger.warning("[world_state] cpu_avg failed: %s", e)
-            return None
-
-    async def get_processes(self) -> list[dict[str, Any]]:
-        """Query active OS processes."""
-        try:
-            res = get_os_state().get_processes()
-            if inspect.isawaitable(res):
-                return await res
-            return res
-        except Exception as e:
-            logger.warning("[world_state] get_processes failed: %s", e)
-            return []
-
-    async def get_open_windows(self) -> list[dict[str, Any]]:
-        """Query open visible windows."""
-        try:
-            res = get_os_state().get_open_windows()
-            if inspect.isawaitable(res):
-                return await res
-            return res
-        except Exception as e:
-            logger.warning("[world_state] get_open_windows failed: %s", e)
-            return []
-
-    def get_open_windows_sync(self, force: bool = False) -> list[str]:
-        """Query open visible windows synchronously via OS provider or cached snapshot."""
-        now = time.monotonic()
-        if not force and "window" in self._cache:
-            if (now - self._cache_ts.get("window", 0.0)) < self.DEFAULT_TTL:
-                cached = self._cache["window"]
-                if "open_windows" in cached and isinstance(cached["open_windows"], list):
-                    return list(cached["open_windows"])
-
-        try:
-            os_state = get_os_state()
-            wins = []
-            if hasattr(os_state, "get_open_windows_sync"):
-                wins = list(os_state.get_open_windows_sync(force=force))
-            elif getattr(os_state, "_window_cache", None):
-                wins = list(os_state._window_cache)
-            self._cache["window"] = {"open_windows": wins, "window_count": len(wins)}
-            self._cache_ts["window"] = now
-            return wins
-        except Exception as e:
-            logger.warning("[world_state] get_open_windows_sync failed: %s", e)
-        return []
-
-    def get_window_count(self) -> int:
-        """Query count of open visible windows synchronously."""
-        windows = self.get_open_windows_sync()
-        return len(windows)
-
-    def get_battery_status(self) -> dict[str, Any]:
-        """Query laptop battery status via OS state provider."""
-        try:
-            return get_os_state().get_battery_status()
-        except Exception as e:
-            logger.debug("[world_state] get_battery_status failed: %s", e)
-            return {"has_battery": False, "percent": 100.0, "power_plugged": True}
 
     def get_mental_state(self) -> dict[str, Any]:
         """Query user mental and cognitive load state."""
@@ -183,18 +107,6 @@ class WorldStateService:
             logger.debug("[world_state] Provider invalidation error: %s", inv_err)
 
         logger.debug("[world_state] Invalidated domain cache: %s", domain)
-
-    def invalidate_processes(self) -> None:
-        self.invalidate("process")
-
-    def invalidate_process_cache(self) -> None:
-        self.invalidate("process")
-
-    def invalidate_windows(self) -> None:
-        self.invalidate("window")
-
-    def invalidate_window_cache(self) -> None:
-        self.invalidate("window")
 
     # ─────────────────────────────────────────────────────────────────────────
     # Private Domain Probes

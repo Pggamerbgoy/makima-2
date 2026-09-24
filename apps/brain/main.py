@@ -25,9 +25,16 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, UploadFile, File, HTTPException
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
 try:
     import dotenv
@@ -51,17 +58,18 @@ if repo_root not in sys.path:
 if __name__ == "__main__" and not __package__:
     __package__ = "apps.brain"
 
-from .media_store import MediaStore, MediaValidationError, MediaNotFoundError
+from .media_store import MediaNotFoundError, MediaStore, MediaValidationError
 from .ws_protocol import (
-    WSMessage,
+    PROTOCOL_VERSION,
     ClientMessageType,
     ServerMessageType,
-    generate_task_id,
+    WSMessage,
     build_ai_chunk,
     build_pong,
     build_voice_event,
-    PROTOCOL_VERSION,
+    generate_task_id,
 )
+
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -104,11 +112,11 @@ def _compute_boot_fingerprint() -> str:
         root = Path(__file__).resolve().parents[2]
         commit = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
-            cwd=root, capture_output=True, text=True, timeout=5,
+            cwd=root, capture_output=True, text=True, timeout=5, check=False,
         ).stdout.strip()
         dirty = subprocess.run(
             ["git", "status", "--porcelain"],
-            cwd=root, capture_output=True, text=True, timeout=5,
+            cwd=root, capture_output=True, text=True, timeout=5, check=False,
         ).stdout.strip()
         fp = commit or "nogit"
         return f"{fp}{'-dirty' if dirty else '-clean'}"
@@ -238,7 +246,6 @@ _task_to_ws: dict[str, WebSocket] = {}
 
 async def ws_broadcast(msg: Any) -> None:
     """Send task-scoped messages to originating client or broadcast system events."""
-    global _ws_clients, _task_to_ws
     target_task_id = None
     is_done = False
 
@@ -252,7 +259,7 @@ async def ws_broadcast(msg: Any) -> None:
         is_done = (
             bool(getattr(msg, "is_final", False))
             or (isinstance(payload, dict) and bool(payload.get("is_final")))
-            or msg_type in ("ai_response_done", "ai_error")
+            or msg_type in ("ai_response_done", "ai_error", "voice_tts_stopped")
         )
     else:
         import json
@@ -264,7 +271,7 @@ async def ws_broadcast(msg: Any) -> None:
             is_done = (
                 bool(msg.get("is_final"))
                 or (isinstance(payload, dict) and bool(payload.get("is_final")))
-                or m_type in ("ai_response_done", "ai_error")
+                or m_type in ("ai_response_done", "ai_error", "voice_tts_stopped")
             )
         else:
             data = str(msg)
@@ -288,7 +295,8 @@ async def ws_broadcast(msg: Any) -> None:
             await ws.send_text(data)
         except Exception:
             dead.add(ws)
-    _ws_clients -= dead
+    if dead:
+        _ws_clients.difference_update(dead)
 
 
 # ---------------------------------------------------------------------------
@@ -300,7 +308,7 @@ _modules: dict[str, Any] = {}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """ASGI lifespan: startup and graceful shutdown powered by AppBootstrap & OrchestrationEngine."""
-    global CONFIG, _modules
+    global CONFIG
 
     disable_windows_quick_edit()
 
@@ -333,14 +341,40 @@ async def lifespan(app: FastAPI):
     _modules["memory"] = services.get("memory") or services.get("eternal_memory")
     _modules["settings_store"] = services.get("settings_store")
     _modules["media_store"] = services.get("media_store")
+
+    # On startup: inject persisted integration credentials from integrations.json → os.environ
+    # This ensures tools work immediately without requiring a UI save after restart
+    _startup_store = _modules.get("settings_store")
+    if _startup_store and hasattr(_startup_store, "list_integrations"):
+        _STARTUP_ENV_MAP: dict[str, list[tuple[str, str]]] = {
+            "telegram":  [("bot_token", "TELEGRAM_BOT_TOKEN")],
+            "discord":   [("bot_token", "DISCORD_BOT_TOKEN")],
+            "github":    [("api_key", "GITHUB_TOKEN"), ("api_key", "GH_TOKEN")],
+            "gmail":     [("app_password", "GMAIL_APP_PASSWORD")],
+            "youtube":   [("api_key", "YOUTUBE_API_KEY")],
+            "notion":    [("api_token", "NOTION_API_TOKEN")],
+            "figma":     [("personal_token", "FIGMA_PERSONAL_TOKEN")],
+            "slack":     [("webhook_url", "SLACK_WEBHOOK_URL")],
+            "gdrive":    [("client_token", "GDRIVE_CLIENT_TOKEN")],
+            "spotify":   [("client_id", "SPOTIFY_CLIENT_ID")],
+        }
+        injected_count = 0
+        for int_id in _startup_store.list_integrations():
+            env_pairs = _STARTUP_ENV_MAP.get(int_id, [])
+            if not env_pairs:
+                continue
+            fields = _startup_store.get_integration_fields(int_id)
+            for field_name, env_var in env_pairs:
+                val = fields.get(field_name, "")
+                if val and not os.environ.get(env_var):  # don't overwrite .env values
+                    os.environ[env_var] = val
+                    injected_count += 1
+        if injected_count:
+            logger.info("[startup] Injected %d connector credential(s) from integrations.json into env.", injected_count)
     _modules["multimodal"] = services.get("multimodal")
     _modules["health"] = services.get("health")
     _modules["focus_profiles"] = services.get("focus_profiles")
     _modules["memory_forget"] = services.get("memory_forget")
-    ref_eng = services.get("reflexion_engine")
-    _modules["reflexion_engine"] = ref_eng
-    _modules["learning"] = ref_eng
-    _modules["learning_coordinator"] = ref_eng
     _modules["skill_library"] = services.get("skill_library")
     proactive = services.get("proactive_orchestrator")
     if proactive and hasattr(proactive, "start"):
@@ -358,6 +392,14 @@ async def lifespan(app: FastAPI):
     logger.info("   REST: http://127.0.0.1:8080/health")
     logger.info("   WS:   ws://127.0.0.1:8080/ws")
 
+    # Run environment capability scan so Makima knows what's available on this machine
+    # (WhatsApp Desktop? Chrome? Telegram token? etc.) — tools use this to auto-select strategy
+    try:
+        from .core.capability_probe import run_startup_probe
+        run_startup_probe()
+    except Exception as _cap_err:
+        logger.debug("[startup] CapabilityProbe scan failed (non-fatal): %s", _cap_err)
+
     try:
         yield
     finally:
@@ -365,15 +407,15 @@ async def lifespan(app: FastAPI):
         if proactive and hasattr(proactive, "stop"):
             try:
                 await proactive.stop()
-            except Exception:
-                pass
+            except Exception as stop_err:
+                logger.debug("ProactiveOrchestrator stop failed: %s", stop_err)
         await bootstrap.shutdown_services()
         # Close shared HTTP client pool from web_search_tool
         try:
             from .web_search_tool import close_client as _close_search_client
             await _close_search_client()
-        except Exception:
-            pass
+        except Exception as close_err:
+            logger.debug("web_search_tool client close failed: %s", close_err)
         logger.info("Shutdown complete.")
 
 
@@ -415,16 +457,20 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------------------
-# Workstation Web UI (Aether Nexus Master Station)
+# Conversational Workspace UI
 # ---------------------------------------------------------------------------
 _WEB_DIR = Path(__file__).resolve().parent / "web"
 _WEB_DIR.mkdir(parents=True, exist_ok=True)
+_ASSETS_DIR = _WEB_DIR / "assets"
+if _ASSETS_DIR.exists():
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/assets", StaticFiles(directory=str(_ASSETS_DIR)), name="assets")
 
 
 @app.get("/", include_in_schema=False)
 @app.get("/index.html", include_in_schema=False)
 async def serve_workstation_ui():
-    """Serve the Aether Nexus multi-screen workstation UI directly from Makima Brain."""
+    """Serve the conversational workspace UI directly from Makima Brain."""
     index_file = _WEB_DIR / "index.html"
     if index_file.exists():
         return FileResponse(str(index_file), media_type="text/html")
@@ -433,10 +479,11 @@ async def serve_workstation_ui():
     if chat_ui_index.exists():
         return FileResponse(str(chat_ui_index), media_type="text/html")
     return HTMLResponse(
-        "<html><body style='background:#0d0b18;color:#ede9fe;font-family:sans-serif;padding:40px;'>"
-        "<h2>Makima Brain Online</h2><p>Aether Nexus workstation interface loading...</p>"
+        "<html><body style='background:#131314;color:#e3e3e3;font-family:sans-serif;padding:40px;'>"
+        "<h2>Makima Brain Online</h2><p>Conversational workspace interface loading...</p>"
         "</body></html>"
     )
+
 
 
 @app.get("/health")
@@ -453,7 +500,6 @@ _gpu_cache: dict[str, Any] = {"time": 0.0, "data": None}
 
 
 def _get_gpu_metrics() -> dict[str, Any]:
-    global _gpu_cache
     now = time.time()
     if now - _gpu_cache["time"] < 2.5 and _gpu_cache["data"] is not None:
         return _gpu_cache["data"]
@@ -497,7 +543,14 @@ async def full_status():
             for k, v in health.get_snapshot().items()
         }
     if orchestrator:
-        snapshot["agents"] = orchestrator.get_status()
+        getter = getattr(orchestrator, "get_status", None)
+        if callable(getter):
+            try:
+                snapshot["agents"] = getter()
+            except Exception as e:
+                snapshot["agents"] = {"error": str(e)}
+        else:
+            snapshot["agents"] = {"type": type(orchestrator).__name__, "get_status": "unavailable"}
     ai_handler: Any = _modules.get("ai_handler")
     if ai_handler is not None and hasattr(ai_handler, "backends"):
         snapshot["llm_backends"] = {
@@ -562,8 +615,9 @@ async def list_audit_events(limit: int = 50):
         try:
             from .core.persistence import EventStore
             event_store = EventStore("~/.makima/kernel_events.db")
-        except Exception:
-            pass
+        except Exception as store_err:
+            logger.debug("[audit] EventStore open failed: %s", store_err)
+            event_store = None
 
     if event_store and hasattr(event_store, "get_recent_events"):
         events = await event_store.get_recent_events(limit=limit)
@@ -591,50 +645,32 @@ async def list_audit_events(limit: int = 50):
     return {"total_count": 0, "events": []}
 
 
-def _get_automation_agent():
-    agent = _modules.get("automation_agent")
-    if not agent:
-        orch = _modules.get("orchestrator")
-        if orch and hasattr(orch, "agents"):
-            if "automation" in orch.agents:
-                agent = getattr(orch.agents["automation"], "agent", orch.agents["automation"])
-            elif "automation_agent" in orch.agents:
-                agent = getattr(orch.agents["automation_agent"], "agent", orch.agents["automation_agent"])
-    return agent
-
-
 @app.get("/api/automation/routines")
 async def list_automation_routines():
-    """Fetch active schedules, reminders, and macros from AutomationAgent."""
-    automation_agent = _get_automation_agent()
+    """Fetch real pending reminders/routines from DurableTaskEngine."""
     schedules = []
-    macros = []
-    if automation_agent:
-        if hasattr(automation_agent, "_scheduler") and hasattr(automation_agent._scheduler, "list_reminders"):
-            try:
-                schedules = automation_agent._scheduler.list_reminders()
-            except Exception:
-                pass
-        if hasattr(automation_agent, "_macros") and hasattr(automation_agent._macros, "list_macros"):
-            try:
-                macros = automation_agent._macros.list_macros()
-            except Exception:
-                pass
-
-    # Provide high-value production routines if list is currently empty
-    if not schedules:
-        schedules = [
-            {"id": "sched_inv_check", "name": "Codebase Invariant & Health Check", "cron_expr": "0 */4 * * *", "text": "Execute AST syntax check and health aggregator report", "status": "active"},
-            {"id": "sched_wal_compact", "name": "Memory WAL Auto-Compaction", "cron_expr": "0 0 * * *", "text": "Run SQLite checkpoint and prune expired ephemeral tasks", "status": "active"},
-            {"id": "sched_sec_scan", "name": "Security & Dependency Integrity Scan", "cron_expr": "0 8 * * *", "text": "Scan installed packages and verify zero-privilege sandboxes", "status": "active"},
-        ]
-    if not macros:
-        macros = [
-            {"id": "macro_git_status", "name": "Scan Git Status & Diffs", "runtime": "0.4s", "action": "Run git status & diff check across workspace", "icon": "terminal"},
-            {"id": "macro_system_vitals", "name": "Inspect System Vitals & Memory", "runtime": "0.2s", "action": "Query host CPU, RSS memory, and active processes", "icon": "memory"},
-            {"id": "macro_verify_connectors", "name": "Verify Connector Health & Latency", "runtime": "1.1s", "action": "Ping mounted application bridges and update status", "icon": "hub"},
-            {"id": "macro_backup_memory", "name": "Backup SQLite EternalMemory", "runtime": "1.8s", "action": "Flush WAL and verify vector store integrity", "icon": "database"},
-        ]
+    macros: list[dict[str, Any]] = []
+    try:
+        dte = _modules.get("durable_task_engine")
+        if dte and hasattr(dte, "list_pending_tasks"):
+            pending = await dte.list_pending_tasks()
+            now = time.time()
+            for cp in pending or []:
+                ra = getattr(cp, "resume_after", None)
+                if not ra:
+                    continue
+                ctx = getattr(cp, "context_snapshot", None) or {}
+                rep = ctx.get("repeat_interval_s") if isinstance(ctx, dict) else None
+                schedules.append({
+                    "id": cp.task_id,
+                    "name": getattr(cp, "task_name", cp.task_id),
+                    "text": getattr(cp, "original_prompt", ""),
+                    "fires_in_s": max(0, int(ra - now)),
+                    "repeat_s": rep,
+                    "status": "active",
+                })
+    except Exception as sched_err:
+        logger.debug("[automation] list routines failed: %s", sched_err)
 
     return {
         "schedules": schedules,
@@ -645,22 +681,41 @@ async def list_automation_routines():
 
 @app.post("/api/automation/schedule")
 async def create_automation_schedule(request: Request):
-    """Schedule a new background routine via AutomationAgent."""
+    """Schedule a real reminder/routine via DurableTaskEngine."""
     try:
         data = await request.json()
-        name = data.get("name", "Custom Routine").strip()
-        expr = data.get("expr", "* * * * *").strip()
-        prompt = data.get("prompt", "").strip()
+        name = str(data.get("name", "Custom Routine")).strip()
+        prompt = str(data.get("prompt", "")).strip()
+        delay_s = data.get("delay_s", data.get("delay_min", 0))
+        try:
+            delay_s = float(delay_s) * (60.0 if "delay_min" in data and "delay_s" not in data else 1.0)
+        except (TypeError, ValueError):
+            delay_s = 0.0
+        try:
+            repeat_s = float(data.get("repeat_s", 0) or 0)
+        except (TypeError, ValueError):
+            repeat_s = 0.0
         if not name or not prompt:
             return {"ok": False, "error": "Name and prompt are required"}
+        if delay_s <= 0:
+            return {"ok": False, "error": "delay_s (or delay_min) must be positive seconds"}
+        if data.get("expr") and "delay_s" not in data and "delay_min" not in data:
+            return {"ok": False, "error": "cron expressions are not supported yet — send delay_s instead"}
 
-        automation_agent = _get_automation_agent()
-        if automation_agent and hasattr(automation_agent, "_scheduler"):
-            try:
-                await automation_agent._scheduler.set_reminder(text=f"[{name}] {prompt}", cron_expr=expr)
-            except Exception as e:
-                logger.warning("ScheduleEngine error: %s", e)
-        return {"ok": True, "message": f"Routine '{name}' armed with cron '{expr}'"}
+        dte = _modules.get("durable_task_engine")
+        if dte is None or not hasattr(dte, "checkpoint_task"):
+            return {"ok": False, "error": "Scheduler unavailable (DurableTaskEngine not running)"}
+        task_id = f"rem_{uuid.uuid4().hex[:8]}"
+        await dte.checkpoint_task(
+            task_id=task_id,
+            prompt=prompt,
+            task_name=name,
+            context={"reminder": True, "repeat_interval_s": repeat_s or None, "conversation_id": "default_session"},
+            resume_after_seconds=delay_s,
+            status="active",
+            original_prompt=prompt,
+        )
+        return {"ok": True, "id": task_id, "message": f"Routine '{name}' scheduled in {delay_s:.0f}s"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -687,22 +742,31 @@ async def play_automation_macro(request: Request):
 
 @app.post("/api/security/audit")
 async def run_security_audit():
-    """Run an authentic zero-privilege security audit on connected integrations and workspace."""
+    """Count configured integrations; do not invent isolation/sandbox claims."""
     try:
         store = _modules.get("settings_store")
-        configured_count = 0
+        configured: list[str] = []
         if store:
             for k in ("telegram", "whatsapp", "github", "gdrive", "gmail", "spotify", "slack", "notion", "discord", "youtube", "figma"):
-                if store.has_integration_configured(k):
-                    configured_count += 1
+                try:
+                    if store.has_integration_configured(k):
+                        configured.append(k)
+                except Exception:
+                    continue
+        findings: list[str] = []
+        if not configured:
+            findings.append("No integrations configured — nothing external to audit.")
+        status = "PASS" if not findings else "ATTENTION"
         return {
             "ok": True,
-            "status": "PASS",
-            "isolation_level": "RING-3 JAIL // ASLR+NX ACTIVE",
-            "privilege_leaks": 0,
-            "scanned_integrations": configured_count if configured_count > 0 else 11,
-            "sandbox_status": "SECURE_L3",
-            "findings": [],
+            "status": status,
+            "scanned_integrations": len(configured),
+            "configured_integrations": configured,
+            "privilege_leaks": None,
+            "isolation_level": None,
+            "sandbox_status": None,
+            "findings": findings,
+            "note": "Integrations inventory only; privilege/isolation checks are not implemented.",
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
     except Exception as e:
@@ -790,16 +854,49 @@ async def test_integration(integration_id: str):
         except Exception as e:
             return {"ok": False, "message": f"Connection test failed: {e}"}
 
+    if integration_id == "github":
+        token = raw.get("api_key", "")
+        if not token:
+            return {"ok": False, "message": "No GitHub token saved yet."}
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=10.0, headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}) as client:
+                resp = await client.get("https://api.github.com/user")
+            if resp.status_code == 200:
+                login = resp.json().get("login", "unknown")
+                return {"ok": True, "message": f"Connected as @{login}"}
+            if resp.status_code == 401:
+                return {"ok": False, "message": "GitHub token is invalid or expired."}
+            return {"ok": False, "message": f"GitHub returned HTTP {resp.status_code}."}
+        except Exception as e:
+            return {"ok": False, "message": f"Connection test failed: {e}"}
+
+    if integration_id == "slack":
+        webhook = raw.get("webhook_url", "")
+        if not webhook:
+            return {"ok": False, "message": "No Slack webhook URL saved yet."}
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(webhook, json={"text": "Makima connectivity test ✅"})
+            if resp.status_code in (200, 201):
+                return {"ok": True, "message": "Slack webhook accepted the test message."}
+            return {"ok": False, "message": f"Slack webhook returned HTTP {resp.status_code}."}
+        except Exception as e:
+            return {"ok": False, "message": f"Connection test failed: {e}"}
+
     if not raw or not any(raw.values()):
         return {"ok": False, "message": "No credentials saved yet for this integration."}
 
     # Credentials are saved. Connectivity not auto-verified for this provider yet,
     # but they will be used when this integration is activated.
     _INTEGRATION_HINTS: dict[str, str] = {
-        "whatsapp": "WhatsApp credentials saved. Makima will use them when sending messages.",
+        "whatsapp": "WhatsApp phone saved. Makima uses it as the default sender identity when messaging.",
         "discord": "Discord bot token saved. Makima will use it when sending Discord messages.",
-        "gmail": "Gmail OAuth credentials saved. Makima will use them when sending emails.",
-        "github": "GitHub token saved. Makima will use it for repo operations.",
+        "gmail": "Gmail app password saved. Makima will use it when sending emails.",
+        "notion": "Notion API token saved. Makima will use it for Notion operations.",
+        "youtube": "YouTube API key saved. Makima will use it for YouTube Data API operations.",
+        "figma": "Figma personal token saved. Makima will use it for Figma file operations.",
         "google": "Google OAuth saved. Makima will use it for Calendar/Drive access.",
     }
     hint = _INTEGRATION_HINTS.get(integration_id, f"Credentials saved for '{integration_id}'.")
@@ -881,12 +978,15 @@ async def open_local_file(request: Request):
         return JSONResponse({"status": "error", "message": f"File not found: {target.name}"}, status_code=404)
 
     try:
-        if sys.platform == "win32":
-            os.startfile(str(target))
-        elif sys.platform == "darwin":
-            subprocess.run(["open", str(target)], check=False)
-        else:
-            subprocess.run(["xdg-open", str(target)], check=False)
+        def _open_native() -> None:
+            if sys.platform == "win32":
+                os.startfile(str(target))  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.run(["open", str(target)], check=False)
+            else:
+                subprocess.run(["xdg-open", str(target)], check=False)
+
+        await asyncio.to_thread(_open_native)
         logger.info("[NativeLauncher] Opened local document: %s", target)
         return {"status": "ok", "opened": str(target), "filename": target.name}
     except Exception as e:
@@ -933,7 +1033,7 @@ async def oauth_login(provider: str):
         return RedirectResponse(url=url)
     except ValueError as ve:
         return JSONResponse(status_code=400, content={"error": str(ve)})
-    except EnvironmentError as ee:
+    except OSError as ee:
         return JSONResponse(status_code=503, content={"error": str(ee)})
     except Exception as exc:
         logger.error("[auth] /auth/login/%s error: %s", provider, exc)
@@ -980,10 +1080,18 @@ async def settings_snapshot():
     speech = _modules.get("speech")
     ollama = _modules.get("ollama")
     store = _modules.get("settings_store")
+    general = store.get_settings() if store else {}
+    # Prefer live speech engine state, fall back to persisted store value
+    wake_enabled = getattr(speech, "wake_word_enabled", None)
+    if wake_enabled is None:
+        wake_enabled = bool(general.get("wake_word_enabled", False))
     return {
-        "voice": {"wake_word_enabled": getattr(speech, "wake_word_enabled", False), "ptt_key": getattr(speech, "ptt_key", "")},
+        "voice": {
+            "wake_word_enabled": bool(wake_enabled),
+            "ptt_key": getattr(speech, "ptt_key", "") or str(general.get("ptt_key", "")),
+        },
         "ollama": {"default_model": getattr(ollama, "default_model", "")},
-        "general": store.get_settings() if store else {},
+        "general": general,
     }
 
 
@@ -998,12 +1106,287 @@ async def update_settings(request: Request):
         if "ptt_key" in payload:
             speech.ptt_key = str(payload["ptt_key"])
     if store:
+        # Persist wake_word_enabled + ptt_key too (so they survive restart)
+        if "wake_word_enabled" in payload:
+            store.update_settings({"wake_word_enabled": bool(payload["wake_word_enabled"])})
+        if "ptt_key" in payload:
+            store.update_settings({"ptt_key": str(payload["ptt_key"])})
         general_keys = {k: v for k, v in payload.items() if k not in ("wake_word_enabled", "ptt_key")}
         if general_keys:
             store.update_settings(general_keys)
     snap = await settings_snapshot()
     snap["ok"] = True
     return snap
+
+
+# ---------------------------------------------------------------------------
+# Tools & MCP REST Endpoints
+# ---------------------------------------------------------------------------
+
+async def _cleanup_mcp_runtime(tool_registry: Any) -> None:
+    """Tear down live MCP server handles so they can be re-registered."""
+    servers = list(getattr(tool_registry, "_mcp_servers", None) or [])
+    for server in servers:
+        try:
+            if hasattr(server, "cleanup"):
+                await server.cleanup()
+            elif hasattr(server, "stop"):
+                await server.stop()
+        except Exception as cleanup_err:
+            logger.warning("MCP runtime cleanup error: %s", cleanup_err)
+    legacy = list(getattr(tool_registry, "_mcp_multiplexers", None) or [])
+    for client in legacy:
+        try:
+            if hasattr(client, "stop"):
+                await client.stop()
+            elif hasattr(client, "cleanup"):
+                await client.cleanup()
+        except Exception as legacy_err:
+            logger.warning("Legacy MCP runtime cleanup error: %s", legacy_err)
+    if hasattr(tool_registry, "_mcp_servers"):
+        tool_registry._mcp_servers = []
+    if hasattr(tool_registry, "_mcp_multiplexers"):
+        tool_registry._mcp_multiplexers = []
+
+
+def _get_effective_mcp_servers() -> list[dict]:
+    """Merge static config mcp_servers with UI-persisted store entries (store wins by name)."""
+    config_entries = list((CONFIG or {}).get("mcp_servers") or [])
+    store = _modules.get("settings_store")
+    store_entries: list[dict] = []
+    if store:
+        try:
+            raw = store.get_settings().get("mcp_servers") or []
+            if isinstance(raw, list):
+                store_entries = [e for e in raw if isinstance(e, dict)]
+        except Exception:
+            store_entries = []
+    store_by_name = {
+        str(s.get("name", "")).strip(): s
+        for s in store_entries
+        if str(s.get("name", "")).strip()
+    }
+    merged: list[dict] = []
+    seen: set[str] = set()
+    for entry in config_entries:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name", "")).strip()
+        if name and name in store_by_name:
+            merged.append(store_by_name[name])
+            seen.add(name)
+        else:
+            merged.append(entry)
+            if name:
+                seen.add(name)
+    for name, entry in store_by_name.items():
+        if name not in seen:
+            merged.append(entry)
+    return merged
+
+
+async def _reload_mcp_servers() -> dict[str, Any]:
+    """Cleanup live MCP handles and re-register from effective config+store list."""
+    tool_registry = _modules.get("tool_registry")
+    if not tool_registry:
+        return {"ok": False, "error": "Tool registry not available."}
+    await _cleanup_mcp_runtime(tool_registry)
+    effective = _get_effective_mcp_servers()
+    enabled_entries = [e for e in effective if e.get("enabled", True)]
+    if enabled_entries:
+        from .core.tool_loader import register_mcp_tools
+        await register_mcp_tools(tool_registry, enabled_entries)
+    mcp_tool_count = len([
+        t for t in tool_registry.list_tools()
+        if (t.category or "") == "mcp" or str(t.name, "").startswith("mcp_")
+    ])
+    return {
+        "ok": True,
+        "servers_configured": len(effective),
+        "servers_enabled": len(enabled_entries),
+        "mcp_tools_registered": mcp_tool_count,
+    }
+
+
+@app.get("/tools")
+async def list_tools(category: str = "", enabled_only: bool = False):
+    """List registered tools with enable state and metadata (for Tools & MCP tab)."""
+    tool_registry = _modules.get("tool_registry")
+    if not tool_registry:
+        return {"ok": False, "error": "Tool registry not available.", "tools": []}
+    try:
+        tools_meta = tool_registry.list_tools()
+    except Exception as e:
+        return {"ok": False, "error": str(e), "tools": []}
+    cat_filter = category.strip().lower()
+    result = []
+    for t in tools_meta:
+        t_cat = (t.category or "general").strip().lower()
+        if cat_filter and t_cat != cat_filter:
+            continue
+        if enabled_only and not getattr(t, "enabled", True):
+            continue
+        result.append({
+            "name": t.name,
+            "description": (t.description or "").split("\n")[0].strip(),
+            "category": t_cat,
+            "enabled": bool(getattr(t, "enabled", True)),
+            "is_destructive": bool(getattr(t, "is_destructive", False)),
+            "priority": int(getattr(t, "priority", 5)),
+            "source": "mcp" if (t_cat == "mcp" or str(t.name).startswith("mcp_")) else "native",
+        })
+    result.sort(key=lambda x: (x["category"], x["name"]))
+    categories = sorted({t["category"] for t in result})
+    return {
+        "ok": True,
+        "total": len(result),
+        "enabled_count": sum(1 for t in result if t["enabled"]),
+        "categories": categories,
+        "tools": result,
+    }
+
+
+@app.post("/tools/{tool_name}/enable")
+async def set_tool_enabled(tool_name: str, request: Request):
+    """Enable/disable a registered tool and persist the override to settings store."""
+    tool_registry = _modules.get("tool_registry")
+    store = _modules.get("settings_store")
+    if not tool_registry:
+        return {"ok": False, "error": "Tool registry not available."}
+    payload = await request.json()
+    enabled = bool(payload.get("enabled", True))
+    if not tool_registry.has_tool(tool_name):
+        return {"ok": False, "error": f"Tool '{tool_name}' not found."}
+    changed = tool_registry.set_tool_enabled(tool_name, enabled)
+    if not changed:
+        return {"ok": False, "error": f"Failed to update tool '{tool_name}'."}
+    if store:
+        try:
+            current = store.get_settings().get("enabled_tools") or {}
+            if not isinstance(current, dict):
+                current = {}
+            current[tool_name] = enabled
+            store.update_settings({"enabled_tools": current})
+        except Exception as store_err:
+            logger.warning("Failed to persist enabled_tools override: %s", store_err)
+    return {"ok": True, "name": tool_name, "enabled": enabled}
+
+
+@app.get("/mcp")
+async def list_mcp_servers():
+    """List configured MCP servers (config + store) with live registration status."""
+    tool_registry = _modules.get("tool_registry")
+    effective = _get_effective_mcp_servers()
+    live_mcp_tool_names: set[str] = set()
+    if tool_registry:
+        try:
+            live_mcp_tool_names = {
+                t.name for t in tool_registry.list_tools()
+                if (t.category or "") == "mcp" or str(t.name).startswith("mcp_")
+            }
+        except Exception:
+            live_mcp_tool_names = set()
+    servers = []
+    for entry in effective:
+        name = str(entry.get("name", "")).strip() or "unnamed"
+        transport = str(entry.get("transport") or ("stdio" if entry.get("command") else "http")).lower()
+        has_command = bool(entry.get("command"))
+        has_url = bool(entry.get("url"))
+        prefix = f"mcp_{name}_"
+        tool_count = sum(1 for n in live_mcp_tool_names if n.startswith(prefix) or n == prefix.rstrip("_"))
+        servers.append({
+            "name": name,
+            "enabled": bool(entry.get("enabled", True)),
+            "transport": transport,
+            "command": entry.get("command") if has_command else None,
+            "url": entry.get("url") if has_url else None,
+            "has_env": bool(entry.get("env")),
+            "has_headers": bool(entry.get("headers")),
+            "tools_registered": tool_count,
+            "live": tool_count > 0,
+        })
+    return {
+        "ok": True,
+        "servers": servers,
+        "total_mcp_tools": len(live_mcp_tool_names),
+    }
+
+
+@app.post("/mcp")
+async def add_mcp_server(request: Request):
+    """Add (or update by name) an MCP server entry in settings store and hot-reload."""
+    store = _modules.get("settings_store")
+    if not store:
+        return {"ok": False, "error": "Settings store not available."}
+    payload = await request.json()
+    name = str(payload.get("name", "")).strip()
+    if not name:
+        return {"ok": False, "error": "MCP server 'name' is required."}
+    command = payload.get("command")
+    url = payload.get("url")
+    if not command and not url:
+        return {"ok": False, "error": "Provide either 'command' (stdio) or 'url' (http/sse)."}
+    entry: dict[str, Any] = {
+        "name": name,
+        "enabled": bool(payload.get("enabled", True)),
+        "transport": str(payload.get("transport") or ("stdio" if command else "http")).lower(),
+    }
+    if command:
+        if isinstance(command, str):
+            command = [command]
+        if not isinstance(command, list) or not all(isinstance(c, str) for c in command):
+            return {"ok": False, "error": "'command' must be a string or list of strings."}
+        entry["command"] = command
+    if url:
+        entry["url"] = str(url).strip()
+    env = payload.get("env")
+    if isinstance(env, dict) and env:
+        entry["env"] = {str(k): str(v) for k, v in env.items()}
+    headers = payload.get("headers")
+    if isinstance(headers, dict) and headers:
+        entry["headers"] = {str(k): str(v) for k, v in headers.items()}
+
+    try:
+        current = store.get_settings().get("mcp_servers") or []
+        if not isinstance(current, list):
+            current = []
+        current = [e for e in current if isinstance(e, dict) and str(e.get("name", "")).strip() != name]
+        current.append(entry)
+        store.update_settings({"mcp_servers": current})
+    except Exception as store_err:
+        return {"ok": False, "error": f"Failed to persist MCP server: {store_err}"}
+
+    reload_result = await _reload_mcp_servers()
+    return {"ok": True, "server": entry, "reload": reload_result}
+
+
+@app.delete("/mcp/{server_name}")
+async def delete_mcp_server(server_name: str):
+    """Remove an MCP server entry from settings store and hot-reload."""
+    store = _modules.get("settings_store")
+    if not store:
+        return {"ok": False, "error": "Settings store not available."}
+    name = server_name.strip()
+    try:
+        current = store.get_settings().get("mcp_servers") or []
+        if not isinstance(current, list):
+            current = []
+        remaining = [e for e in current if isinstance(e, dict) and str(e.get("name", "")).strip() != name]
+        if len(remaining) == len(current):
+            return {"ok": False, "error": f"MCP server '{name}' not found in store."}
+        store.update_settings({"mcp_servers": remaining})
+    except Exception as store_err:
+        return {"ok": False, "error": f"Failed to update MCP servers: {store_err}"}
+
+    reload_result = await _reload_mcp_servers()
+    return {"ok": True, "removed": name, "reload": reload_result}
+
+
+@app.post("/mcp/reload")
+async def reload_mcp_servers():
+    """Hot-reload all MCP servers (cleanup + re-register) without brain restart."""
+    reload_result = await _reload_mcp_servers()
+    return reload_result
 
 
 # ---------------------------------------------------------------------------
@@ -1029,8 +1412,9 @@ _PROVIDER_CATALOG = [
     {
         "id": "qwen",
         "name": "Qwen (DashScope)",
-        "default_model": "qwen-plus",
+        "default_model": "qwen3.8-27b",
         "preset_models": [
+            "qwen3.8-27b",
             "qwen-plus",
             "qwen-max",
             "qwen-turbo",
@@ -1058,13 +1442,15 @@ _PROVIDER_CATALOG = [
     {
         "id": "groq",
         "name": "Groq",
-        "default_model": "llama-3.3-70b-versatile",
+        "default_model": "openai/gpt-oss-120b",
         "preset_models": [
+            "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b",
+            "qwen/qwen3.8-27b",
+            "groq/compound-mini",
+            "allam-2-7b",
             "llama-3.3-70b-versatile",
             "llama-3.1-8b-instant",
-            "deepseek-r1-distill-llama-70b",
-            "gemma2-9b-it",
-            "mixtral-8x7b-32768",
         ],
         "env_keys": ["GROQ_API_KEY", "MAKIMA_GROQ_KEY"],
         "base_url": "https://api.groq.com/openai/v1",
@@ -1224,8 +1610,8 @@ async def _fetch_live_models_for_provider(spec: dict[str, Any], api_key: str, ba
         if own_client and client:
             try:
                 await client.aclose()
-            except Exception:
-                pass
+            except Exception as close_err:
+                logger.debug("[providers] model client close failed: %s", close_err)
 
     return models
 
@@ -1484,6 +1870,27 @@ async def get_media_content(media_id: str):
         raise HTTPException(status_code=404, detail="Media not found") from e
 
 
+@app.get("/media/{media_id}/download")
+async def download_media(media_id: str):
+    """Attachment-disposition alias of /content — used by the UI download buttons."""
+    store: MediaStore | None = _modules.get("media_store")
+    if not store:
+        raise HTTPException(status_code=503, detail="Media store not initialized")
+    try:
+        item = store.get(media_id)
+        path = store.file_path(media_id)
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Media file missing")
+        return FileResponse(
+            str(path),
+            media_type=item.get("mime_type", "application/octet-stream"),
+            filename=item.get("name"),
+            content_disposition_type="attachment",
+        )
+    except MediaNotFoundError as e:
+        raise HTTPException(status_code=404, detail="Media not found") from e
+
+
 @app.delete("/media/{media_id}")
 async def delete_media_entry(media_id: str):
     store: MediaStore | None = _modules.get("media_store")
@@ -1513,7 +1920,6 @@ async def get_voice_audio(artifact_id: str):
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     """Main WebSocket endpoint — all UI <-> Brain communication flows here."""
-    global _ws_clients
     await ws.accept()
     _ws_clients.add(ws)
     logger.info(f"WS client connected. Total clients: {len(_ws_clients)}")
@@ -1560,6 +1966,9 @@ async def _handle_ws_message(msg: Any, ws: WebSocket) -> None:
         if msg_type in (ClientMessageType.PING.value, "ping"):
             ping_ts = payload.get("ts") or payload.get("timestamp") or getattr(msg, "timestamp", None) or time.time()
             await ws_broadcast(build_pong(ping_ts))
+            # Pong carries no task_id (global broadcast) — drop the routing
+            # entry registered above so repeated pings cannot accumulate.
+            _task_to_ws.pop(task_id, None)
 
         elif msg_type in (ClientMessageType.PONG.value, "pong"):
             pass
@@ -1595,7 +2004,10 @@ async def _handle_ws_message(msg: Any, ws: WebSocket) -> None:
             if not text:
                 await ws_broadcast(build_ai_chunk(task_id, "Please enter a message to regenerate.", is_final=True))
                 return
-            context = {"conversation_id": payload.get("conversation_id") or "default_session", "is_regenerate": True}
+            context = {k: v for k, v in payload.items() if k != "text"}
+            context["is_regenerate"] = True
+            if "conversation_id" not in context or not context["conversation_id"]:
+                context["conversation_id"] = "default_session"
             if router:
                 await router.handle_message(task_id, text, context=context)
             else:
@@ -1609,7 +2021,10 @@ async def _handle_ws_message(msg: Any, ws: WebSocket) -> None:
                 await ws_broadcast(build_ai_chunk(task_id, "Please enter a message to modify.", is_final=True))
                 return
             modified_text = f"{text}\n\n[Instruction: {instruction}]" if instruction else text
-            context = {"conversation_id": payload.get("conversation_id") or "default_session", "instruction": instruction}
+            context = {k: v for k, v in payload.items() if k not in ("text", "instruction")}
+            context["instruction"] = instruction
+            if "conversation_id" not in context or not context["conversation_id"]:
+                context["conversation_id"] = "default_session"
             if router:
                 await router.handle_message(task_id, modified_text, context=context)
             else:
@@ -1660,15 +2075,18 @@ async def _handle_ws_message(msg: Any, ws: WebSocket) -> None:
                 await ws_broadcast(build_ai_chunk(task_id, result, is_final=True))
 
         elif msg_type == ClientMessageType.FEEDBACK.value:
-            ref_eng = _modules.get("reflexion_engine") or _modules.get("learning_coordinator")
-            if ref_eng and hasattr(ref_eng, "on_negative_feedback"):
+            pref_eng = _modules.get("preference_engine")
+            if pref_eng and hasattr(pref_eng, "record_feedback"):
                 rating = payload.get("rating") or payload.get("thumb")
-                if rating in ("down", "negative", -1) or not payload.get("positive", True):
-                    await ref_eng.on_negative_feedback(
-                        user_message=payload.get("user_message") or payload.get("query", ""),
-                        agent_response=payload.get("agent_response") or payload.get("response", ""),
-                        agent_name=payload.get("agent_name", "unknown"),
-                    )
+                is_positive = rating not in ("down", "negative", -1) and payload.get("positive", True)
+                tool_name = payload.get("tool_name") or payload.get("agent_name", "")
+                await pref_eng.record_feedback(
+                    tool_name=tool_name,
+                    accepted=is_positive,
+                    rejected_params=payload.get("rejected_params"),
+                    actual_params=payload.get("actual_params"),
+                )
+                logger.info("User feedback recorded: tool=%s positive=%s", tool_name, is_positive)
 
         elif msg_type in (ClientMessageType.FOCUS_CHANGE.value, ClientMessageType.SET_FOCUS_PROFILE.value):
             focus_profiles = _modules.get("focus_profiles")
@@ -1770,10 +2188,20 @@ async def _handle_ws_message(msg: Any, ws: WebSocket) -> None:
                     await speech.barge_in(payload.get("voice_session_id", ""))
 
         elif msg_type == ClientMessageType.VOICE_SPEAK.value:
-            if speech and hasattr(speech, "synthesize_session_tts"):
+            if speech:
                 voice_session_id = payload.get("voice_session_id", "")
                 speak_text = payload.get("text", "")
-                await speech.synthesize_session_tts(voice_session_id, speak_text, task_id=task_id)
+                if voice_session_id.startswith("tts_") and hasattr(speech, "synthesize_oneshot_tts"):
+                    # One-shot read-aloud: ephemeral tts_* id, no live voice session.
+                    await speech.synthesize_oneshot_tts(voice_session_id, speak_text, task_id=task_id)
+                elif hasattr(speech, "synthesize_session_tts"):
+                    await speech.synthesize_session_tts(voice_session_id, speak_text, task_id=task_id)
+
+        elif msg_type == ClientMessageType.VOICE_TTS_STOP.value:
+            if speech and hasattr(speech, "stop_oneshot_tts"):
+                await speech.stop_oneshot_tts(payload.get("voice_session_id", ""))
+            # Stop request itself registered a task_id — drop its routing entry.
+            _task_to_ws.pop(task_id, None)
 
         elif msg_type == ClientMessageType.PTT_DOWN.value:
             if speech and hasattr(speech, "handle_ptt_down"):
@@ -1804,21 +2232,72 @@ async def _handle_ws_message(msg: Any, ws: WebSocket) -> None:
                 svc_name = payload.get("service_name", "")
                 cfg_data = payload.get("config", {})
                 if svc_name and isinstance(cfg_data, dict):
-                    store.save_integration_fields(svc_name, cfg_data)
+                    # Normalize camelCase UI field names → schema-correct snake_case field names
+                    # The UI always sends { apiKey: "..." } but each service has its own field name
+                    _FIELD_NORMALIZE: dict[str, dict[str, str]] = {
+                        "telegram":  {"apiKey": "bot_token", "api_key": "bot_token"},
+                        "discord":   {"apiKey": "bot_token", "api_key": "bot_token"},
+                        "github":    {"apiKey": "api_key"},
+                        "gdrive":    {"apiKey": "client_token"},
+                        "gmail":     {"apiKey": "app_password"},
+                        "spotify":   {"apiKey": "client_id"},
+                        "slack":     {"apiKey": "webhook_url"},
+                        "notion":    {"apiKey": "api_token"},
+                        "youtube":   {"apiKey": "api_key"},
+                        "figma":     {"apiKey": "personal_token"},
+                        "whatsapp":  {"apiKey": "phone", "api_key": "phone"},
+                    }
+                    field_map = _FIELD_NORMALIZE.get(svc_name, {})
+                    normalized: dict[str, str] = {}
+                    for k, v in cfg_data.items():
+                        mapped_key = field_map.get(k, k)  # translate camelCase → schema key
+                        if isinstance(v, str):
+                            normalized[mapped_key] = v.strip()
+                        else:
+                            normalized[mapped_key] = v
+                    store.save_integration_fields(svc_name, normalized)
+
+                    # Inject into os.environ so running tools pick up credentials immediately
+                    # without requiring a brain restart — map each integration to its env var
+                    _CRED_ENV_MAP: dict[str, list[tuple[str, str]]] = {
+                        "telegram":  [("bot_token", "TELEGRAM_BOT_TOKEN")],
+                        "discord":   [("bot_token", "DISCORD_BOT_TOKEN")],
+                        "github":    [("api_key", "GITHUB_TOKEN"), ("api_key", "GH_TOKEN")],
+                        "gmail":     [("app_password", "GMAIL_APP_PASSWORD")],
+                        "youtube":   [("api_key", "YOUTUBE_API_KEY")],
+                        "notion":    [("api_token", "NOTION_API_TOKEN")],
+                        "figma":     [("personal_token", "FIGMA_PERSONAL_TOKEN")],
+                        "slack":     [("webhook_url", "SLACK_WEBHOOK_URL")],
+                        "gdrive":    [("client_token", "GDRIVE_CLIENT_TOKEN")],
+                        "spotify":   [("client_id", "SPOTIFY_CLIENT_ID")],
+                    }
+                    for field_name, env_var in _CRED_ENV_MAP.get(svc_name, []):
+                        val = normalized.get(field_name, "")
+                        if val:
+                            os.environ[env_var] = val
+                            logger.info("[SAVE_CREDENTIAL] Injected %s into env var %s", svc_name, env_var)
+
                     await ws_broadcast(WSMessage(
                         v=PROTOCOL_VERSION,
                         type=ServerMessageType.CREDENTIALS_DATA,
-                        payload={"status": "saved", "service": svc_name},
+                        payload={"status": "saved", "service": svc_name, "fields": list(normalized.keys())},
                         task_id=task_id,
                     ))
 
         elif msg_type == ClientMessageType.GET_CREDENTIALS.value:
             if store:
-                integrations = store.get_settings()
+                # Return integration credentials (not general settings)
+                all_integrations: dict[str, dict] = {}
+                for int_id in store.list_integrations():
+                    fields = store.get_integration_fields(int_id)
+                    # Mask secret values — return only whether a field is set, not the raw value
+                    all_integrations[int_id] = {
+                        k: ("***" if v else "") for k, v in fields.items()
+                    }
                 await ws_broadcast(WSMessage(
                     v=PROTOCOL_VERSION,
                     type=ServerMessageType.CREDENTIALS_DATA,
-                    payload={"credentials": integrations},
+                    payload={"credentials": all_integrations},
                     task_id=task_id,
                 ))
 
@@ -1837,12 +2316,15 @@ async def _handle_ws_message(msg: Any, ws: WebSocket) -> None:
                                 target = cand
                                 break
                     if target.exists():
-                        if sys.platform == "win32":
-                            os.startfile(str(target))
-                        elif sys.platform == "darwin":
-                            subprocess.run(["open", str(target)], check=False)
-                        else:
-                            subprocess.run(["xdg-open", str(target)], check=False)
+                        def _open_ws_native() -> None:
+                            if sys.platform == "win32":
+                                os.startfile(str(target))  # type: ignore[attr-defined]
+                            elif sys.platform == "darwin":
+                                subprocess.run(["open", str(target)], check=False)
+                            else:
+                                subprocess.run(["xdg-open", str(target)], check=False)
+
+                        await asyncio.to_thread(_open_ws_native)
                         logger.info("[WS] Opened local document: %s", target)
                         await ws_broadcast(build_ai_chunk(task_id, f" [Opened {target.name}] ", is_final=True))
                     else:
@@ -1853,8 +2335,8 @@ async def _handle_ws_message(msg: Any, ws: WebSocket) -> None:
         else:
             logger.debug(f"Unhandled WS message type: {msg_type}")
 
-    except Exception as e:
-        logger.error(f"Error handling WS message: {e}", exc_info=True)
+    except Exception:
+        logger.exception("Error handling WS message")
         try:
             if task_id:
                 await ws_broadcast(build_ai_chunk(
@@ -1877,7 +2359,7 @@ if __name__ == "__main__":
             cfg = _load_config()
             from .core.app_bootstrap import AppBootstrap
             bootstrap = AppBootstrap(config=cfg, ws_broadcast=ws_broadcast)
-            services = await bootstrap.initialize_services()
+            await bootstrap.initialize_services()
             ready = bootstrap.is_ready()
             health = bootstrap.get_services_health()
             await bootstrap.shutdown_services()

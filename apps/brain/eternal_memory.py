@@ -491,8 +491,8 @@ class EternalMemory:
         if self._conn is not None:
             try:
                 self._conn.close()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logger.debug("suppressed: %s", _exc)
             self._conn = None
         logger.info("EternalMemory stopped")
 
@@ -649,8 +649,8 @@ class EternalMemory:
                     async with self._lock:
                         for r, m, c, cid in batch:
                             await self._write_immediately(r, m, c, cid)
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logger.debug("suppressed: %s", _exc)
                 finally:
                     for _ in range(len(batch)):
                         self._queue.task_done()
@@ -760,12 +760,11 @@ class EternalMemory:
                 if rid not in existing_ids and blob is not None:
                     try:
                         arr = np.frombuffer(blob, dtype=np.float32)
-                        if arr.size > 0:
-                            if not self._vec_rows or arr.size == self._vec_rows[0].size:
-                                self._vec_ids.append(rid)
-                                self._vec_rows.append(arr.reshape(-1))
-                                existing_ids.add(rid)
-                                added += 1
+                        if arr.size > 0 and (not self._vec_rows or arr.size == self._vec_rows[0].size):
+                            self._vec_ids.append(rid)
+                            self._vec_rows.append(arr.reshape(-1))
+                            existing_ids.add(rid)
+                            added += 1
                     except Exception as e:
                         logger.debug("Error decoding embedding BLOB for row %d: %s", rid, e)
 
@@ -1463,43 +1462,60 @@ class EternalMemory:
         try:
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, _do_save)
+            self._rules_rows_cache = None
         except Exception as e:
             logger.error("save_rule failed: %s", e)
+
+    def _fetch_rule_rows_sync(self) -> list[tuple[str, str]]:
+        """Blocking fetch of (rule, keywords) rows; runs in executor."""
+        conn = sqlite3.connect(str(self.db_path), timeout=30.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute("SELECT rule, keywords FROM learned_rules ORDER BY created_at DESC LIMIT 50").fetchall()
+            return [(r["rule"], r["keywords"]) for r in rows]
+        finally:
+            conn.close()
 
     async def search_rules(self, query: str, top_k: int = 3) -> list[str]:
         """Search learned rules that match keywords in the query or general relevance."""
         if not query or not isinstance(query, str):
             return []
-        
-        query_words = [w.lower().strip() for w in query.split() if len(w.strip()) > 1]
-        db_path = str(self.db_path)
 
-        def _do_search() -> list[str]:
-            conn = sqlite3.connect(db_path, timeout=30.0)
-            conn.row_factory = sqlite3.Row
+        query_words = [w.lower().strip() for w in query.split() if len(w.strip()) > 1]
+
+        # O1: cache raw rows (60s TTL, busted on save_rule) — kills a SQLite
+        # connection + full scan on every turn; matching stays in-memory.
+        rows: list[tuple[str, str]] | None = None
+        try:
+            cached = getattr(self, "_rules_rows_cache", None)
+            if cached and (time.time() - cached[0]) < 60.0:
+                rows = cached[1]
+        except Exception as _exc:
+            logger.debug("suppressed: %s", _exc)
+        if rows is None:
             try:
-                rows = conn.execute("SELECT rule, keywords FROM learned_rules ORDER BY created_at DESC LIMIT 50").fetchall()
-                matching_rules: list[str] = []
-                for row in rows:
-                    rule = row["rule"]
-                    kw_list = [k.strip() for k in row["keywords"].split(",") if k.strip()]
-                    # Check if query contains any of the keywords or vice versa
-                    if any(kw in query.lower() for kw in kw_list) or any(w in rule.lower() for w in query_words):
-                        matching_rules.append(rule)
-                    if len(matching_rules) >= top_k:
-                        break
-                
-                # If no keyword match, return most recent rules as general constraints
-                if not matching_rules and rows:
-                    matching_rules = [r["rule"] for r in rows[:top_k]]
-                
-                return matching_rules
-            finally:
-                conn.close()
+                loop = asyncio.get_running_loop()
+                rows = await loop.run_in_executor(None, self._fetch_rule_rows_sync)
+                self._rules_rows_cache = (time.time(), rows)
+            except Exception as e:
+                logger.error("search_rules failed: %s", e)
+                return []
 
         try:
-            loop = asyncio.get_running_loop()
-            return await loop.run_in_executor(None, _do_search)
+            matching_rules: list[str] = []
+            for rule, keywords in rows:
+                kw_list = [k.strip() for k in keywords.split(",") if k.strip()]
+                # Check if query contains any of the keywords or vice versa
+                if any(kw in query.lower() for kw in kw_list) or any(w in rule.lower() for w in query_words):
+                    matching_rules.append(rule)
+                if len(matching_rules) >= top_k:
+                    break
+
+            # If no keyword match, return most recent rules as general constraints
+            if not matching_rules and rows:
+                matching_rules = [r for r, _ in rows[:top_k]]
+
+            return matching_rules
         except Exception as e:
             logger.error("search_rules failed: %s", e)
             return []
