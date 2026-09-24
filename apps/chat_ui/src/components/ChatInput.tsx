@@ -15,6 +15,19 @@ const COMPOSER_PLACEHOLDERS = [
   'System check karo…',
   'Kuch bhi puchho…',
 ];
+
+const SEND_BURST_BITS = [
+  { dx: '-34px', dy: '-30px', rot: '-120deg', color: 'var(--primary)' },
+  { dx: '-20px', dy: '-44px', rot: '80deg', color: 'var(--success)' },
+  { dx: '-6px', dy: '-50px', rot: '200deg', color: 'var(--primary)' },
+  { dx: '8px', dy: '-44px', rot: '-200deg', color: 'var(--warning)' },
+  { dx: '20px', dy: '-30px', rot: '140deg', color: 'var(--primary)' },
+  { dx: '-28px', dy: '-14px', rot: '60deg', color: 'var(--text-muted)' },
+  { dx: '26px', dy: '-12px', rot: '-60deg', color: 'var(--success)' },
+  { dx: '-12px', dy: '-24px', rot: '300deg', color: 'var(--warning)' },
+  { dx: '12px', dy: '-22px', rot: '-300deg', color: 'var(--primary)' },
+  { dx: '0px', dy: '-36px', rot: '180deg', color: 'var(--text-muted)' },
+];
 const kindFor = (mime: string): MediaKind => mime.startsWith('image/') ? 'image' : mime.startsWith('video/') ? 'video' : mime.startsWith('audio/') ? 'audio' : 'document';
 const accept = { 'image/*': [], 'video/*': [], 'audio/*': [], 'application/pdf': [], 'text/plain': [], 'text/markdown': [], 'text/csv': [], 'application/json': [], 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': [], 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': [], 'application/vnd.openxmlformats-officedocument.presentationml.presentation': [] };
 
@@ -89,6 +102,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const [menuOpen, setMenuOpen] = useState(false);
   const [slashIndex, setSlashIndex] = useState(0);
   const [placeholderIdx, setPlaceholderIdx] = useState(0);
+  const [burstKey, setBurstKey] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -155,7 +169,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const { getRootProps, getInputProps, isDragActive, open } = useDropzone({ onDrop: handleDrop, accept, noClick: true, noKeyboard: true, multiple: true });
   const remove = (id: string) => setAttachments((prev) => { const item = prev.find((entry) => entry.id === id); if (item?.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(item.previewUrl); return prev.filter((entry) => entry.id !== id); });
   const isUploading = attachments.some((entry) => entry.uploadState === 'uploading');
-  const handleSend = () => { const ready = attachments.filter((entry) => entry.uploadState === 'ready' && entry.mediaId); if ((!text.trim() && !ready.length) || disabled || isUploading) return; onSendMessage(text.trim(), ready); setText(''); attachments.forEach((entry) => entry.previewUrl?.startsWith('blob:') && URL.revokeObjectURL(entry.previewUrl)); setAttachments([]); };
+  const handleSend = () => { const ready = attachments.filter((entry) => entry.uploadState === 'ready' && entry.mediaId); if ((!text.trim() && !ready.length) || disabled || isUploading) return; setBurstKey((k) => k + 1); onSendMessage(text.trim(), ready); setText(''); attachments.forEach((entry) => entry.previewUrl?.startsWith('blob:') && URL.revokeObjectURL(entry.previewUrl)); setAttachments([]); };
   const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => { const image = Array.from(event.clipboardData.files).find((file) => file.type.startsWith('image/')); if (image) { event.preventDefault(); void addFile(image); } };
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (filteredCommands.length > 0) {
@@ -279,6 +293,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             </motion.button>
           )}
         </AnimatePresence>
+        {burstKey > 0 && (
+          <span key={burstKey} className="send-burst" aria-hidden="true">
+            {SEND_BURST_BITS.map((b, i) => (
+              <i key={i} style={{ background: b.color, '--dx': b.dx, '--dy': b.dy, '--rot': b.rot } as React.CSSProperties} />
+            ))}
+          </span>
+        )}
       </div>
       {micError && <div style={{ fontSize: '0.75rem', color: 'var(--danger)', padding: '4px 14px 0' }}>{micError}</div>}
       <div className="composer-hint">

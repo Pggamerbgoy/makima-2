@@ -1212,6 +1212,10 @@ a:focus-visible {
     animation: none !important;
   }
 
+  .send-burst {
+    display: none !important;
+  }
+
   .thinking-dots i {
     opacity: 0.7;
   }
@@ -2192,6 +2196,7 @@ a:focus-visible {
   align-items: flex-end;
   gap: 8px;
   width: 100%;
+  position: relative;
 }
 
 .composer-row textarea {
@@ -4248,6 +4253,37 @@ a:focus-visible {
 
 .avatar-stamp {
   animation: stampIn 0.32s var(--ease-out) both;
+  transition: transform 0.12s ease-out;
+  cursor: pointer;
+}
+
+.avatar-stamp:active {
+  animation: none;
+  transform: rotate(-12deg) scale(0.94);
+}
+
+/* Ledger confetti — tiny squares burst from the send button */
+.send-burst {
+  position: absolute;
+  right: 14px;
+  bottom: 12px;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.send-burst i {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  background: var(--primary);
+  animation: burstFly 0.65s var(--ease-out) forwards;
+}
+
+@keyframes burstFly {
+  from { transform: translate(0, 0) rotate(0deg); opacity: 1; }
+  to { transform: translate(var(--dx), var(--dy)) rotate(var(--rot)); opacity: 0; }
 }
 
 /* Typewriter keys: buttons physically press down */

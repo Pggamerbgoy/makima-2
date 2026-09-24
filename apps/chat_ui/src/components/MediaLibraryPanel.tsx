@@ -71,7 +71,7 @@ export const MediaLibraryPanel: React.FC<Props> = ({ wsUrl, onClose, onSelect })
           <div className="library-item-name" title={item.name}>{item.name}</div>
           <div className="library-item-actions"><button onClick={() => onSelect(item)} title="Add attachment"><Check size={15} /></button><button onClick={() => remove(item)} title="Delete"><Trash2 size={15} /></button></div>
         </article>)}</div>
-        {!items.length && !error && !loading && <div className="library-empty">No media saved yet.</div>}
+        {!items.length && !error && !loading && <div className="library-empty">Library khaali hai — kuch upload karo.</div>}
         {loading && <div className="library-empty">Loading media…</div>}
       </motion.section>
     </motion.div>

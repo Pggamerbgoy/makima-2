@@ -157,6 +157,10 @@ export const App: React.FC = () => {
   const [libraryOpen, setLibraryOpen] = useState<boolean>(false);
   const [libraryItem, setLibraryItem] = useState<MediaLibraryEntry | null>(null);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+
+  useEffect(() => {
+    document.title = activeTaskId ? '✎ Makima likh rahi hai…' : 'Makima — Autonomous AI Assistant';
+  }, [activeTaskId]);
   const [sessionSearch, setSessionSearch] = useState<string>('');
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingSessionTitle, setEditingSessionTitle] = useState<string>('');
@@ -166,6 +170,10 @@ export const App: React.FC = () => {
   const [exportOpen, setExportOpen] = useState<boolean>(false);
   const [pinnedDrawerOpen, setPinnedDrawerOpen] = useState<boolean>(false);
   const [telemetryLatency, setTelemetryLatency] = useState<number | null>(null);
+
+  useEffect(() => {
+    document.title = activeTaskId ? '✎ Makima likh rahi hai…' : 'Makima — Autonomous AI Assistant';
+  }, [activeTaskId]);
 
   const [toasts, setToasts] = useState<{ id: string; message: string; level: 'info' | 'success' | 'warning' | 'error'; durationMs: number }[]>([]);
 
