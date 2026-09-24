@@ -128,7 +128,7 @@ class VoiceEngine:
         ws_broadcast: Any,
         command_router: Any,          # OrchestrationEngine instance
         tool_registry: Any,           # ToolRegistry instance
-        model: str = "gemini-3.1-flash-live-preview",
+        model: str = "gemini-3.8-live",
         voice_name: str = "Aoede",
         voice_config: Any = None,
     ) -> None:
@@ -139,7 +139,7 @@ class VoiceEngine:
         self.model = (
             getattr(voice_config, "gemini_model", None)
             or model
-            or "gemini-3.1-flash-live-preview"
+            or "gemini-3.8-live"
         )
         self.voice_name = voice_name
         self._voice_config = voice_config
@@ -158,6 +158,12 @@ class VoiceEngine:
         # Tracked background tasks to prevent GC reclamation
         self._background_tasks: set[asyncio.Task] = set()
 
+        # One-shot (read-aloud) TTS tasks keyed by ephemeral tts_* session ids
+        self._oneshot_tasks: Dict[str, asyncio.Task] = {}
+        # Originating task_id per oneshot session — used to scope stop events
+        # and let ws_broadcast pop its _task_to_ws routing entry when done.
+        self._oneshot_task_ids: Dict[str, str] = {}
+
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     async def start(self) -> None:
@@ -170,6 +176,15 @@ class VoiceEngine:
             session_ids = list(self._sessions.keys())
         for sid in session_ids:
             await self.stop_voice_session(sid)
+        # Cancel any in-flight one-shot TTS tasks
+        oneshot = list(self._oneshot_tasks.values())
+        self._oneshot_tasks.clear()
+        self._oneshot_task_ids.clear()
+        for t in oneshot:
+            if not t.done():
+                t.cancel()
+        if oneshot:
+            await asyncio.gather(*oneshot, return_exceptions=True)
         if self._wake_daemon:
             await self._wake_daemon.stop()
         for t in list(self._background_tasks):
@@ -234,6 +249,11 @@ class VoiceEngine:
                 ))
             except Exception:
                 pass
+
+    @property
+    def wake_word_enabled(self) -> bool:
+        """Public mirror of _wake_enabled — read by GET /settings snapshot."""
+        return self._wake_enabled
 
     async def set_wake_word_enabled(self, enabled: bool) -> None:
         self._wake_enabled = enabled
@@ -364,6 +384,120 @@ class VoiceEngine:
             except Exception as e:
                 logger.debug("TTS synthesis error: %s", e)
 
+    # ── One-shot TTS (Read Aloud button — no live voice session) ─────────────
+
+    async def synthesize_oneshot_tts(
+        self, voice_session_id: str, text: str, task_id: str = ""
+    ) -> None:
+        """Gemini generate_content_stream TTS for ephemeral tts_* session ids."""
+        if not text or not text.strip():
+            return
+        prev = self._oneshot_tasks.pop(voice_session_id, None)
+        if prev and not prev.done():
+            prev.cancel()
+        task = asyncio.create_task(
+            self._run_oneshot_tts(voice_session_id, text.strip(), task_id)
+        )
+        self._oneshot_tasks[voice_session_id] = task
+        if task_id:
+            self._oneshot_task_ids[voice_session_id] = task_id
+
+        def _cleanup(t: asyncio.Task, sid: str = voice_session_id) -> None:
+            if self._oneshot_tasks.get(sid) is t:
+                self._oneshot_tasks.pop(sid, None)
+            self._oneshot_task_ids.pop(sid, None)
+
+        task.add_done_callback(_cleanup)
+
+    async def stop_oneshot_tts(self, voice_session_id: str) -> None:
+        """Cancel an in-progress one-shot TTS task and notify the UI."""
+        task = self._oneshot_tasks.pop(voice_session_id, None)
+        stopped_task_id = self._oneshot_task_ids.pop(voice_session_id, None) or None
+        if task and not task.done():
+            task.cancel()
+        if self.ws_broadcast:
+            try:
+                from ..ws_protocol import build_voice_event
+                await self.ws_broadcast(build_voice_event(
+                    "voice_tts_stopped", voice_session_id,
+                    task_id=stopped_task_id, reason="user_stop",
+                ))
+            except Exception:
+                pass
+
+    async def _run_oneshot_tts(
+        self, voice_session_id: str, text: str, task_id: str = ""
+    ) -> None:
+        """Stream PCM16 @ 24 kHz audio chunks to the UI via voice_tts_audio."""
+        from ..ws_protocol import build_voice_event
+        tid = task_id or None
+        try:
+            from google.genai import types
+            client = self._get_client()
+            model = os.environ.get("MAKIMA_TTS_MODEL", "gemini-3.1-flash-tts-preview")
+            config = types.GenerateContentConfig(
+                response_modalities=["AUDIO"],
+                speech_config=types.SpeechConfig(
+                    voice_config=types.VoiceConfig(
+                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                            voice_name=self.voice_name
+                        )
+                    )
+                ),
+            )
+            if self.ws_broadcast:
+                await self.ws_broadcast(build_voice_event(
+                    "voice_tts_started", voice_session_id, task_id=tid,
+                ))
+            sent_any = False
+            async for chunk in client.aio.models.generate_content_stream(
+                model=model, contents=text, config=config
+            ):
+                data = b""
+                try:
+                    candidates = getattr(chunk, "candidates", None) or []
+                    if candidates and candidates[0].content and candidates[0].content.parts:
+                        for part in candidates[0].content.parts:
+                            inline = getattr(part, "inline_data", None)
+                            if inline is not None and getattr(inline, "data", None):
+                                data = inline.data
+                                break
+                except Exception:
+                    data = b""
+                if data and self.ws_broadcast:
+                    sent_any = True
+                    await self.ws_broadcast(build_voice_event(
+                        "voice_tts_audio",
+                        voice_session_id,
+                        task_id=tid,
+                        audio=base64.b64encode(data).decode("ascii"),
+                        format="pcm",
+                        sample_rate=24000,
+                    ))
+            if not sent_any:
+                raise RuntimeError("Gemini TTS returned no audio data")
+            if self.ws_broadcast:
+                await self.ws_broadcast(build_voice_event(
+                    "voice_tts_stopped", voice_session_id, task_id=tid,
+                    reason="completed",
+                ))
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("One-shot TTS failed for %s: %s", voice_session_id, e)
+            if self.ws_broadcast:
+                try:
+                    await self.ws_broadcast(build_voice_event(
+                        "voice_error", voice_session_id, task_id=tid,
+                        message=f"Text-to-speech failed: {e}",
+                    ))
+                    await self.ws_broadcast(build_voice_event(
+                        "voice_tts_stopped", voice_session_id, task_id=tid,
+                        reason="error",
+                    ))
+                except Exception:
+                    pass
+
     # ── Legacy Bridge & Single-Session Duck-Type Compatibility ───────────────
 
     @property
@@ -405,8 +539,8 @@ class VoiceEngine:
             await self.stop_voice_session(sid)
 
     async def handle_ptt_down(self) -> None:
-        """No-op stub for push-to-talk key down."""
-        pass
+        """PTT key-down is a no-op today; capture starts on key-up with audio_bytes."""
+        logger.debug("PTT down received (no-op)")
 
     async def handle_ptt_up(self, audio_bytes: bytes) -> None:
         """Push-to-talk key release: forward recorded audio bytes if present."""

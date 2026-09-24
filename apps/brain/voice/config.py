@@ -93,7 +93,7 @@ class VoiceConfig:
     tts: TTSConfig = field(default_factory=TTSConfig)
     confidence: ConfidenceConfig = field(default_factory=ConfidenceConfig)
     wake_daemon: WakeDaemonConfig = field(default_factory=WakeDaemonConfig)
-    gemini_model: str = "gemini-3.1-flash-live-preview"
+    gemini_model: str = "gemini-3.8-live"
 
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "VoiceConfig":
@@ -121,7 +121,7 @@ class VoiceConfig:
             tts=cls._load_sub(TTSConfig, raw.get("tts", {})),
             confidence=cls._load_sub(ConfidenceConfig, raw.get("confidence", {})),
             wake_daemon=cls._load_sub(WakeDaemonConfig, raw.get("wake_daemon", {})),
-            gemini_model=raw.get("gemini_model", "gemini-3.1-flash-live-preview"),
+            gemini_model=raw.get("gemini_model", "gemini-3.8-live"),
         )
 
     @staticmethod

@@ -417,7 +417,7 @@ voice:
   ptt_max_hold_s: 30
   voice_engine: gemini_live
   gemini_live:
-    model: gemini-2.5-flash-native-audio-latest
+    model: gemini-3.8-live
     voice_name: Aoede
   diarization:
     enabled: false

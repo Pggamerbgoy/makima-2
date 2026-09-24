@@ -218,17 +218,18 @@ class WakeDaemon:
                 except asyncio.CancelledError:
                     break
 
-    async def _fuzzy_check_and_fire(self, _audio_bytes: bytes) -> None:
+    async def _fuzzy_check_and_fire(self, audio_bytes: bytes) -> None:
         """
-        Very lightweight stub: fires the callback if the session is not in refractory period.
-        A real implementation would call a local STT (Whisper tiny) on _audio_bytes,
-        then do a substring match. Kept minimal to avoid heavyweight deps in fallback path.
+        Fallback when openwakeword is unavailable: audio-presence heuristic only.
+        Does NOT run STT — any mic energy after the refractory gate may fire the
+        wake callback. Prefer openwakeword; treat this path as degraded.
         """
-        # For now: audio presence + time-gate is the signal in fallback mode
         now = time.monotonic()
         if now - self._last_wake_time >= self.refractory_s * 3:  # extra conservative
             self._last_wake_time = now
-            logger.debug("WakeDaemon (fuzzy fallback): wake phrase assumed from audio presence")
+            logger.warning(
+                "WakeDaemon fuzzy fallback: firing on audio presence only (no STT match) — degraded mode"
+            )
             if self.on_wake_callback:
                 try:
                     res = self.on_wake_callback()
