@@ -69,3 +69,15 @@ Module ka code likhne se pehle uska **Data Flow diagram aur Caller-Callee mappin
 - **Primary Engine**: Google GenAI SDK (Gemini 2.5 Flash free tier, Gemini 3.8 Live audio).
 - **OpenAI & Anthropic**: Sirf free tiers / free endpoints (OpenRouter Free `openrouter/free`, Groq Free, Cerebras Free, local Ollama).
 - **Zero Paid Keys**: Kisi bhi paid credit ya mandatory credit card API subscription ki zaroorat nahi hogi.
+
+---
+
+## 6. 🚫 Strict Ban on Blind Copy-Pasting & Ruthless Bloat Omission
+
+- **Zero Blind Copy-Paste**: Old Makima (`apps/brain/`, `v1`) se code blindly copy-paste karna **STRICTLY BANNED** hai.
+- **Architectural Divergence**: Makima v2 ek fresh, modern, clean architecture hai jo Nous Research Hermes Agent pattern par based hai. Bahut si cheezein v1 se radically different hongi.
+- **Ruthless Pruning (Unneeded/Low-Value Omission)**:
+  - Agar purani Makima ka koi tool, feature, abstraction, helper function, ya parameter v2 ke clean design ke liye unnecessary ya over-engineered lagta hai, **usko bilkul implement mat karo**.
+  - **No Legacy Baggage**: v1 ke 4,300-line monolithic god-modules (`system_tools.py`), 2,900-line SDK bridge bloat, aur fragile Win32 workarounds ko v2 me entry nahi milegi.
+  - Sirf wahi implement karo jo modular, clean, lightweight, strictly verified, aur Hermes architecture ke standard ko meet kare.
+
