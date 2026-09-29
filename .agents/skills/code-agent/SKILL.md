@@ -1,0 +1,52 @@
+---
+name: code-agent
+description: Code generation, syntax debugging, refactoring, code review, and script creation for Makima's Code Agent. Make sure to use this skill whenever using Code Generation, Bug Fixing, Refactoring, Qwen Coder Routing.
+---
+
+# Code Agent Skill Guide
+
+## Overview
+The **Code Agent** (`code_agent.py`) executes Code Generation, Bug Fixing, Refactoring, Qwen Coder Routing within Makima's agentic ecosystem. It provides robust error handling, structured input validation, and clean asynchronous execution.
+
+## Triggering Rules
+Make sure to trigger this skill unconditionally whenever the user requests:
+- **Primary Action**: Executing tasks related to Code Generation, Bug Fixing, Refactoring, Qwen Coder Routing.
+- **Secondary Action**: Querying, inspecting, or configuring Code Agent parameters.
+- **Workflow Action**: Delegating multi-step execution requiring code-agent capabilities.
+
+## Execution Protocols & Rules
+
+1. **Protocol Initialization**:
+   - Inspect input message parameters and validate entity types before starting task.
+   - Initialize internal agent state and logger context.
+
+2. **Core Task Execution**:
+   - Execute domain-specific tool handlers safely using non-blocking calls.
+   - Enforce safety gates for destructive or sensitive system operations.
+
+3. **Error Resilience & Fallbacks**:
+   - Intercept transient network or execution errors with automatic retry logic.
+   - Never crash the host process; degrade gracefully to informative status reports.
+
+4. **Safety & Anti-Pattern Rules**:
+   - NEVER bypass security boundaries or execute unauthorized destructive commands.
+   - NEVER output raw unformatted JSON walls to the user unless explicitly requested.
+
+5. **Phase-by-Phase Execution Sequence**:
+   - **Phase 1**: Parse objective parameters and validate target environment context.
+   - **Phase 2**: Dispatch asynchronous tool action and monitor execution state.
+   - **Phase 3**: Verify result payloads and compile executive report.
+
+6. **Output Presentation**:
+   - Present final deliverables using modern, clean Markdown formatting with clear section headers, bold lead-in bullet points, and code blocks.
+
+## Expected Response Structure
+```markdown
+# ⚡ Code Agent Execution Report
+- **Status**: Completed successfully
+- **Details**: Processed task parameters with 0 errors.
+```
+
+## Example Usage
+- **Input**: "execute task for code-agent"
+- **Result**: Task completed successfully with structured Markdown report.

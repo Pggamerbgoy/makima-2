@@ -14,7 +14,7 @@ import time
 from collections import Counter, deque
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger("makima.mental_state")
 
@@ -39,7 +39,7 @@ class MentalStateSnapshot:
     window_switches_last_min: int
     battery_percent: float
     is_plugged: bool
-    recommended_action: Optional[str] = None
+    recommended_action: str | None = None
     timestamp: float = field(default_factory=time.time)
 
     def to_dict(self) -> dict[str, Any]:
@@ -62,10 +62,10 @@ class MentalStateDetector:
     from OS-level window transitions, duration timers, and hardware battery telemetry.
     """
 
-    _instance: Optional["MentalStateDetector"] = None
+    _instance: MentalStateDetector | None = None
     _init_lock: threading.Lock = threading.Lock()
 
-    def __new__(cls) -> "MentalStateDetector":
+    def __new__(cls) -> MentalStateDetector:
         if cls._instance is None:
             with cls._init_lock:
                 if cls._instance is None:

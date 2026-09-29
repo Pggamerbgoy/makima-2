@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any, Optional
+from typing import Any
 
 try:
     import httpx
@@ -30,13 +30,13 @@ class AsyncMcpMultiplexer:
     during response waiting.
     """
 
-    def __init__(self, command: list[str], env: Optional[dict[str, str]] = None) -> None:
+    def __init__(self, command: list[str], env: dict[str, str] | None = None) -> None:
         self.command = command
         self.env = env
-        self.process: Optional[asyncio.subprocess.Process] = None
+        self.process: asyncio.subprocess.Process | None = None
         self._request_counter: int = 0
         self._pending_futures: dict[int, asyncio.Future[dict[str, Any]]] = {}
-        self._reader_task: Optional[asyncio.Task] = None
+        self._reader_task: asyncio.Task | None = None
         self._write_lock = asyncio.Lock()
         # Bug 7 fix: track initialization state so restart triggers re-handshake
         self._initialized: bool = False
@@ -142,7 +142,7 @@ class AsyncMcpMultiplexer:
     async def call_method(
         self,
         method: str,
-        params: Optional[dict[str, Any]] = None,
+        params: dict[str, Any] | None = None,
         timeout_s: float = 30.0,
         **kwargs: Any,
     ) -> dict[str, Any]:
@@ -177,7 +177,7 @@ class AsyncMcpMultiplexer:
     async def _send_raw_method(
         self,
         method: str,
-        params: Optional[dict[str, Any]] = None,
+        params: dict[str, Any] | None = None,
         *,
         timeout: float = 30.0,
     ) -> dict[str, Any]:
@@ -232,15 +232,15 @@ class AsyncMcpHttpClient:
     def __init__(
         self,
         base_url: str,
-        headers: Optional[dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
         timeout_s: float = 30.0,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.headers = headers or {}
         self.timeout_s = timeout_s
-        self._client: Optional[Any] = None
+        self._client: Any | None = None
         self._request_counter: int = 0
-        self._session_endpoint: Optional[str] = None
+        self._session_endpoint: str | None = None
         self._initialized: bool = False
         self._write_lock = asyncio.Lock()
 
@@ -270,7 +270,7 @@ class AsyncMcpHttpClient:
     async def call_method(
         self,
         method: str,
-        params: Optional[dict[str, Any]] = None,
+        params: dict[str, Any] | None = None,
         timeout_s: float = 30.0,
         **kwargs: Any,
     ) -> dict[str, Any]:
@@ -298,7 +298,7 @@ class AsyncMcpHttpClient:
     async def _send_raw_method(
         self,
         method: str,
-        params: Optional[dict[str, Any]] = None,
+        params: dict[str, Any] | None = None,
         *,
         timeout: float = 30.0,
     ) -> dict[str, Any]:
@@ -427,9 +427,9 @@ class McpToolAdapter:
 
 
 __all__ = [
-    "AsyncMcpMultiplexer",
-    "McpStdioClient",
     "AsyncMcpHttpClient",
+    "AsyncMcpMultiplexer",
     "AsyncMcpSseClient",
+    "McpStdioClient",
     "McpToolAdapter",
 ]

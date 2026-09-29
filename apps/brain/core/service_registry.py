@@ -16,42 +16,32 @@ class S:
     """
     SETTINGS = "settings_store"
     AI_HANDLER = "ai_handler"
-    GUARDRAILS = "guardrails"
     OLLAMA = "ollama"
     MEMORY = "memory"
     ETERNAL_MEMORY = "eternal_memory"
     TOOL_REGISTRY = "tool_registry"
-    CAPABILITY_MESH = "capability_mesh"
-    SAGA_RECOVERY = "saga_recovery"
-    RECOVERY_MANAGER = "recovery_manager"
+    PREFERENCE_ENGINE = "preference_engine"
+    PREFERENCE = "preference_engine"
     EXECUTION_RUNTIME = "execution_runtime"
-    CLIPBOARD = "clipboard_handler"
-    SCREEN_READER = "screen_reader"
-    REFLEXION_ENGINE = "reflexion_engine"
     SKILL_LIBRARY = "skill_library"
-    LEARNING_ENGINE = "learning_engine"
     LEARNING_COORD = "learning_coordinator"
-    LEARNING = "learning"
-    ORCHESTRATOR = "orchestrator"
+    LEARNING = "learning_coordinator"
+    ORCHESTRATOR = "orchestration_engine"
     TASK_MANAGER = "task_manager"
     ORCH_ENGINE = "orchestration_engine"
-    COMMAND_ROUTER = "command_router"
-    ROUTER = "router"
+    COMMAND_ROUTER = "orchestration_engine"
+    ROUTER = "orchestration_engine"
     VOICE = "voice"
     SPEECH = "speech"
     VOICE_ENGINE = "voice_engine"
-    WATCHDOG = "watchdog"
-    DISK_GUARD = "disk_guard"
     HEALTH = "health"
-    GHOST_WATCHDOG = "ghost_watchdog"
     PROACTIVE = "proactive_orchestrator"
     FOCUS = "focus_profiles"
     MEMORY_FORGET = "memory_forget"
     MEDIA_STORE = "media_store"
     MULTIMODAL = "multimodal"
     DURABLE_TASKS = "durable_task_engine"
-    THOUGHT_PLANNER = "thought_planner"
-    PREFERENCE_ENGINE = "preference_engine"
+    PERSONALITY = "personality"
 
 
 class ServiceRegistry:
@@ -106,19 +96,11 @@ class ServiceRegistry:
 
     @property
     def learning_coordinator(self) -> Any:
-        return self._services.get("reflexion_engine") or self._services.get("learning_coordinator")
-
-    @property
-    def reflexion_engine(self) -> Any:
-        return self._services.get("reflexion_engine")
+        return self._services.get("learning_coordinator")
 
     @property
     def skill_library(self) -> Any:
         return self._services.get("skill_library")
-
-    @property
-    def learning_engine(self) -> Any:
-        return self._services.get("reflexion_engine")
 
     @property
     def memory(self) -> Any:
@@ -129,21 +111,10 @@ class ServiceRegistry:
         return self._services.get("tool_registry")
 
     @property
-    def guardrails(self) -> Any:
-        return self._services.get("guardrails")
-
-    @property
-    def saga_recovery(self) -> Any:
-        return self._services.get("saga_recovery") or self._services.get("recovery_manager")
-
-    @property
     def durable_task_engine(self) -> Any:
         return self._services.get("durable_task_engine")
 
     @property
-    def thought_planner(self) -> Any:
-        return self._services.get("thought_planner")
-
-    @property
     def preference_engine(self) -> Any:
         return self._services.get(S.PREFERENCE_ENGINE)
+

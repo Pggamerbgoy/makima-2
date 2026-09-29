@@ -3,10 +3,10 @@ Makima OS — Declarative Tool Loader
 Location: apps/brain/core/tool_loader.py
 
 Registers SHARED tools whose handlers live in standalone modules.
-Agents that own an implementation register their own tools via
-BaseAgent._register_local_tools or _TOOL_MAP — this loader is only for
-cross-agent, stateless handlers (web_search, fetch_url) and browser tool
-SCHEMAS (implementation delegated to BrowserAgent._shared_bc singleton).
+Agents may expose an optional _TOOL_MAP dict (see sdk_bridge.py) —
+this loader is only for cross-agent, stateless handlers
+(web_search, fetch_url) and browser tool SCHEMAS
+(implementation delegated to BrowserAgent._shared_bc singleton).
 """
 
 import logging
@@ -174,7 +174,18 @@ def register_core_tools(tool_registry: Any, services: Any = None) -> None:
                     b64 = img_data.b64_json
                 elif hasattr(img_data, "url") and img_data.url:
                     import urllib.request
-                    urllib.request.urlretrieve(img_data.url, fpath)
+                    # P0: image URLs come from the provider API — accept https only,
+                    # never hang without a timeout (urlretrieve has neither).
+                    if not str(img_data.url).lower().startswith("https://"):
+                        logger.warning("[generate_image] Rejected non-https image URL")
+                        continue
+                    req = urllib.request.Request(
+                        img_data.url, headers={"User-Agent": "Makima/1.0"}
+                    )
+                    with urllib.request.urlopen(req, timeout=30) as resp:
+                        raw = resp.read()
+                    with open(fpath, "wb") as f:
+                        f.write(raw)
                     with open(fpath, "rb") as f:
                         b64 = base64.b64encode(f.read()).decode("ascii")
                 else:

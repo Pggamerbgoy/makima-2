@@ -26,6 +26,8 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
 from typing import Any
 
+from pydantic import TypeAdapter
+
 # Opt-in SDK tracing: MAKIMA_SDK_TRACING=1 (or AGENTS_TRACING_DISABLED=0).
 # Default remains off for non-OpenAI BYOK backends (avoid noisy/no-op OpenAI export).
 _SDK_TRACING_ENABLED = (
@@ -475,26 +477,32 @@ def to_sdk_function_tool(
                 sig = inspect.signature(target_callable)
                 synthesized_props: dict[str, Any] = {}
                 required_params: list[str] = []
+                try:
+                    resolved_annotations = inspect.get_annotations(target_callable, eval_str=True)
+                except Exception:
+                    resolved_annotations = getattr(target_callable, "__annotations__", {})
+
                 for p_name, param in sig.parameters.items():
                     if p_name in ("self", "cls", "context", "kwargs", "args") or param.kind in (
                         inspect.Parameter.VAR_POSITIONAL,
                         inspect.Parameter.VAR_KEYWORD,
                     ):
                         continue
-                    type_name = "string"
-                    ann = param.annotation
-                    ann_str = ann if isinstance(ann, str) else getattr(ann, "__name__", str(ann))
-                    if ann is int or ann_str in ("int", "integer"):
-                        type_name = "integer"
-                    elif ann is float or ann_str in ("float", "number"):
-                        type_name = "number"
-                    elif ann is bool or ann_str in ("bool", "boolean"):
-                        type_name = "boolean"
-                    elif ann is list or (isinstance(ann_str, str) and ann_str.startswith("list")):
-                        type_name = "array"
-                    elif ann is dict or (isinstance(ann_str, str) and ann_str.startswith("dict")):
-                        type_name = "object"
-                    synthesized_props[p_name] = {"type": type_name, "description": f"Parameter '{p_name}'"}
+                    ann = resolved_annotations.get(p_name, param.annotation)
+                    try:
+                        ta = TypeAdapter(ann)
+                        prop_def = ta.json_schema()
+                        prop_def.pop("title", None)
+                    except Exception:
+                        prop_def = {"type": "string"}
+                    if "type" not in prop_def:
+                        prop_def["type"] = "string"
+                    if prop_def.get("type") == "array" and (
+                        "items" not in prop_def or not prop_def.get("items") or "type" not in prop_def["items"]
+                    ):
+                        prop_def["items"] = {"type": "string"}
+                    prop_def["description"] = f"Parameter '{p_name}'"
+                    synthesized_props[p_name] = prop_def
                     if param.default is inspect.Parameter.empty:
                         required_params.append(p_name)
                 if synthesized_props:
@@ -505,6 +513,14 @@ def to_sdk_function_tool(
                     }
             except Exception as _exc:
                 logger.debug("suppressed: %s", _exc)
+
+    # Ensure any array property in tool_schema has 'items'
+    if isinstance(tool_schema, dict) and isinstance(tool_schema.get("properties"), dict):
+        for prop in tool_schema["properties"].values():
+            if isinstance(prop, dict) and prop.get("type") == "array" and (
+                "items" not in prop or not prop.get("items") or "type" not in prop["items"]
+            ):
+                prop["items"] = {"type": "string"}
 
     invoker = ToolInvokerProxy(
         tool_name=clean_name,
@@ -2266,6 +2282,7 @@ def make_specialist_agent(
 
     domain_task = spec.get("task") or task
     model = MakimaModel(ai_handler, task=domain_task, agent_name=f"{domain}_specialist")
+    mem = getattr(orchestrator, "memory", None) or getattr(orchestrator, "eternal_memory", None)
     return Agent(
         name=spec.get("title") or f"{domain.title()} Specialist",
         instructions=(
@@ -2276,7 +2293,7 @@ def make_specialist_agent(
         ),
         tools=sdk_tools,
         model=model,
-        hooks=MakimaAgentHooks(ws_broadcast),
+        hooks=MakimaAgentHooks(ws_broadcast, eternal_memory=mem),
         input_guardrails=[dangerous_command_guard],
         output_guardrails=[no_secret_leak_guard],
         handoffs=[],
@@ -2362,7 +2379,8 @@ def make_unified_agent(
     agent_cfg = config if config is not None else getattr(orchestrator, "config", None)
     sdk_tools = to_sdk_tools(tool_items, registry=reg, config=agent_cfg)
     model = MakimaModel(ai_handler, task=task, agent_name="makima")
-    agent_hooks = MakimaAgentHooks(ws_broadcast)
+    mem = getattr(orchestrator, "memory", None) or getattr(orchestrator, "eternal_memory", None)
+    agent_hooks = MakimaAgentHooks(ws_broadcast, eternal_memory=mem)
 
     handoffs: list[Any] = []
     want_handoffs = _handoffs_enabled(agent_cfg) if enable_handoffs is None else bool(enable_handoffs)
@@ -2419,9 +2437,61 @@ def make_triage_agent(
 # =============================================================================
 
 class MakimaAgentHooks(AgentHooks):
-    """Agent-scoped hooks passed to Agent(hooks=...)."""
-    def __init__(self, ws_broadcast: Callable | None = None) -> None:
+    """Agent-scoped hooks passed to Agent(hooks=...).
+
+    When EternalMemory is provided, on_llm_start() injects relevant
+    learned rules into the agent's instructions before each LLM call.
+    """
+    def __init__(
+        self,
+        ws_broadcast: Callable | None = None,
+        eternal_memory: Any | None = None,
+        reflexion_engine: Any | None = None,
+    ) -> None:
         self.ws_broadcast = ws_broadcast
+        self.eternal_memory = eternal_memory or reflexion_engine
+
+    async def on_llm_start(
+        self,
+        context: Any,
+        agent: Any,
+        system_prompt: str | None,
+        input_items: list[Any],
+    ) -> None:
+        """Inject learned rules from EternalMemory into agent instructions before LLM call."""
+        if not self.eternal_memory or not hasattr(self.eternal_memory, "search_rules"):
+            return
+        try:
+            query_parts: list[str] = []
+            for item in reversed(input_items[-5:] if input_items else []):
+                content = ""
+                if isinstance(item, dict):
+                    content = str(item.get("content", ""))[:200]
+                elif hasattr(item, "content"):
+                    content = str(getattr(item, "content", ""))[:200]
+                if content:
+                    query_parts.append(content)
+                    break
+            if not query_parts:
+                return
+
+            lessons = await self.eternal_memory.search_rules(
+                query=" ".join(query_parts), top_k=3
+            )
+            if not lessons:
+                return
+
+            lesson_block = "\n\n[LEARNED FROM PAST EXPERIENCE]\n" + "\n".join(
+                f"• {lesson}" for lesson in lessons
+            ) + "\n[/LEARNED]"
+
+            if hasattr(agent, "instructions") and isinstance(agent.instructions, str):
+                if "[LEARNED FROM PAST EXPERIENCE]" not in agent.instructions:
+                    agent.instructions = agent.instructions + lesson_block
+                    logger.debug("[MakimaAgentHooks] Injected %d lessons into agent '%s'",
+                                 len(lessons), getattr(agent, "name", "agent"))
+        except Exception as exc:
+            logger.debug("[MakimaAgentHooks] on_llm_start lesson injection error: %s", exc)
 
 
 def _extract_call_id(context: Any, call: Any = None) -> str:
@@ -2463,6 +2533,9 @@ class MakimaRunHooks(RunHooks):
         plan_milestones: list[dict[str, Any]] | None = None,
         tool_registry: Any | None = None,
         confirm_timeout_s: float = 60.0,
+        eternal_memory: Any | None = None,
+        reflexion_engine: Any | None = None,
+        task_description: str = "",
     ) -> None:
         self.ws_broadcast = ws_broadcast
         self.task_id = task_id
@@ -2472,6 +2545,9 @@ class MakimaRunHooks(RunHooks):
         self._current_milestone_idx: int = 0
         self.tool_registry = tool_registry
         self.confirm_timeout_s = confirm_timeout_s
+        self.eternal_memory = eternal_memory or reflexion_engine
+        self.task_description = task_description
+        self._background_tasks: set[asyncio.Task] = set()
         # Parallel execution & loop detection tracking
         self._lock = asyncio.Lock()
         self._active_calls: dict[str, dict[str, Any]] = {}
@@ -2561,7 +2637,11 @@ class MakimaRunHooks(RunHooks):
             context["_makima_call_id"] = call_id
 
         # Provide progress reporter callback on context for long-running tools
-        progress_cb = lambda pct, msg="": asyncio.create_task(self.emit_tool_progress(tool_name, pct, msg, call_id=call_id))
+        def progress_cb(pct: float, msg: str = "") -> asyncio.Task:
+            task = asyncio.create_task(self.emit_tool_progress(tool_name, pct, msg, call_id=call_id))
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
+            return task
         try:
             context.report_progress = progress_cb
         except Exception as _exc:
@@ -2759,6 +2839,19 @@ class MakimaRunHooks(RunHooks):
                 "result_summary": result_str[:300],
                 "ts": time.time(),
             })
+
+            # Direct learning: record tool failure lesson directly to EternalMemory
+            if not is_ok and self.eternal_memory and hasattr(self.eternal_memory, "save_rule"):
+                try:
+                    clean_err = result_str[:200].replace("\n", " ").strip()
+                    rule_msg = f"Tool '{tool_name}' failed with error: {clean_err}. Verify arguments or use alternative tool."
+                    t = asyncio.create_task(
+                        self.eternal_memory.save_rule(rule_text=rule_msg, keywords=[tool_name, "error"])
+                    )
+                    self._background_tasks.add(t)
+                    t.add_done_callback(self._background_tasks.discard)
+                except Exception as _em_err:
+                    logger.debug("[MakimaRunHooks] save_rule dispatch error: %s", _em_err)
 
         if self.ws_broadcast and self.task_id:
             try:

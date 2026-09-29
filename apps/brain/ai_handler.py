@@ -27,7 +27,11 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncGenerator, Callable, Dict, List, Literal, Optional, Set, Tuple, Union
+from typing import (
+    Any,
+    Literal,
+)
+from collections.abc import AsyncGenerator
 
 try:
     import dotenv
@@ -54,7 +58,6 @@ logger = logging.getLogger("makima.ai_handler")
 
 class StreamingUnavailableError(Exception):
     """Raised when streaming response is unavailable or yields no tokens."""
-    pass
 
 
 class RateLimitError(Exception):
@@ -66,7 +69,6 @@ class RateLimitError(Exception):
 
 class AllBackendsDownError(Exception):
     """Raised when all LLM backends are unavailable."""
-    pass
 
 
 # Model-specific stop/control tokens that sometimes leak into streamed output.
@@ -120,7 +122,7 @@ _SUBSTRING_PLACEHOLDERS = (
 )
 
 
-def is_valid_api_key(key: Optional[str]) -> bool:
+def is_valid_api_key(key: str | None) -> bool:
     """Check whether a provided API key is genuine and non-placeholder."""
     if not key or not isinstance(key, str):
         return False
@@ -194,7 +196,7 @@ class BackendProfile:
     api_key: str = ""
     api_keys: list[str] = field(default_factory=list)
     model: str = ""
-    base_url: Optional[str] = None
+    base_url: str | None = None
     context_limit: int = 128000
     tasks: list[str] = field(default_factory=list)
     supports_tools: bool = True
@@ -203,7 +205,7 @@ class BackendProfile:
     circuit_breaker: CircuitBreaker = field(default_factory=CircuitBreaker)
     rate_limit_tpm: int = 0
     rate_limit_rpm: int = 0
-    max_tools: Optional[int] = None
+    max_tools: int | None = None
     ewma_latency_ms: float = 0.0
     _key_idx: int = 0
 
@@ -221,7 +223,7 @@ class BackendProfile:
             return self.api_keys[self._key_idx]
         return self.api_key
 
-    def is_available(self, client_api_key: Optional[str] = None) -> bool:
+    def is_available(self, client_api_key: str | None = None) -> bool:
         """Check if backend is healthy, unblocked by circuit breaker, and credentialed."""
         if not self.circuit_breaker.can_attempt():
             return False
@@ -764,8 +766,7 @@ class GeminiAdapter(BaseProviderAdapter):
                         if url.startswith("data:"):
                             mime_type, b64_data = url.split(";", 1)
                             mime_type = mime_type[5:]
-                            if b64_data.startswith("base64,"):
-                                b64_data = b64_data[7:]
+                            b64_data = b64_data.removeprefix("base64,")
                             parts.append({
                                 "inlineData": {
                                     "mimeType": mime_type,
@@ -862,8 +863,7 @@ class GeminiAdapter(BaseProviderAdapter):
                         if url.startswith("data:"):
                             mime_type, b64_data = url.split(";", 1)
                             mime_type = mime_type[5:]
-                            if b64_data.startswith("base64,"):
-                                b64_data = b64_data[7:]
+                            b64_data = b64_data.removeprefix("base64,")
                             parts.append({
                                 "inlineData": {
                                     "mimeType": mime_type,
@@ -1181,8 +1181,8 @@ class ParetoRouter:
     def route(
         self,
         task: str = "general",
-        constraints: Optional[dict[str, Any]] = None,
-        ewma_latencies: Optional[dict[str, float]] = None,
+        constraints: dict[str, Any] | None = None,
+        ewma_latencies: dict[str, float] | None = None,
     ) -> list[str]:
         """Compute the prioritized list of backend names to attempt."""
         cons = dict(constraints or {})
@@ -1310,7 +1310,7 @@ class AIHandler:
         api_key: str = "",
         model: str = "",
         base_url: str = "",
-    ) -> Optional[BackendProfile]:
+    ) -> BackendProfile | None:
         """Ensure a BackendProfile exists and is ready for a given provider/alias."""
         resolved = self._resolve_backend_name(provider_name)
         profile = self.backends.get(resolved) or self.backends.get(provider_name)
@@ -1349,7 +1349,7 @@ class AIHandler:
 
     def __init__(
         self,
-        config: Optional[dict[str, Any]] = None,
+        config: dict[str, Any] | None = None,
         rate_limit_manager: Any = None,
         ws_broadcast: Any = None,
     ) -> None:
@@ -1370,7 +1370,7 @@ class AIHandler:
         self.default_provider: str = self._resolve_backend_name(raw_provider) if (raw_provider and raw_provider != "auto") else ""
         self.rate_limit_manager = rate_limit_manager
         self.ws_broadcast = ws_broadcast
-        self._http_client: Optional[Any] = None
+        self._http_client: Any | None = None
 
         # Provider Strategy Adapters Registry
         self.adapters: dict[str, BaseProviderAdapter] = {
@@ -1440,7 +1440,7 @@ class AIHandler:
         # Pareto Router initialization
         self.router = ParetoRouter(self.backends, self.task_routing)
 
-    def get_default_base_url(self, backend_name: str) -> Optional[str]:
+    def get_default_base_url(self, backend_name: str) -> str | None:
         return self._default_base_urls.get(backend_name)
 
     def _get_http_client(self) -> Any:
@@ -1449,7 +1449,7 @@ class AIHandler:
         if self._http_client is None or getattr(self._http_client, "is_closed", True):
             raw_tls = self.config.get("tls_verify") if "tls_verify" in self.config else (self.config.get("llm", {}).get("tls_verify") if isinstance(self.config.get("llm"), dict) else None)
             if raw_tls is None:
-                raw_tls = os.environ.get("MAKIMA_TLS_VERIFY", "false").lower() in ("true", "1", "yes")
+                raw_tls = os.environ.get("MAKIMA_TLS_VERIFY", "true").lower() in ("true", "1", "yes")
             tls_verify = bool(raw_tls)
             limits = httpx.Limits(
                 max_keepalive_connections=50,
@@ -1662,8 +1662,12 @@ class AIHandler:
             if len(api_keys) <= 1:
                 api_keys = []
 
-            # Backend enabled status (respects explicit enabled: false)
+            # Backend enabled status (respects explicit enabled: false).
+            # NOTE: keyless backends stay registered on purpose — BYOK clients
+            # supply keys per-request (is_available checks those). has_credentials
+            # is informational only; do NOT gate is_enabled on it (breaks BYOK).
             has_credentials = bool(api_key or api_keys or name == "ollama")
+            logger.debug("[%s] Server-side credentials present: %s", name, has_credentials)
             is_enabled = bool(cfg.get("enabled", True))
 
             # Strict provider filtering: If disabled or non-Alibaba when only_alibaba is active, skip completely
@@ -1779,8 +1783,8 @@ class AIHandler:
     def _get_backend_order(
         self,
         task: str,
-        constraints: Optional[dict[str, Any]] = None,
-        agent_name: Optional[str] = None,
+        constraints: dict[str, Any] | None = None,
+        agent_name: str | None = None,
         **kwargs: Any,
     ) -> list[str]:
         """Get ordered list of backends via Dynamic Pareto Router + Per-Agent Model Routing."""
@@ -2117,7 +2121,7 @@ class AIHandler:
 
     sanitize_response = _sanitize_response
 
-    def try_parse_json(self, text: str) -> Optional[dict]:
+    def try_parse_json(self, text: str) -> dict | None:
         """
         Resilient multi-pass JSON parser.
         Extracts valid JSON from markdown fences, single-quotes, and prose wrappers.
@@ -2288,7 +2292,6 @@ class AIHandler:
         references tools/function-calling. Network errors and quota/rate-limit
         responses leave the configured value untouched.
         """
-        import httpx
 
         probe_tools = [{
             "type": "function",
@@ -2559,7 +2562,7 @@ class AIHandler:
         temperature: float | None = None,
         max_tokens: int | None = None,
         **kwargs: Any,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """
         Structured-output helper: native JSON mode + resilient parse + optional
         key validation. Prefer this over raw generate(require_json=True)+try_parse_json.

@@ -12,7 +12,6 @@ Follows Makima Zero-Agent-Dependency rule: Tools define pure logic, Agents impor
 """
 from __future__ import annotations
 
-import ast
 import asyncio
 import json
 import logging
@@ -21,7 +20,7 @@ import re
 import socket
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 logger = logging.getLogger("makima.tools.security")
 
@@ -39,7 +38,7 @@ DANGEROUS_MODULES = {
     "pty", "socket", "ctypes", "multiprocessing"
 }
 
-VULNERABILITY_DB: Dict[str, Dict[str, str]] = {
+VULNERABILITY_DB: dict[str, dict[str, str]] = {
     # --- Python web frameworks & libraries ---
     "requests": {"<2.31.0": "CVE-2023-32681 (Proxy-Authorization header leak)"},
     "urllib3": {"<2.0.6": "CVE-2023-43804 (Cookie header leak)"},
@@ -67,7 +66,7 @@ VULNERABILITY_DB: Dict[str, Dict[str, str]] = {
     "express": {"<4.18.2": "CVE-2022-24999 (qs prototype pollution)"},
 }
 
-SECRET_PATTERNS: List[Tuple[str, str]] = [
+SECRET_PATTERNS: list[tuple[str, str]] = [
     (r"AKIA[0-9A-Z]{16}", "AWS Access Key ID"),
     (r"(?i)(aws_secret_access_key|aws_secret_key)\s*[:=]\s*['\"]?([A-Za-z0-9/+=]{40})['\"]?", "AWS Secret Key"),
     (r"ghp_[A-Za-z0-9]{36}", "GitHub Personal Access Token"),
@@ -135,7 +134,7 @@ def calculate_shannon_entropy(data: str) -> float:
     return entropy
 
 
-def parse_requirements(file_path: Path) -> Dict[str, str]:
+def parse_requirements(file_path: Path) -> dict[str, str]:
     """Parses a Python requirements.txt file into a dict of {package: version}."""
     deps = {}
     try:
@@ -152,7 +151,7 @@ def parse_requirements(file_path: Path) -> Dict[str, str]:
     return deps
 
 
-def parse_package_json(file_path: Path) -> Dict[str, str]:
+def parse_package_json(file_path: Path) -> dict[str, str]:
     """Parses a Node.js package.json file into a dict of {package: version}."""
     deps = {}
     try:

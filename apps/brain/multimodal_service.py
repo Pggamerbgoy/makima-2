@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import base64
 import asyncio
+import base64
 import io
-from pathlib import Path
 from typing import Any
 
 from .media_store import MediaNotFoundError, MediaStore

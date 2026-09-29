@@ -191,6 +191,7 @@ makima_live_test_sandbox/
 
 # Downloaded models & local runtime data
 models/
+data/
 data/blackboard/
 data/media_history/
 data/media_history.json
@@ -216,13 +217,17 @@ charts/
 # Extra non-core workspace output & meta tool folders
 makima_workspace/
 meta/
-skills/
+/skills/
 
 # Local tool caches & IDE extras
 .blackbox/
 .kilo/
 .opencode/
 .claude/
+.claude-flow/
+.ruflo/
+.swarm/
+bridge_state.json
 .clinerules/
 .ruff_cache/
 makima_brain.egg-info/

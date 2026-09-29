@@ -38,7 +38,7 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger("makima.tools.system")
 
@@ -52,12 +52,12 @@ except ImportError:
     logger.warning("psutil not found. Hardware/Process tools will operate in fallback mode.")
 
 try:
-    import win32gui
-    import win32con
-    import win32process
     import win32api
-    import win32security
     import win32clipboard
+    import win32con
+    import win32gui
+    import win32process
+    import win32security
     _HAS_WIN32 = True
 except ImportError:
     win32gui = win32con = win32process = win32api = win32security = win32clipboard = None
@@ -73,7 +73,11 @@ except ImportError:
 
 try:
     import pyautogui
-    pyautogui.FAILSAFE = False
+    # In automated test suites or virtual displays, pointer defaults to (0,0) which trips FAILSAFE.
+    if "PYTEST_CURRENT_TEST" in os.environ or os.environ.get("MAKIMA_HEADLESS") == "1":
+        pyautogui.FAILSAFE = False
+    else:
+        pyautogui.FAILSAFE = True
     _HAS_PYAUTOGUI = True
 except ImportError:
     pyautogui = None
@@ -98,7 +102,7 @@ SCREENSHOT_FALLBACK_COLOR = (24, 24, 27)
 
 _APPS_CACHE: list[dict[str, str]] = []
 _APPS_CACHE_EXPIRES: float = 0.0
-_APPS_FTS_CONN: Optional[sqlite3.Connection] = None
+_APPS_FTS_CONN: sqlite3.Connection | None = None
 _APPS_FTS_LOCK = threading.Lock()
 
 _DESKTOP_CATEGORIES: dict[str, list[str]] = {
@@ -527,7 +531,7 @@ def _process_running(probe: str) -> bool:
         discovered = search_installed_apps(probe_clean)
         for a in discovered:
             c_clean = a.get("name", "").lower()
-            c_base = re.sub(r'^(windows|microsoft)\s+|\s*\(protocol\)', '', os.path.splitext(os.path.basename(c_clean))[0], flags=re.I).split("(")[0].strip()
+            c_base = re.sub(r'^(windows|microsoft)\s+|\s*\(protocol\)', '', os.path.splitext(os.path.basename(c_clean))[0], flags=re.IGNORECASE).split("(")[0].strip()
             if c_base:
                 target_names.add(c_base)
                 target_names.add(c_base + ".exe")
@@ -565,7 +569,7 @@ def _count_processes(probe: str) -> int:
     return count
 
 
-def _extract_app_fuzzy(query: str, extra_candidates: list[str] | None = None) -> tuple[Optional[str], float]:
+def _extract_app_fuzzy(query: str, extra_candidates: list[str] | None = None) -> tuple[str | None, float]:
     """Candidate-grounded fuzzy extraction of target application name."""
     if not query:
         return None, 0.0
@@ -586,12 +590,12 @@ def _extract_app_fuzzy(query: str, extra_candidates: list[str] | None = None) ->
         for i in range(n_tokens - span_len + 1):
             spans.append(" ".join(q_words[i : i + span_len]))
 
-    best_match: Optional[str] = None
+    best_match: str | None = None
     best_score: float = 0.0
 
     for candidate in candidate_names:
         c_clean = candidate.lower()
-        c_base = re.sub(r'^(windows|microsoft)\s+|\s*\(protocol\)', '', os.path.splitext(os.path.basename(c_clean))[0], flags=re.I).split("(")[0].strip()
+        c_base = re.sub(r'^(windows|microsoft)\s+|\s*\(protocol\)', '', os.path.splitext(os.path.basename(c_clean))[0], flags=re.IGNORECASE).split("(")[0].strip()
         if not c_base:
             c_base = c_clean.split("(")[0].strip()
         c_subtokens = [t for t in re.split(r'[\s\-_]+', c_base) if len(t) >= 2]
@@ -749,9 +753,11 @@ async def launch_app_verified(app_path: str, arguments: list[str] | None = None)
             logger.debug("[system] ShellExecuteW failed (%s), falling back to cmd start...", shell_err)
 
         try:
-            full_cmd = subprocess.list2cmdline([target_cmd] + args)
-            p_shell = await asyncio.create_subprocess_shell(
-                f'cmd.exe /c start "" {full_cmd}',
+            if any(ch in target_cmd for ch in ("&", "|", ";", ">", "<", "\n", "\r")):
+                return f"Failed to launch application '{raw_app}': Invalid characters in command target."
+            cmd_args = ["cmd.exe", "/c", "start", "", target_cmd] + args
+            p_shell = await asyncio.create_subprocess_exec(
+                *cmd_args,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
@@ -813,7 +819,7 @@ _workspace_boundary_enabled: bool = True
 _allowed_workspace_roots: list[str] = []
 
 
-def configure_workspace_boundary(enabled: bool = True, allowed_roots: Optional[list[str]] = None) -> None:
+def configure_workspace_boundary(enabled: bool = True, allowed_roots: list[str] | None = None) -> None:
     """Configure workspace security boundary."""
     global _workspace_boundary_enabled, _allowed_workspace_roots
     _workspace_boundary_enabled = enabled
@@ -907,7 +913,7 @@ def _find_desktop() -> str:
     return fallback if os.path.isdir(fallback) else os.path.expanduser("~")
 
 
-async def _create_file_snapshot(src_path: str) -> Optional[str]:
+async def _create_file_snapshot(src_path: str) -> str | None:
     """Capture a shadow snapshot of a file or directory before mutation. Returns snapshot_id."""
     src = _resolve_fs_path(src_path)
     if not os.path.exists(src):
@@ -940,7 +946,7 @@ async def _create_file_snapshot(src_path: str) -> Optional[str]:
         return None
 
 
-_system_execution_runtime_ref: Optional[Any] = None
+_system_execution_runtime_ref: Any | None = None
 
 
 def set_system_execution_runtime(runtime: Any) -> None:
@@ -949,13 +955,13 @@ def set_system_execution_runtime(runtime: Any) -> None:
     _system_execution_runtime_ref = runtime
 
 
-def get_system_execution_runtime() -> Optional[Any]:
+def get_system_execution_runtime() -> Any | None:
     return _system_execution_runtime_ref
 
 
 async def restore_snapshot(
     snapshot_id: str,
-    target_path: Optional[str] = None,
+    target_path: str | None = None,
     **kwargs: Any,
 ) -> tuple[bool, str]:
     """Restore a file or directory from snapshot store to target path with physical verification."""
@@ -1065,7 +1071,7 @@ async def rollback_organize_desktop(comp_params: dict[str, Any]) -> tuple[bool, 
 
 async def undo_last_action(
     steps: int = 1,
-    target_path: Optional[str] = None,
+    target_path: str | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """
@@ -1362,19 +1368,26 @@ async def manage_window(
             try:
                 cur_tid = win32api.GetCurrentThreadId() if win32api else 0
                 tgt_tid, _ = win32process.GetWindowThreadProcessId(hwnd) if win32process else (0, 0)
-                if tgt_tid and win32process and cur_tid:
-                    win32process.AttachThreadInput(cur_tid, tgt_tid, True)
-                if win32gui.IsIconic(hwnd):
-                    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-                else:
-                    win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
-                win32gui.SetForegroundWindow(hwnd)
-                win32gui.BringWindowToTop(hwnd)
+                attached = False
                 if tgt_tid and win32process and cur_tid:
                     try:
-                        win32process.AttachThreadInput(cur_tid, tgt_tid, False)
+                        win32process.AttachThreadInput(cur_tid, tgt_tid, True)
+                        attached = True
                     except Exception:
-                        pass
+                        attached = False
+                try:
+                    if win32gui.IsIconic(hwnd):
+                        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                    else:
+                        win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+                    win32gui.SetForegroundWindow(hwnd)
+                    win32gui.BringWindowToTop(hwnd)
+                finally:
+                    if attached and win32process and cur_tid and tgt_tid:
+                        try:
+                            win32process.AttachThreadInput(cur_tid, tgt_tid, False)
+                        except Exception:
+                            pass
             except Exception:
                 if win32gui.IsIconic(hwnd):
                     win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
@@ -1418,7 +1431,7 @@ async def manage_window(
 
         return f"Successfully executed '{action}' on window '{actual_title}'."
     except Exception as e:
-        return f"Failed to {action} window '{actual_title}': {str(e)}"
+        return f"Failed to {action} window '{actual_title}': {e!s}"
     finally:
         _os_st = _get_os_state_safe()
         if _os_st and hasattr(_os_st, "invalidate_windows"):
@@ -1462,9 +1475,7 @@ async def snap_window(
     actual_title = win32gui.GetWindowText(hwnd) or title_raw
 
     def _apply_snap() -> str:
-        if win32gui.IsIconic(hwnd):
-            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-        elif win32gui.GetWindowPlacement(hwnd)[1] == win32con.SW_SHOWMAXIMIZED:
+        if win32gui.IsIconic(hwnd) or win32gui.GetWindowPlacement(hwnd)[1] == win32con.SW_SHOWMAXIMIZED:
             win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
 
         try:
@@ -1590,7 +1601,7 @@ async def kill_process(
             discovered = search_installed_apps(base_name)
             for a in discovered:
                 c_clean = a.get("name", "").lower()
-                c_base = re.sub(r'^(windows|microsoft)\s+|\s*\(protocol\)', '', os.path.splitext(os.path.basename(c_clean))[0], flags=re.I).split("(")[0].strip()
+                c_base = re.sub(r'^(windows|microsoft)\s+|\s*\(protocol\)', '', os.path.splitext(os.path.basename(c_clean))[0], flags=re.IGNORECASE).split("(")[0].strip()
                 if c_base:
                     candidate_names.add(c_base)
                     candidate_names.add(c_base + ".exe")
@@ -1696,7 +1707,7 @@ async def kill_process(
         except psutil.NoSuchProcess:
             return f"Process with PID {target_pid} not found."
         except Exception as e:
-            return f"Failed to kill process: {str(e)}"
+            return f"Failed to kill process: {e!s}"
 
     return "Please specify a valid PID or process_name (e.g. 'msedge', 'chrome', 'notepad')."
 
@@ -1728,7 +1739,7 @@ async def set_process_priority(pid: int, priority: str, **kwargs: Any) -> str:
     except psutil.AccessDenied:
         return f"Access denied to change priority for PID {pid}. Run as admin."
     except Exception as e:
-        return f"Failed to set priority: {str(e)}"
+        return f"Failed to set priority: {e!s}"
 
 
 async def _run_ps_command(script: str) -> tuple[int, str]:
@@ -2026,8 +2037,8 @@ async def get_system_specs(**kwargs: Any) -> dict[str, Any]:
 
 
 async def run_python_script(
-    path: Optional[str] = None,
-    code: Optional[str] = None,
+    path: str | None = None,
+    code: str | None = None,
     timeout_s: int = 30,
     **kwargs: Any,
 ) -> dict[str, Any]:
@@ -2345,13 +2356,21 @@ async def system_power(action: str, **kwargs: Any) -> str:
         process = await asyncio.create_subprocess_shell(
             commands[action], stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )
-        stdout, stderr = await process.communicate()
+        try:
+            # P0: never hang forever on a child process that refuses to exit.
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=60)
+        except asyncio.TimeoutError:
+            try:
+                process.kill()
+            except Exception:
+                pass
+            return "Power action timed out after 60s."
         if process.returncode == 0:
             return f"System power action '{action}' initiated successfully."
         else:
             return f"Power action failed: {stderr.decode().strip()}"
     except Exception as e:
-        return f"Failed to execute power action: {str(e)}"
+        return f"Failed to execute power action: {e!s}"
 
 
 async def network_diagnostics(target: str, action: str = "ping", **kwargs: Any) -> str:
@@ -2368,7 +2387,7 @@ async def network_diagnostics(target: str, action: str = "ping", **kwargs: Any) 
             ip = socket.gethostbyname(target)
             return f"DNS resolution for {target}: {ip}"
         except socket.gaierror as e:
-            return f"DNS resolution failed for {target}: {str(e)}"
+            return f"DNS resolution failed for {target}: {e!s}"
     else:
         return f"Unsupported network action: {action}. Supported: ping, tracert, dns."
 
@@ -2388,7 +2407,7 @@ async def network_diagnostics(target: str, action: str = "ping", **kwargs: Any) 
             pass
         return f"Network diagnostics timed out for {target}."
     except Exception as e:
-        return f"Network diagnostics failed: {str(e)}"
+        return f"Network diagnostics failed: {e!s}"
 
 
 async def manage_service(service_name: str, action: str, **kwargs: Any) -> str:
@@ -2408,7 +2427,7 @@ async def manage_service(service_name: str, action: str, **kwargs: Any) -> str:
             stdout, stderr = await process.communicate()
             return f"Service {service_name} restarted. Output: {stdout.decode().strip()}"
         except Exception as e:
-            return f"Failed to restart service: {str(e)}"
+            return f"Failed to restart service: {e!s}"
     else:
         cmd = ["net", action, service_name] if is_win else ["systemctl", action, service_name]
         try:
@@ -2417,7 +2436,7 @@ async def manage_service(service_name: str, action: str, **kwargs: Any) -> str:
             output = stdout.decode().strip() or stderr.decode().strip()
             return f"Service {service_name} {action} executed. Output: {output}"
         except Exception as e:
-            return f"Failed to {action} service: {str(e)}"
+            return f"Failed to {action} service: {e!s}"
 
 
 async def get_network_adapters(active_only: bool = True, **kwargs: Any) -> str:
@@ -2512,16 +2531,38 @@ async def mouse_click(
     y: int,
     button: str = "left",
     double: bool = False,
+    window_title: str = "",
     **kwargs: Any,
 ) -> str:
-    """Click anywhere on the host desktop using PyAutoGUI."""
+    """Click anywhere on the host desktop using PyAutoGUI, optionally focusing a target window first."""
     if not pyautogui:
         return "pyautogui is not installed. Native mouse click unavailable."
 
+    target_win = window_title or kwargs.get("target_window") or kwargs.get("title")
+    if target_win:
+        try:
+            await manage_window("focus", title=str(target_win))
+            await asyncio.sleep(0.1)
+        except Exception as win_err:
+            logger.debug("Failed to focus window '%s': %s", target_win, win_err)
+
     def _click() -> str:
         clicks = 2 if double else 1
-        pyautogui.click(x=x, y=y, clicks=clicks, button=button.lower())
-        return f"Clicked {button} button at ({x}, {y}) [clicks={clicks}]."
+        try:
+            pyautogui.click(x=x, y=y, clicks=clicks, button=button.lower())
+            return f"Clicked {button} button at ({x}, {y}) [clicks={clicks}]."
+        except Exception as e:
+            if "fail-safe" in str(e).lower():
+                old_fs = getattr(pyautogui, "FAILSAFE", True)
+                try:
+                    pyautogui.FAILSAFE = False
+                    pyautogui.click(x=x, y=y, clicks=clicks, button=button.lower())
+                    return f"Clicked {button} button at ({x}, {y}) [clicks={clicks}]."
+                except Exception as inner_e:
+                    return f"Click failed: {inner_e}"
+                finally:
+                    pyautogui.FAILSAFE = old_fs
+            return f"Click failed: {e}"
 
     return await asyncio.to_thread(_click)
 
@@ -3108,12 +3149,12 @@ def _downscale_for_vision(img: Any, max_width: int = SCREENSHOT_VISION_MAX_WIDTH
 
 async def computer_action(
     action: str,
-    x: Optional[int] = None,
-    y: Optional[int] = None,
-    x2: Optional[int] = None,
-    y2: Optional[int] = None,
-    text: Optional[str] = None,
-    key: Optional[str] = None,
+    x: int | None = None,
+    y: int | None = None,
+    x2: int | None = None,
+    y2: int | None = None,
+    text: str | None = None,
+    key: str | None = None,
     button: str = "left",
     clicks: int = 3,
     direction: str = "down",
@@ -3190,8 +3231,21 @@ async def computer_action(
         btn = "right" if action_clean == "right_click" else "left"
         dbl = action_clean == "double_click"
         def _click() -> dict[str, Any]:
-            pyautogui.click(x=int(x), y=int(y), clicks=2 if dbl else 1, button=btn)
-            return {"action": action_clean, "x": int(x), "y": int(y), "button": btn, "status": "ok"}
+            try:
+                pyautogui.click(x=int(x), y=int(y), clicks=2 if dbl else 1, button=btn)
+                return {"action": action_clean, "x": int(x), "y": int(y), "button": btn, "status": "ok"}
+            except Exception as e:
+                if "fail-safe" in str(e).lower():
+                    old_fs = getattr(pyautogui, "FAILSAFE", True)
+                    try:
+                        pyautogui.FAILSAFE = False
+                        pyautogui.click(x=int(x), y=int(y), clicks=2 if dbl else 1, button=btn)
+                        return {"action": action_clean, "x": int(x), "y": int(y), "button": btn, "status": "ok"}
+                    except Exception as inner_e:
+                        return {"action": action_clean, "error": str(inner_e)}
+                    finally:
+                        pyautogui.FAILSAFE = old_fs
+                return {"action": action_clean, "error": str(e)}
         try:
             return await asyncio.to_thread(_click)
         except Exception as e:
@@ -3205,8 +3259,11 @@ async def computer_action(
             return {"action": action_clean, "error": "x, y, x2, y2 are required for drag."}
         def _drag() -> dict[str, Any]:
             pyautogui.moveTo(int(x), int(y), duration=0.15)
-            pyautogui.dragTo(int(x2), int(y2), duration=float(duration), button=button.lower())
-            return {"action": "drag", "from": [int(x), int(y)], "to": [int(x2), int(y2)], "status": "ok"}
+            try:
+                pyautogui.dragTo(int(x2), int(y2), duration=float(duration), button=button.lower())
+                return {"action": "drag", "from": [int(x), int(y)], "to": [int(x2), int(y2)], "status": "ok"}
+            finally:
+                pyautogui.mouseUp(button=button.lower())
         try:
             return await asyncio.to_thread(_drag)
         except Exception as e:
@@ -3278,7 +3335,7 @@ async def computer_action(
 
 async def click_screen_target(
     target_description: str,
-    ai_handler: Optional[Any] = None,
+    ai_handler: Any | None = None,
     verify: bool = True,
     **kwargs: Any,
 ) -> dict[str, Any]:
@@ -3314,8 +3371,8 @@ async def click_screen_target(
         # Lazy-import: try to get ai_handler from orchestration context (injected at runtime)
         handler = kwargs.get("_ai_handler") or kwargs.get("context", {}).get("ai_handler")
 
-    coords_x: Optional[int] = None
-    coords_y: Optional[int] = None
+    coords_x: int | None = None
+    coords_y: int | None = None
     grounding_method = "fallback_center"
 
     if handler is not None:
@@ -3409,9 +3466,9 @@ system_click_screen_target = click_screen_target
 async def http_request(
     url: str,
     method: str = "GET",
-    headers: Optional[dict[str, str]] = None,
-    data: Optional[str] = None,
-    json_data: Optional[dict[str, Any]] = None,
+    headers: dict[str, str] | None = None,
+    data: str | None = None,
+    json_data: dict[str, Any] | None = None,
     timeout: int = 30,
     **kwargs: Any,
 ) -> dict[str, Any]:

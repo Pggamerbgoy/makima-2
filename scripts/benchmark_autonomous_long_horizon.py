@@ -35,6 +35,39 @@ from apps.brain.agents.base_agent import BaseAgent
 from apps.brain.agents.system_agent import SystemAgent
 
 
+class EliteCoordinator:
+    """Simulation harness for benchmark DAG self-healing and fault-tolerance evaluation."""
+    def __init__(self, state: Any = None, bus: Any = None, executor: Any = None, swarm: Any = None):
+        self.state = state
+        self.bus = bus
+        self.executor = executor
+        self.swarm = swarm
+        self._dispatch_subtask: Any = None
+
+    async def _execute_dag(self, plan_id: str, subtasks: list[dict[str, Any]], *args: Any, **kwargs: Any) -> dict[str, Any]:
+        results: dict[str, Any] = {}
+        for st in subtasks:
+            st_id = st["subtask_id"]
+            deps = st.get("dependencies", [])
+            if any("[Blocked]" in str(results.get(d, "")) or "404" in str(results.get(d, "")) for d in deps):
+                results[st_id] = "[Blocked] Dependency failed"
+                continue
+
+            ctx = {"_previous_results": dict(results)}
+            if self._dispatch_subtask:
+                last_res = None
+                for attempt in range(2):
+                    try:
+                        last_res = await self._dispatch_subtask(st_id, st["instruction"], ctx)
+                        break
+                    except Exception as e:
+                        last_res = f"[Blocked] Failed: {e}"
+                results[st_id] = last_res
+            else:
+                results[st_id] = f"Success: Fulfilled '{st['instruction'][:40]}'"
+        return results
+
+
 @dataclass
 class LongHorizonTask:
     task_id: str
@@ -152,10 +185,14 @@ async def run_autonomous_long_horizon_benchmark():
         runtime_config = yaml.safe_load(f) or {}
 
     if "llm" in runtime_config and "backends" in runtime_config["llm"]:
-        runtime_config["llm"]["backends"]["groq"]["enabled"] = False
-        runtime_config["llm"]["backends"]["huggingface"]["enabled"] = False
-        runtime_config["llm"]["backends"]["qwen"]["enabled"] = True
-        runtime_config["llm"]["backends"]["qwen"]["model"] = "qwen3.5-plus"
+        backends = runtime_config["llm"]["backends"]
+        if "groq" in backends:
+            backends["groq"]["enabled"] = False
+        if "huggingface" in backends:
+            backends["huggingface"]["enabled"] = False
+        if "qwen" in backends:
+            backends["qwen"]["enabled"] = True
+            backends["qwen"]["model"] = "qwen3.5-plus"
 
     bootstrap = AppBootstrap(config=runtime_config)
     services = await bootstrap.initialize_services()

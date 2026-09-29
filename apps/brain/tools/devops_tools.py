@@ -2,8 +2,8 @@
 Makima v7.2 — Elite DevOps Tools
 Docker management, log parsing, CI/CD status.
 """
-import logging
 import json
+import logging
 from typing import Any
 
 logger = logging.getLogger("makima.tools.devops")

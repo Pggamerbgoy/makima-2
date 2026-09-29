@@ -96,6 +96,7 @@ class DurableTaskEngine:
         self._event_store = event_store
         self._task_manager = task_manager
         self._conn = event_store._conn
+        self._resuming_tasks: set[str] = set()
         self._init_db_sync()
 
     async def start(self) -> None:
@@ -149,9 +150,30 @@ class DurableTaskEngine:
 
     def _row_to_checkpoint(self, row: tuple) -> CheckpointedTask:
         """Convert a database row into a CheckpointedTask."""
-        completed_steps = json.loads(row[4]) if row[4] else []
-        remaining_steps = json.loads(row[5]) if row[5] else []
-        context_snapshot = json.loads(row[6]) if row[6] else {}
+        completed_steps = []
+        if row[4]:
+            try:
+                completed_steps = json.loads(row[4])
+            except (json.JSONDecodeError, TypeError, ValueError) as exc:
+                logger.warning("[DurableTaskEngine] Failed to decode completed_steps for task %s: %s", row[1], exc)
+                completed_steps = []
+
+        remaining_steps = []
+        if row[5]:
+            try:
+                remaining_steps = json.loads(row[5])
+            except (json.JSONDecodeError, TypeError, ValueError) as exc:
+                logger.warning("[DurableTaskEngine] Failed to decode remaining_steps for task %s: %s", row[1], exc)
+                remaining_steps = []
+
+        context_snapshot = {}
+        if row[6]:
+            try:
+                context_snapshot = json.loads(row[6])
+            except (json.JSONDecodeError, TypeError, ValueError) as exc:
+                logger.warning("[DurableTaskEngine] Failed to decode context_snapshot for task %s: %s", row[1], exc)
+                context_snapshot = {}
+
         return CheckpointedTask(
             checkpoint_id=row[0],
             task_id=row[1],
@@ -208,59 +230,63 @@ class DurableTaskEngine:
                 clean_context[k] = str(v)
 
         existing = self.get_checkpoint_sync(task_id)
-        if existing:
-            cid = existing.checkpoint_id
-            created_at = existing.created_at
-            self._conn.execute(
-                """
-                UPDATE task_checkpoints
-                SET task_name = ?, original_prompt = ?, completed_steps = ?,
-                    remaining_steps = ?, context_snapshot = ?, turn_count = ?,
-                    max_turns = ?, status = ?, updated_at = ?, resume_after = ?
-                WHERE checkpoint_id = ?
-                """,
-                (
-                    c_name,
-                    actual_prompt,
-                    json.dumps(c_completed, default=str),
-                    json.dumps(c_remaining, default=str),
-                    json.dumps(clean_context, default=str),
-                    turn_count,
-                    max_turns,
-                    status,
-                    now,
-                    actual_resume,
-                    cid,
-                ),
-            )
-        else:
-            cid = f"cp_{uuid.uuid4().hex[:12]}"
-            created_at = now
-            self._conn.execute(
-                """
-                INSERT INTO task_checkpoints
-                (checkpoint_id, task_id, task_name, original_prompt, completed_steps,
-                 remaining_steps, context_snapshot, turn_count, max_turns, status,
-                 created_at, updated_at, resume_after)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    cid,
-                    task_id,
-                    c_name,
-                    actual_prompt,
-                    json.dumps(c_completed, default=str),
-                    json.dumps(c_remaining, default=str),
-                    json.dumps(clean_context, default=str),
-                    turn_count,
-                    max_turns,
-                    status,
-                    created_at,
-                    now,
-                    actual_resume,
-                ),
-            )
-        self._conn.commit()
+        try:
+            if existing:
+                cid = existing.checkpoint_id
+                created_at = existing.created_at
+                self._conn.execute(
+                    """
+                    UPDATE task_checkpoints
+                    SET task_name = ?, original_prompt = ?, completed_steps = ?,
+                        remaining_steps = ?, context_snapshot = ?, turn_count = ?,
+                        max_turns = ?, status = ?, updated_at = ?, resume_after = ?
+                    WHERE checkpoint_id = ?
+                    """,
+                    (
+                        c_name,
+                        actual_prompt,
+                        json.dumps(c_completed, default=str),
+                        json.dumps(c_remaining, default=str),
+                        json.dumps(clean_context, default=str),
+                        turn_count,
+                        max_turns,
+                        status,
+                        now,
+                        actual_resume,
+                        cid,
+                    ),
+                )
+            else:
+                cid = f"cp_{uuid.uuid4().hex[:12]}"
+                created_at = now
+                self._conn.execute(
+                    """
+                    INSERT INTO task_checkpoints
+                    (checkpoint_id, task_id, task_name, original_prompt, completed_steps,
+                     remaining_steps, context_snapshot, turn_count, max_turns, status,
+                     created_at, updated_at, resume_after)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        cid,
+                        task_id,
+                        c_name,
+                        actual_prompt,
+                        json.dumps(c_completed, default=str),
+                        json.dumps(c_remaining, default=str),
+                        json.dumps(clean_context, default=str),
+                        turn_count,
+                        max_turns,
+                        status,
+                        created_at,
+                        now,
+                        actual_resume,
+                    ),
+                )
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
 
         # Emit durability audit event
         self._event_store.append_sync(
@@ -331,30 +357,19 @@ class DurableTaskEngine:
     def mark_completed_sync(self, task_id: str, final_result: Any = None) -> bool:
         """Mark task checkpoint as completed synchronously."""
         now = time.time()
-        cur = self._conn.execute(
-            "UPDATE task_checkpoints SET status = 'completed', updated_at = ? WHERE task_id = ?",
-            (now, task_id),
-        )
-        self._conn.commit()
+        try:
+            cur = self._conn.execute(
+                "UPDATE task_checkpoints SET status = 'completed', updated_at = ? WHERE task_id = ?",
+                (now, task_id),
+            )
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
         self._event_store.append_sync(
             "task_durable_completed",
             task_id=task_id,
             payload={"final_result": str(final_result)[:200] if final_result else None},
-        )
-        return cur.rowcount > 0
-
-    def mark_failed_sync(self, task_id: str, error: str = "") -> bool:
-        """Mark task checkpoint as failed synchronously."""
-        now = time.time()
-        cur = self._conn.execute(
-            "UPDATE task_checkpoints SET status = 'failed', updated_at = ? WHERE task_id = ?",
-            (now, task_id),
-        )
-        self._conn.commit()
-        self._event_store.append_sync(
-            "task_durable_failed",
-            task_id=task_id,
-            payload={"error": error},
         )
         return cur.rowcount > 0
 
@@ -399,34 +414,15 @@ class DurableTaskEngine:
 
     async def get_checkpoint(self, task_id: str) -> CheckpointedTask | None:
         """Async lookup of checkpoint."""
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self.get_checkpoint_sync, task_id)
+        async with self._event_store._get_lock():
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(None, self.get_checkpoint_sync, task_id)
 
     async def list_pending_tasks(self) -> list[CheckpointedTask]:
         """Return all tasks with status='active' or 'paused'."""
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self.list_pending_tasks_sync)
-
-    async def schedule_resume(self, task_id: str, resume_after_seconds: float) -> bool:
-        """Set resume_after timestamp for proactive orchestrator resumption."""
-        resume_ts = time.time() + max(0.0, float(resume_after_seconds))
         async with self._event_store._get_lock():
-            def _update():
-                cur = self._conn.execute(
-                    "UPDATE task_checkpoints SET resume_after = ?, status = 'paused', updated_at = ? WHERE task_id = ?",
-                    (resume_ts, time.time(), task_id),
-                )
-                self._conn.commit()
-                return cur.rowcount > 0
-
             loop = asyncio.get_running_loop()
-            ok = await loop.run_in_executor(None, _update)
-            if ok:
-                logger.info(
-                    "[DurableTaskEngine] Scheduled resume for task %s in %.1fs (at %f)",
-                    task_id, resume_after_seconds, resume_ts,
-                )
-            return ok
+            return await loop.run_in_executor(None, self.list_pending_tasks_sync)
 
     async def mark_completed(self, task_id: str, final_result: Any = None) -> bool:
         """Async update status to 'completed'."""
@@ -440,18 +436,6 @@ class DurableTaskEngine:
                     logger.debug("[DurableTaskEngine] Error syncing completion with TaskManager: %s", e)
             return ok
 
-    async def mark_failed(self, task_id: str, error: str = "") -> bool:
-        """Async update status to 'failed'."""
-        async with self._event_store._get_lock():
-            loop = asyncio.get_running_loop()
-            ok = await loop.run_in_executor(None, self.mark_failed_sync, task_id, error)
-            if self._task_manager:
-                try:
-                    await self._task_manager.fail_task(task_id, error_message=error)
-                except Exception as e:
-                    logger.debug("[DurableTaskEngine] Error syncing failure with TaskManager: %s", e)
-            return ok
-
     async def resume_task(self, task_id: str) -> ResumedTask | None:
         """
         Load checkpoint from SQLite, reconstruct execution context and prompt,
@@ -461,6 +445,30 @@ class DurableTaskEngine:
         if not cp:
             logger.warning("[DurableTaskEngine] Cannot resume task %s — checkpoint not found", task_id)
             return None
+
+        # Atomic Compare-and-Swap: claim task if paused or active to prevent duplicate execution
+        async with self._event_store._get_lock():
+            if task_id in self._resuming_tasks:
+                logger.warning("[DurableTaskEngine] Cannot resume task %s — task is not paused or already claimed", task_id)
+                return None
+            self._resuming_tasks.add(task_id)
+
+            def _cas_activate() -> int:
+                cur = self._conn.execute(
+                    "UPDATE task_checkpoints SET status = 'active', updated_at = ? WHERE checkpoint_id = ? AND status IN ('paused', 'active')",
+                    (time.time(), cp.checkpoint_id),
+                )
+                self._conn.commit()
+                return cur.rowcount
+            loop = asyncio.get_running_loop()
+            rows_updated = await loop.run_in_executor(None, _cas_activate)
+
+        if rows_updated == 0:
+            self._resuming_tasks.discard(task_id)
+            logger.warning("[DurableTaskEngine] Cannot resume task %s — task is not paused or already claimed", task_id)
+            return None
+
+        cp.status = "active"
 
         # Reconstruct canonical Task contract if TaskManager available
         task_obj: Task | None = None
@@ -506,16 +514,6 @@ class DurableTaskEngine:
         reconstructed_context["is_resumed"] = True
         reconstructed_context["checkpoint_id"] = cp.checkpoint_id
         reconstructed_context["turn_count"] = cp.turn_count
-
-        async with self._event_store._get_lock():
-            def _mark_active():
-                self._conn.execute(
-                    "UPDATE task_checkpoints SET status = 'active', updated_at = ? WHERE checkpoint_id = ?",
-                    (time.time(), cp.checkpoint_id),
-                )
-                self._conn.commit()
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, _mark_active)
 
         logger.info("[DurableTaskEngine] Resumed task %s (turn %d, %d remaining steps)", task_id, cp.turn_count, len(cp.remaining_steps))
         return ResumedTask(

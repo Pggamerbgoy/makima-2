@@ -29,7 +29,7 @@ import os
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger("makima.voice.engine")
 
@@ -84,7 +84,7 @@ class VoiceSession:
     """State for a single active voice session."""
     voice_session_id: str
     conversation_id: str
-    settings: Dict[str, Any] = field(default_factory=dict)
+    settings: dict[str, Any] = field(default_factory=dict)
     paused: bool = False
     started_at: float = field(default_factory=time.monotonic)
 
@@ -92,8 +92,13 @@ class VoiceSession:
     _client: Any = field(default=None, repr=False)
     _session: Any = field(default=None, repr=False)
     _session_cm: Any = field(default=None, repr=False)
-    _receive_task: Optional[asyncio.Task] = field(default=None, repr=False)
+    _receive_task: asyncio.Task | None = field(default=None, repr=False)
     _active: bool = field(default=True, repr=False)
+    # Tool-call ids the server canceled after a barge-in — responses for
+    # these must NOT be sent back (server discarded the calls).
+    _canceled_call_ids: set[str] = field(default_factory=set, repr=False)
+    # Latest resumption handle from the server (None until first update).
+    _resumption_handle: str | None = field(default=None, repr=False)
 
 
 class VoiceEngine:
@@ -145,7 +150,7 @@ class VoiceEngine:
         self._voice_config = voice_config
 
         # Sessions map: voice_session_id → VoiceSession
-        self._sessions: Dict[str, VoiceSession] = {}
+        self._sessions: dict[str, VoiceSession] = {}
         self._sessions_lock = asyncio.Lock()
 
         # Wake daemon (optional, may be None if disabled in config)
@@ -159,10 +164,10 @@ class VoiceEngine:
         self._background_tasks: set[asyncio.Task] = set()
 
         # One-shot (read-aloud) TTS tasks keyed by ephemeral tts_* session ids
-        self._oneshot_tasks: Dict[str, asyncio.Task] = {}
+        self._oneshot_tasks: dict[str, asyncio.Task] = {}
         # Originating task_id per oneshot session — used to scope stop events
         # and let ws_broadcast pop its _task_to_ws routing entry when done.
-        self._oneshot_task_ids: Dict[str, str] = {}
+        self._oneshot_task_ids: dict[str, str] = {}
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -286,7 +291,7 @@ class VoiceEngine:
         self,
         voice_session_id: str,
         conversation_id: str = "",
-        settings: Dict[str, Any] = None,
+        settings: dict[str, Any] = None,
     ) -> None:
         if not self._valid_session_id(voice_session_id):
             logger.warning("Rejected malformed voice session id: %s", voice_session_id)
@@ -356,7 +361,12 @@ class VoiceEngine:
             logger.info("Voice session stopped: %s", voice_session_id)
 
     async def barge_in(self, voice_session_id: str) -> None:
-        """Interrupt current TTS playback — signals to Gemini Live."""
+        """Interrupt current TTS playback — signals to Gemini Live.
+
+        Generation cancel happens server-side on fresh user audio; here we
+        notify the UI, whose stopAudio() flushes queued playback so the agent
+        stops talking over the user.
+        """
         session = self._sessions.get(voice_session_id)
         if session and session._session:
             try:
@@ -366,8 +376,8 @@ class VoiceEngine:
                     await self.ws_broadcast(build_voice_event(
                         "voice_tts_stopped", voice_session_id, reason="barge_in",
                     ))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("barge_in broadcast failed: %s", e)
 
     async def synthesize_session_tts(
         self, voice_session_id: str, text: str, task_id: str = ""
@@ -508,7 +518,7 @@ class VoiceEngine:
     async def start_session(
         self,
         session_id: str = "default",
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
     ) -> bool:
         """Single-session starter for legacy callers (e.g. main.py / GeminiLiveBridge)."""
         await self.start_voice_session(session_id, conversation_id=session_id)
@@ -549,11 +559,11 @@ class VoiceEngine:
 
     # ── Gemini Live connection ────────────────────────────────────────────────
 
-    def _build_tools(self) -> List[Any]:
+    def _build_tools(self) -> list[Any]:
         """Build Gemini FunctionDeclaration list dynamically from ToolRegistry."""
         from google.genai import types
 
-        declarations: List[Any] = []
+        declarations: list[Any] = []
 
         # 1. Populate from ToolRegistry — prioritize essential daily OS & media tools first
         if self.tool_registry and hasattr(self.tool_registry, "list_tools"):
@@ -605,9 +615,89 @@ class VoiceEngine:
 
         return [types.Tool(function_declarations=declarations)]
 
+    def _live_cfg(self) -> Any:
+        """Server-native Live feature switches (configs/voice_config.json → live).
+
+        Returns the live section of VoiceConfig, or None when unavailable —
+        every consumer below falls back to safe defaults.
+        """
+        return getattr(self._voice_config, "live", None)
+
+    @staticmethod
+    def _live_sensitivity(value: Any, kind: str):
+        """Map 'high'|'low' config strings onto SDK sensitivity enums.
+
+        Unknown/missing values fail closed to HIGH start sensitivity so
+        barge-in stays responsive; end sensitivity falls back to HIGH.
+        """
+        from google.genai import types
+        text = str(value or "high").strip().lower()
+        if kind == "start":
+            return (
+                types.StartSensitivity.START_SENSITIVITY_LOW
+                if text == "low"
+                else types.StartSensitivity.START_SENSITIVITY_HIGH
+            )
+        return (
+            types.EndSensitivity.END_SENSITIVITY_LOW
+            if text == "low"
+            else types.EndSensitivity.END_SENSITIVITY_HIGH
+        )
+
+    def _build_live_config(self, session: VoiceSession) -> Any:
+        """Build a fresh LiveConnectConfig per (re)connect attempt.
+
+        Rebuilt every time (not cached): session._resumption_handle changes
+        across rotations, and a stale config would resume nothing.
+        """
+        from google.genai import types
+
+        tools = self._build_tools()
+        live = self._live_cfg()
+        # Server-native features: the model does VAD/transcription/compression/
+        # resumption — we only configure + consume. Tunables live in
+        # configs/voice_config.json → live (hot-reloaded VoiceConfig).
+        vad_start = self._live_sensitivity(getattr(live, "vad_start_sensitivity", "high"), "start")
+        vad_end = self._live_sensitivity(getattr(live, "vad_end_sensitivity", "high"), "end")
+        prefix_ms = int(getattr(live, "prefix_padding_ms", 300) or 300)
+        silence_ms = int(getattr(live, "silence_duration_ms", 600) or 600)
+        want_in_tx = bool(getattr(live, "input_transcription", True))
+        want_out_tx = bool(getattr(live, "output_transcription", True))
+        want_compress = bool(getattr(live, "context_compression", True))
+        trigger_tok = int(getattr(live, "compression_trigger_tokens", 12000) or 12000)
+        want_resume = bool(getattr(live, "session_resumption", True))
+        return types.LiveConnectConfig(
+            response_modalities=["AUDIO"],
+            system_instruction=types.Content(parts=[types.Part(text=self.SYSTEM_PROMPT)]),
+            tools=tools,
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                        voice_name=self.voice_name
+                    )
+                )
+            ),
+            realtime_input_config=types.RealtimeInputConfig(
+                automatic_activity_detection=types.AutomaticActivityDetection(
+                    start_of_speech_sensitivity=vad_start,
+                    end_of_speech_sensitivity=vad_end,
+                    prefix_padding_ms=prefix_ms,
+                    silence_duration_ms=silence_ms,
+                ),
+            ),
+            input_audio_transcription=types.AudioTranscriptionConfig() if want_in_tx else None,
+            output_audio_transcription=types.AudioTranscriptionConfig() if want_out_tx else None,
+            context_window_compression=types.ContextWindowCompressionConfig(
+                sliding_window=types.SlidingWindow(),
+                trigger_tokens=trigger_tok,
+            ) if want_compress else None,
+            session_resumption=types.SessionResumptionConfig(
+                handle=session._resumption_handle,
+            ) if want_resume else None,
+        )
+
     async def _connect_and_stream(self, session: VoiceSession) -> None:
         """Connect to Gemini Live and stream responses back to the UI."""
-        from google.genai import types
         from ..ai_handler import is_valid_api_key
 
         session_id = session.voice_session_id
@@ -639,58 +729,106 @@ class VoiceEngine:
                 ))
             return
 
-        tools = self._build_tools()
-        config = types.LiveConnectConfig(
-            response_modalities=["AUDIO"],
-            system_instruction=types.Content(parts=[types.Part(text=self.SYSTEM_PROMPT)]),
-            tools=tools,
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name=self.voice_name
-                    )
-                )
-            ),
-        )
+        live = self._live_cfg()
+        max_attempts = int(getattr(live, "reconnect_max_attempts", 10) or 0)
+        base_delay = float(getattr(live, "reconnect_base_delay_s", 2.0) or 2.0)
+        max_delay = float(getattr(live, "reconnect_max_delay_s", 30.0) or 30.0)
+        attempt = 0
 
-        try:
-            session_cm = client.aio.live.connect(model=self.model, config=config)
-            gemini_session = await session_cm.__aenter__()
-            session._session = gemini_session
-            session._session_cm = session_cm
-        except Exception as e:
-            logger.error("Failed to connect to Gemini Live: %s", e)
+        # Connect → stream → reconnect loop. Explicit stop flips
+        # session._active (via _close_session) and always exits; anything else
+        # (GoAway rotation, network blip) resumes with the stored handle.
+        while session._active:
+            try:
+                config = self._build_live_config(session)
+                session_cm = client.aio.live.connect(model=self.model, config=config)
+                gemini_session = await session_cm.__aenter__()
+                session._session = gemini_session
+                session._session_cm = session_cm
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                attempt += 1
+                logger.error("Failed to connect to Gemini Live (attempt %d): %s", attempt, e)
+                if max_attempts and attempt >= max_attempts:
+                    if self.ws_broadcast:
+                        from ..ws_protocol import build_voice_event
+                        await self.ws_broadcast(build_voice_event(
+                            "voice_error", session_id, message=f"Could not connect to Gemini Live: {e}",
+                        ))
+                    return
+                await asyncio.sleep(min(max_delay, base_delay * (2 ** (attempt - 1))))
+                continue
+
+            # Connected — backoff resets; stale cancel-ids belong to the old transport.
+            attempt = 0
+            session._canceled_call_ids.clear()
+            resumed = bool(session._resumption_handle)
+            logger.info("Gemini Live session connected: %s (model=%s resumed=%s)", session_id, self.model, resumed)
             if self.ws_broadcast:
                 from ..ws_protocol import build_voice_event
                 await self.ws_broadcast(build_voice_event(
-                    "voice_error", session_id, message=f"Could not connect to Gemini Live: {e}",
+                    "voice_session_state", session_id,
+                    state="listening",
+                    requires_wake_word=False,
+                    resumed=resumed,
                 ))
-            return
 
-        logger.info("Gemini Live session connected: %s (model=%s)", session_id, self.model)
-        if self.ws_broadcast:
-            from ..ws_protocol import build_voice_event
-            await self.ws_broadcast(build_voice_event(
-                "voice_session_state", session_id,
-                state="listening",
-                requires_wake_word=False,
-            ))
+            try:
+                await self._receive_loop(session)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning("Gemini Live transport error for %s: %s", session_id, e)
+            finally:
+                await self._teardown_transport(session)
 
-        try:
-            await self._receive_loop(session)
-        finally:
-            await self._close_session(session)
+            if not session._active:
+                break
+            logger.info(
+                "Gemini Live reconnecting %s in %.1fs (resumption handle %s)",
+                session_id, min(max_delay, base_delay),
+                "present" if session._resumption_handle else "absent",
+            )
+            try:
+                await asyncio.sleep(min(max_delay, base_delay))
+            except asyncio.CancelledError:
+                raise
+
+    async def _teardown_transport(self, session: VoiceSession) -> None:
+        """Close the current Live transport WITHOUT killing the session.
+
+        Unlike _close_session (explicit stop: flips _active, cancels the task),
+        this keeps the session alive so the reconnect loop can resume with the
+        stored resumption handle. Also clears session._session so concurrent
+        handle_voice_utterance calls safely drop audio mid-reconnect instead of
+        erroring on a dead transport.
+        """
+        session._session = None
+        session_cm, session._session_cm = session._session_cm, None
+        if session_cm:
+            try:
+                await session_cm.__aexit__(None, None, None)
+            except Exception:
+                pass
 
     async def _receive_loop(self, session: VoiceSession) -> None:
         """Stream Gemini Live responses and dispatch tool calls."""
         session_id = session.voice_session_id
         gemini_session = session._session
 
+        # Consecutive transport errors before giving the stream up to the
+        # reconnect loop (which resumes with backoff + resumption handle).
+        # Spinning here forever would wedge reconnects — fail fast instead.
+        live_cfg = self._live_cfg()
+        max_rx_errors = int(getattr(live_cfg, "receive_max_errors", 5) or 5)
+        consecutive_errors = 0
         while session._active and gemini_session:
             try:
                 async for response in gemini_session.receive():
                     if not session._active:
                         break
+                    consecutive_errors = 0
 
                     # 1. Barge-in / interruption
                     if (
@@ -702,6 +840,54 @@ class VoiceEngine:
                             from ..ws_protocol import build_voice_event
                             await self.ws_broadcast(build_voice_event(
                                 "voice_tts_stopped", session_id, reason="barge_in",
+                            ))
+
+                    # 1b. Server-canceled tool calls (follows a barge-in).
+                    # The server discarded these calls — executing or answering
+                    # them would act on stale user intent. Track, don't answer.
+                    cancel_msg = getattr(response, "tool_call_cancellation", None)
+                    cancel_ids = (getattr(cancel_msg, "ids", None) or []) if cancel_msg else []
+                    if cancel_ids:
+                        session._canceled_call_ids.update(cancel_ids)
+                        logger.info(
+                            "Gemini Live canceled %d tool call(s) for session %s (barge-in)",
+                            len(cancel_ids), session_id,
+                        )
+
+                    # 1c. Session resumption handle (enables reconnect within ~2h).
+                    resume_upd = getattr(response, "session_resumption_update", None)
+                    if resume_upd and getattr(resume_upd, "resumable", False):
+                        new_handle = getattr(resume_upd, "new_handle", None)
+                        if new_handle:
+                            session._resumption_handle = new_handle
+
+                    # 1d. Server going away (10-min connection rotation) — log
+                    # loudly so reconnect logic (P2 follow-up) has a hook.
+                    go_away = getattr(response, "go_away", None)
+                    if go_away is not None:
+                        logger.warning(
+                            "Gemini Live GoAway for session %s (time_left=%s) — reconnect with resumption handle",
+                            session_id, getattr(go_away, "time_left", "?"),
+                        )
+
+                    # 1e. Native transcriptions (server-side STT — no local
+                    # Whisper path needed). User speech → role=user.
+                    if response.server_content:
+                        in_tx = getattr(response.server_content, "input_transcription", None)
+                        in_text = getattr(in_tx, "text", None) if in_tx else None
+                        if in_text and self.ws_broadcast:
+                            from ..ws_protocol import build_voice_event
+                            await self.ws_broadcast(build_voice_event(
+                                "voice_transcript_partial", session_id,
+                                text=in_text, role="user",
+                            ))
+                        out_tx = getattr(response.server_content, "output_transcription", None)
+                        out_text = getattr(out_tx, "text", None) if out_tx else None
+                        if out_text and self.ws_broadcast:
+                            from ..ws_protocol import build_voice_event
+                            await self.ws_broadcast(build_voice_event(
+                                "voice_transcript_partial", session_id,
+                                text=out_text, role="assistant",
                             ))
 
                     # 2. Audio from model
@@ -754,11 +940,24 @@ class VoiceEngine:
                                 text=text_content or "", role="assistant",
                             ))
 
+                # Stream ended (server closed / GoAway rotation) — return so the
+                # outer reconnect loop resumes with a fresh transport + handle
+                # instead of re-polling a dead transport here.
+                logger.info("Gemini Live receive stream ended for session %s — returning for reconnect", session_id)
+                return
+
             except asyncio.CancelledError:
                 break
             except Exception as exc:
+                consecutive_errors += 1
                 if not session._active:
                     break
+                if consecutive_errors >= max_rx_errors:
+                    logger.warning(
+                        "Gemini Live receive failing repeatedly for %s (%d errors) — returning for reconnect",
+                        session_id, consecutive_errors,
+                    )
+                    return
                 logger.debug("Receive loop iteration error for %s: %s", session_id, exc)
                 await asyncio.sleep(0.05)
 
@@ -769,12 +968,12 @@ class VoiceEngine:
         from google.genai import types
 
         session_id = session.voice_session_id
-        function_responses: List[types.FunctionResponse] = []
+        function_responses: list[types.FunctionResponse] = []
 
         for fc in getattr(tool_call, "function_calls", []):
             call_id: str = fc.id
             call_name: str = fc.name
-            call_args: Dict[str, Any] = fc.args or {}
+            call_args: dict[str, Any] = fc.args or {}
             if isinstance(call_args, str):
                 try:
                     call_args = json.loads(call_args)
@@ -804,7 +1003,9 @@ class VoiceEngine:
                     approved = bool(call_args.get("approved", False))
                     confirm_task_id = call_args.get("task_id", task_id)
                     try:
-                        from ..core.confirmations import ActionConfirmationManager as BaseAgent
+                        from ..core.confirmations import (
+                            ActionConfirmationManager as BaseAgent,
+                        )
                         await BaseAgent.resolve_confirmation(confirm_task_id, approved)
                         result_str = f"Confirmation resolved: {'approved' if approved else 'rejected'}"
                     except Exception as e:
@@ -872,6 +1073,15 @@ class VoiceEngine:
             except Exception as e:
                 logger.error("[VoiceEngine] Error executing tool %s: %s", call_name, e)
                 result_str = f"Error executing {call_name}: {e}"
+
+            # Skip answers for server-canceled calls (barge-in discarded them).
+            # Sending FunctionResponses for canceled ids confuses the session.
+            if call_id in session._canceled_call_ids:
+                logger.info(
+                    "[VoiceEngine] Dropping response for canceled tool call %s (session=%s)",
+                    call_id, session_id,
+                )
+                continue
 
             function_responses.append(
                 types.FunctionResponse(

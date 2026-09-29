@@ -7,6 +7,7 @@ invariant verification, and Saga auto-compensation.
 from __future__ import annotations
 
 import asyncio
+import copy
 import inspect
 import json
 import logging
@@ -16,6 +17,8 @@ import time
 import uuid
 from collections import deque
 from collections.abc import Callable
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from typing import Any, ClassVar
 
 from .contracts import MEDIA_KEYWORDS, Action, ActionExecutionContext, ExecutionResult
@@ -90,6 +93,107 @@ def _resolve_event_store() -> Any:
         return None
 
 
+_current_speculative_tx: ContextVar[SpeculativeTransaction | None] = ContextVar(
+    "_current_speculative_tx", default=None
+)
+
+
+class SpeculativeTransaction:
+    """
+    Manages atomic multi-action speculative execution with LIFO rollback.
+    Inspired by Ruflo agenticow branch-and-promote pattern and ADR-171 fail-closed promotion gate.
+    """
+
+    def __init__(
+        self,
+        runtime: ExecutionRuntime,
+        task_id: str,
+        oracle_gate: Callable[..., Any] | None = None,
+    ) -> None:
+        self.runtime = runtime
+        self.task_id = task_id
+        self.oracle_gate = oracle_gate
+        self.recorded_compensations: list[dict[str, Any]] = []
+        self.committed: bool = False
+        self.rolled_back: bool = False
+        self.receipts: list[dict[str, Any]] = []
+
+    def register_action(self, ctx: Any) -> None:
+        """Register snapshot ID and compensation hook for any mutating action inside this transaction."""
+        if self.committed or self.rolled_back:
+            return
+        snap_id = getattr(ctx, "snapshot_id", None) or (ctx.get("snapshot_id") if isinstance(ctx, dict) else None)
+        comp_tool = getattr(ctx, "compensation_tool", "") or (ctx.get("compensation_tool") if isinstance(ctx, dict) else "")
+        comp_params = getattr(ctx, "compensation_params", None) or (ctx.get("compensation_params") if isinstance(ctx, dict) else {})
+        rev = getattr(ctx, "reversibility", "") or (ctx.get("reversibility") if isinstance(ctx, dict) else "")
+
+        if rev == "snapshot" or comp_tool or snap_id:
+            action_id = getattr(ctx, "action_id", "") or (
+                ctx.metadata.get("action_id", "") if hasattr(ctx, "metadata") and isinstance(ctx.metadata, dict) else ""
+            )
+            tool_name = getattr(ctx, "tool_name", "") or (
+                ctx.metadata.get("tool_name", "") if hasattr(ctx, "metadata") and isinstance(ctx.metadata, dict) else ""
+            )
+            self.recorded_compensations.append({
+                "snapshot_id": snap_id,
+                "compensation_tool": str(comp_tool) if comp_tool else "",
+                "compensation_params": dict(comp_params or {}),
+                "action_id": action_id,
+                "tool_name": tool_name,
+            })
+
+    async def commit(self) -> bool:
+        """Promote speculative changes into production state."""
+        if self.rolled_back:
+            return False
+        self.committed = True
+        self.recorded_compensations.clear()
+        return True
+
+    async def rollback(self, reason: str = "") -> bool:
+        """Execute LIFO rollback of all mutating actions performed in this transaction."""
+        if self.committed or self.rolled_back:
+            return False
+        self.rolled_back = True
+        fe = self.runtime._resolve_filesystem_engine()
+        all_ok = True
+        for comp in reversed(self.recorded_compensations):
+            snap_id = comp.get("snapshot_id")
+            tool = comp.get("compensation_tool")
+            params = comp.get("compensation_params") or {}
+            ok = False
+            err = ""
+            try:
+                if fe:
+                    if tool and hasattr(fe, tool):
+                        func = getattr(fe, tool)
+                        if tool == "restore_snapshot":
+                            tgt = params.get("target_path") or params.get("path") or params.get("file_path")
+                            ok, err = await func(snap_id or params.get("snapshot_id"), tgt)
+                        else:
+                            ok, err = await func(params)
+                    elif snap_id:
+                        tgt = params.get("target_path") or params.get("path") or params.get("file_path")
+                        if tgt and hasattr(fe, "restore_snapshot"):
+                            ok, err = await fe.restore_snapshot(snap_id, tgt)
+                    else:
+                        ok, err = False, f"No compensation handler for {tool}"
+            except Exception as exc:
+                ok, err = False, str(exc)
+
+            if not ok:
+                all_ok = False
+            self.receipts.append({
+                "action_id": comp.get("action_id"),
+                "tool_name": comp.get("tool_name"),
+                "restored": ok,
+                "error": err,
+                "reason": reason,
+            })
+        self.recorded_compensations.clear()
+        return all_ok
+
+
 class ExecutionRuntime:
     """
     Canonical transactional runtime for physical action execution in Makima OS.
@@ -102,26 +206,22 @@ class ExecutionRuntime:
     def __init__(
         self,
         tool_registry: Any = None,
-        invariant_verifier: Any | None = None,
         learning_coordinator: Any = None,
-        guardrails: Any = None,
-        recovery_manager: Any = None,
-        saga_recovery: Any = None,
-        kernel: Any = None,
         event_store: Any = None,
         preference_engine: Any | None = None,
+        guardrails: Any = None,
+        saga_recovery: Any = None,
+        **kwargs: Any,
     ) -> None:
         self.tool_registry = tool_registry
         if self.tool_registry and hasattr(self.tool_registry, "set_execution_runtime"):
             self.tool_registry.set_execution_runtime(self)
-        self.verifier = invariant_verifier
+        self.verifier = kwargs.get("invariant_verifier")
         self.learning_coordinator = learning_coordinator
-        self.reflexion_engine = learning_coordinator
         self.guardrails = guardrails
-        self.saga_recovery = saga_recovery or recovery_manager
-        self.recovery_manager = self.saga_recovery
-        self.kernel = kernel
-        self.event_store = event_store or getattr(kernel, "event_store", None)
+        self.saga_recovery = saga_recovery or kwargs.get("recovery_manager")
+        self.kernel = kwargs.get("kernel")
+        self.event_store = event_store or getattr(self.kernel, "event_store", None)
         self.preference_engine = preference_engine
         self._background_tasks: set[asyncio.Task] = set()
         self._recent_tool_runs: deque[dict[str, Any]] = deque(maxlen=30)
@@ -235,6 +335,20 @@ class ExecutionRuntime:
                     return adaptive_timeout
             except Exception as pat_err:
                 logger.debug("Failed to calculate adaptive timeout: %s", pat_err)
+
+        # 5. Adaptive Timeout via LearningCoordinator
+        if self.learning_coordinator and hasattr(self.learning_coordinator, "get_timeout_scale"):
+            try:
+                scale = float(self.learning_coordinator.get_timeout_scale(tool_name))
+                if scale > 1.0:
+                    adaptive_timeout = min(base_timeout * scale, 120.0)
+                    logger.info(
+                        "[execution_runtime] Adaptive Timeout applied to '%s': %.1fs -> %.1fs via LearningCoordinator",
+                        tool_name, base_timeout, adaptive_timeout,
+                    )
+                    return adaptive_timeout
+            except Exception as lc_err:
+                logger.debug("Failed to calculate learning_coordinator adaptive timeout: %s", lc_err)
 
         return base_timeout
 
@@ -442,7 +556,8 @@ class ExecutionRuntime:
                 if isinstance(val, str) and val.strip():
                     clean_val = val.strip().strip("'\"")
                     if not os.path.isabs(clean_val) and not any(clean_val.startswith(p) for p in ("http://", "https://", "ms-", "file://")):
-                        if clean_val.lower().startswith("desktop") or "desktop" in clean_val.lower():
+                        low_val = clean_val.lower().replace("/", "\\")
+                        if low_val == "desktop" or low_val.startswith("desktop\\"):
                             rel_sub = re.sub(r'^(?:desktop[\\/]|desktop\s*)', '', clean_val, flags=re.IGNORECASE).strip()
                             resolved = os.path.normpath(os.path.join(desktop_path, rel_sub))
                             normalized[pk] = resolved
@@ -706,11 +821,12 @@ class ExecutionRuntime:
                 ctx.compensation_params = raw_output["compensation_params"]
 
         if tool_name in ("write_file", "move_file", "rename_file", "delete_file", "organize_desktop"):
-            ctx.reversibility = "snapshot"
             if not ctx.snapshot_id and "[Snapshot: " in res_str:
                 sm = re.search(r'\[Snapshot: (snap_[a-zA-Z0-9_.]+)\]', res_str)
                 if sm:
                     ctx.snapshot_id = sm.group(1)
+            if bool(ctx.snapshot_id or ("[Snapshot: " in res_str)):
+                ctx.reversibility = "snapshot"
 
             if tool_name == "move_file" and not ctx.compensation_tool:
                 ctx.compensation_tool = "restore_move_transaction"
@@ -970,7 +1086,14 @@ class ExecutionRuntime:
             "timestamp": now_ts,
         })
 
-        # ── Reversible Action Tracking (Undo Stack) ──────────────────────────
+        # ── Reversible Action Tracking (Undo Stack & Speculative Transaction) ──
+        active_tx = _current_speculative_tx.get()
+        if active_tx is not None and (ctx.snapshot_id or ctx.compensation_tool or ctx.reversibility == "snapshot"):
+            if is_success or not rollback_done:
+                ctx.metadata["action_id"] = action.action_id
+                ctx.metadata["tool_name"] = tool_name
+                active_tx.register_action(ctx)
+
         if is_success and (ctx.snapshot_id or ctx.compensation_tool or ctx.reversibility == "snapshot"):
             self._undo_stack.append({
                 "action_id": action.action_id,
@@ -1091,7 +1214,8 @@ class ExecutionRuntime:
         async def _safe_exec(act: Action) -> ExecutionResult:
             async with sem:
                 try:
-                    return await self.execute_action(act, context=context)
+                    forked_ctx = copy.copy(context) if context is not None else None
+                    return await self.execute_action(act, context=forked_ctx)
                 except Exception as exc:
                     logger.error("[ExecutionRuntime] Error in parallel action %s (%s): %s", act.action_id, act.capability_name, exc)
                     return ExecutionResult(
@@ -1222,4 +1346,44 @@ class ExecutionRuntime:
                 "reverted": reverted_items,
             }
         return {"status": "error", "message": "Failed to undo action: compensation failed."}
+
+    @asynccontextmanager
+    async def speculative_transaction(
+        self,
+        task_id: str,
+        oracle_gate: Callable[..., Any] | None = None,
+    ):
+        """
+        Transactional context manager for speculative multi-action execution with ADR-171 fail-closed promotion.
+        If an unhandled exception occurs or oracle_gate fails clearance, automatically rolls
+        back all mutations in LIFO order.
+        """
+        tx = SpeculativeTransaction(self, task_id=task_id, oracle_gate=oracle_gate)
+        token = _current_speculative_tx.set(tx)
+        try:
+            yield tx
+            # ADR-171 Fail-Closed Promotion Invariant
+            if oracle_gate is not None:
+                res = oracle_gate()
+                if inspect.isawaitable(res):
+                    res = await res
+                if isinstance(res, tuple):
+                    cleared, reason = res
+                elif isinstance(res, dict):
+                    cleared = bool(res.get("cleared", False))
+                    reason = str(res.get("reason", ""))
+                else:
+                    cleared = bool(res)
+                    reason = ""
+                if not cleared:
+                    await tx.rollback(reason=reason or "Oracle clearance rejected")
+                    raise RuntimeError(f"Oracle clearance failed: {reason}")
+            await tx.commit()
+        except Exception as exc:
+            if not tx.rolled_back and not tx.committed:
+                await tx.rollback(reason=str(exc))
+            raise
+        finally:
+            _current_speculative_tx.reset(token)
+
 

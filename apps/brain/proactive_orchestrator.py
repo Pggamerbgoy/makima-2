@@ -48,7 +48,7 @@ import uuid
 from collections import deque
 from enum import IntEnum
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 logger = logging.getLogger("makima.proactive")
 
@@ -65,7 +65,7 @@ class AutonomyLevel(IntEnum):
 
 # ─── Defaults & Constants ─────────────────────────────────────────────────────
 
-DEFAULT_CONFIG: Dict[str, Any] = {
+DEFAULT_CONFIG: dict[str, Any] = {
     "enabled": True,
     "mode": "suggest",           # off | suggest | auto
     "autonomy_level": AutonomyLevel.LEVEL_2_SUGGESTION_CARD,
@@ -94,10 +94,10 @@ _DANGEROUS_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
         r"\b(rm|del)\s+\S",
         # Power/session control
         r"\b(shutdown|restart|reboot|hibernate|log\s?-?off|logout|lock)\b",
-        # Outbound communication to real people
-        r"\b(send|reply|forward|post|tweet|publish|email)\w*\b",
-        # Money & credentials
-        r"\b(pay|payment|purchase|buy|checkout|transfer|order)s?\b",
+        # Outbound communication to real people (exclude postpone)
+        r"\b(send|reply|forward|tweet|publish|email)\w*\b|\bpost(s|ed|ing)?\b",
+        # Money & credentials (exclude 'in order to')
+        r"\b(pay|payment|purchase|buy|checkout|transfer)\w*\b|(?<!in\s)\border\b(?!\s+to\b)",
         r"\b(password|credential|api[ -]?key|secret|token)\b",
         # System-level changes
         r"\b(registry|firewall|uac|elevate|sudo|chmod|driver)\b",
@@ -116,7 +116,7 @@ class ProactiveOrchestrator:
 
     def __init__(
         self,
-        config: Optional[dict] = None,
+        config: dict | None = None,
         ws_broadcast: Any = None,
         ai_handler: Any = None,
         learning_engine: Any = None,
@@ -125,8 +125,12 @@ class ProactiveOrchestrator:
         learning: Any = None,
         **kwargs: Any,
     ) -> None:
-        raw_cfg = config.get("proactive", {}) if isinstance(config, dict) else {}
-        self.cfg: Dict[str, Any] = {**DEFAULT_CONFIG, **{k: v for k, v in raw_cfg.items() if v is not None}}
+        raw_cfg: dict[str, Any] = {}
+        if isinstance(config, dict):
+            p_cfg = config.get("proactive")
+            if isinstance(p_cfg, dict):
+                raw_cfg = p_cfg
+        self.cfg: dict[str, Any] = {**DEFAULT_CONFIG, **{k: v for k, v in raw_cfg.items() if v is not None}}
         self.ws_broadcast = ws_broadcast
         self.ai = ai_handler
         # TODO: ReflexionEngine will handle this
@@ -134,20 +138,45 @@ class ProactiveOrchestrator:
         self.kernel = kernel
         self.orchestration_engine = orchestration_engine
         self.durable_task_engine = kwargs.get("durable_task_engine") or getattr(kernel, "durable_task_engine", None)
+        self.event_store = (
+            kwargs.get("event_store")
+            or getattr(self.kernel, "event_store", None)
+            or getattr(self.durable_task_engine, "_event_store", None)
+        )
 
         self._running = False
-        self._loop_task: Optional[asyncio.Task] = None
+        self._loop_task: asyncio.Task | None = None
+        self._durable_task: asyncio.Task | None = None
         self._background_tasks: set[asyncio.Task] = set()
+        self._proactive_enabled_by_profile: bool = True
         self.mode: str = str(self.cfg.get("mode", "suggest"))
         self._load_persisted_mode()
 
         # Guardrail state
         self._action_times: deque[float] = deque()          # executed action timestamps
-        self._dedup: Dict[str, float] = {}                  # proposal_hash -> last ts
+        self._dedup: dict[str, float] = {}                  # proposal_hash -> last ts
         self._last_outcome_event_id: int = 0                 # habit-loop cursor
 
         # Best-effort state file next to voice_config.json conventions
         self._state_path = Path(__file__).resolve().parents[2] / "configs" / "proactive_state.json"
+
+    def _cfg_int(self, key: str, default: int) -> int:
+        val = self.cfg.get(key)
+        if val is None:
+            return default
+        try:
+            return int(val)
+        except (ValueError, TypeError):
+            return default
+
+    def _cfg_float(self, key: str, default: float) -> float:
+        val = self.cfg.get(key)
+        if val is None:
+            return default
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return default
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -159,24 +188,79 @@ class ProactiveOrchestrator:
             return
         self._running = True
         self._loop_task = asyncio.create_task(self._loop(), name="proactive-loop")
+        self._durable_task = asyncio.create_task(self._durable_loop(), name="proactive-durable-loop")
         logger.info(
             "ProactiveOrchestrator started (mode=%s, interval=%ss, max/h=%.0f)",
-            self.mode, self.cfg.get("interval_s"), float(self.cfg.get("max_actions_per_hour", 3)),
+            self.mode, self._cfg_float("interval_s", 300.0), float(self._cfg_int("max_actions_per_hour", 3)),
         )
 
     async def stop(self) -> None:
         self._running = False
+        tasks_to_cancel: list[asyncio.Task] = []
         if self._loop_task and not self._loop_task.done():
             self._loop_task.cancel()
+            tasks_to_cancel.append(self._loop_task)
+        if self._durable_task and not self._durable_task.done():
+            self._durable_task.cancel()
+            tasks_to_cancel.append(self._durable_task)
         for t in list(self._background_tasks):
             if not t.done():
                 t.cancel()
+                tasks_to_cancel.append(t)
         self._background_tasks.clear()
+        if tasks_to_cancel:
+            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
         logger.info("ProactiveOrchestrator stopped")
 
     @property
     def is_running(self) -> bool:
         return self._running
+
+    def set_focus_profile(
+        self,
+        profile: str | dict[str, Any],
+        toggles: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Apply focus profile constraints to proactive orchestrator.
+
+        Supports:
+        - set_focus_profile("work", toggles_dict)  # called by main.py
+        - set_focus_profile("quiet")               # profile string only
+        - set_focus_profile({"profile": "quiet", "proactive_suggestions_enabled": False}) # dict only
+        """
+        active_toggles: dict[str, Any] = {}
+        if isinstance(profile, dict):
+            profile_name = str(profile.get("profile") or profile.get("name") or "custom").strip().lower()
+            active_toggles = dict(profile)
+            if toggles and isinstance(toggles, dict):
+                active_toggles.update(toggles)
+        elif isinstance(profile, str):
+            profile_name = profile.strip().lower()
+            if toggles and isinstance(toggles, dict):
+                active_toggles = dict(toggles)
+            elif profile_name in ("quiet", "meeting", "gaming", "deep_work", "deep-work", "focus"):
+                active_toggles["proactive_suggestions_enabled"] = False
+            elif profile_name in ("work", "normal", "default"):
+                active_toggles["proactive_suggestions_enabled"] = True
+        else:
+            profile_name = "unknown"
+            if toggles and isinstance(toggles, dict):
+                active_toggles = dict(toggles)
+
+        for key in ("proactive_suggestions_enabled", "suggestions_enabled"):
+            if key in active_toggles:
+                enabled = bool(active_toggles[key])
+                self.cfg["enabled"] = enabled
+                self._proactive_enabled_by_profile = enabled
+                break
+
+        self._active_focus_profile = profile_name
+        logger.info(
+            "[ProactiveOrchestrator] Applied focus profile: %s (enabled=%s)",
+            profile_name,
+            self.cfg.get("enabled", True),
+        )
+        return {"ok": True, "profile": profile_name, "enabled": self.cfg.get("enabled", True)}
 
     # ── Mode management (UI kill-switch) ──────────────────────────────────────
 
@@ -197,6 +281,8 @@ class ProactiveOrchestrator:
         return {
             "mode": self.mode,
             "running": self._running,
+            "focus_profile": getattr(self, "_active_focus_profile", "work"),
+            "focus_proactive_enabled": getattr(self, "_proactive_enabled_by_profile", True),
             "actions_last_hour": sum(1 for t in self._action_times if time.time() - t < 3600),
             "actions_today": sum(1 for t in self._action_times if time.time() - t < 86400),
             "config": {k: v for k, v in self.cfg.items()},
@@ -224,8 +310,19 @@ class ProactiveOrchestrator:
 
     # ── Main loop ─────────────────────────────────────────────────────────────
 
+    async def _durable_loop(self) -> None:
+        """Fast 2-3s poll loop dedicated to waking up scheduled durable tasks and reminders."""
+        while self._running:
+            try:
+                await self._check_durable_task_resumptions()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.debug("[ProactiveOrchestrator] Durable task resumption check error: %s", e)
+            await asyncio.sleep(2.5)
+
     async def _loop(self) -> None:
-        interval = max(30.0, float(self.cfg.get("interval_s", 300)))
+        interval = max(30.0, self._cfg_float("interval_s", 300.0))
         while self._running:
             try:
                 await self._tick()
@@ -236,13 +333,17 @@ class ProactiveOrchestrator:
             await asyncio.sleep(interval)
 
     async def _tick(self) -> None:
+        # Check for scheduled durable task resumptions (Module 4) - ALWAYS run regardless of mode/quiet hours
+        await self._check_durable_task_resumptions()
+
         if self.mode == "off":
             return
-        if self._in_quiet_hours():
+
+        if not getattr(self, "_proactive_enabled_by_profile", True):
             return
 
-        # Check for scheduled durable task resumptions (Module 4)
-        await self._check_durable_task_resumptions()
+        if self._in_quiet_hours():
+            return
 
         # Causal Situational Rules Check (Battery, Mental State, Build Error)
         await self._check_causal_situational_triggers()
@@ -268,9 +369,9 @@ class ProactiveOrchestrator:
                     if resumed and self.orchestration_engine and hasattr(self.orchestration_engine, "run_autonomous_goal"):
                         # Re-arm repeats / disarm one-shots so a fired reminder
                         # never refires on the next tick.
+                        rctx = resumed.reconstructed_context if isinstance(getattr(resumed, "reconstructed_context", None), dict) else {}
                         try:
-                            rctx = resumed.reconstructed_context or {}
-                            rep = rctx.get("repeat_interval_s") if isinstance(rctx, dict) else None
+                            rep = rctx.get("repeat_interval_s")
                             if rep and float(rep) >= 60:
                                 await dte.checkpoint_task(
                                     task_id=cp.task_id,
@@ -285,11 +386,12 @@ class ProactiveOrchestrator:
                                 await dte.mark_completed(cp.task_id, final_result="reminder fired")
                         except Exception as rearm_err:
                             logger.debug("[ProactiveOrchestrator] Reminder re-arm error: %s", rearm_err)
+
                         task_coro = self.orchestration_engine.run_autonomous_goal(
                             task_id=cp.task_id,
                             goal=resumed.continuation_prompt,
-                            conversation_id=resumed.reconstructed_context.get("conversation_id", "default_session"),
-                            context=resumed.reconstructed_context,
+                            conversation_id=rctx.get("conversation_id", "default_session"),
+                            context=rctx,
                         )
                         bg_task = asyncio.create_task(task_coro)
                         self._background_tasks.add(bg_task)
@@ -342,19 +444,19 @@ class ProactiveOrchestrator:
 
     async def _handle_proactive_action(self, agent: str, task_desc: str, rationale: str, risk_hint: str = "notify") -> None:
         """Route action according to 5-Tier Autonomy and safety classification."""
-        autonomy = int(self.cfg.get("autonomy_level", AutonomyLevel.LEVEL_2_SUGGESTION_CARD))
+        autonomy = self._cfg_int("autonomy_level", int(AutonomyLevel.LEVEL_2_SUGGESTION_CARD))
         tier = self.classify_risk(task_desc, llm_hint=risk_hint)
 
         if autonomy == AutonomyLevel.LEVEL_0_OBSERVATIONAL:
             await self._audit("observed_only", agent=agent, description=task_desc, rationale=rationale, tier=tier)
             return
 
-        if tier == "safe" and autonomy >= AutonomyLevel.LEVEL_3_REVERSIBLE_AUTO:
-            await self._execute_proactive(agent, task_desc, rationale)
+        if self.mode == "suggest" or autonomy <= AutonomyLevel.LEVEL_2_SUGGESTION_CARD or tier == "notify":
+            await self._broadcast_proposal(agent, task_desc, rationale, tier)
             return
 
-        if autonomy <= AutonomyLevel.LEVEL_2_SUGGESTION_CARD or tier == "notify" or self.mode == "suggest":
-            await self._broadcast_proposal(agent, task_desc, rationale, tier)
+        if tier == "safe" and autonomy >= AutonomyLevel.LEVEL_3_REVERSIBLE_AUTO:
+            await self._execute_proactive(agent, task_desc, rationale)
             return
 
         # Dangerous or high risk → require interactive confirmation
@@ -368,7 +470,11 @@ class ProactiveOrchestrator:
 
     async def _record_recent_outcomes_as_habits(self) -> None:
         """Feed recent successful task outcomes into the habit DB (write side of the loop)."""
-        store = getattr(self.kernel, "event_store", None) if self.kernel else None
+        store = (
+            self.event_store
+            or (getattr(self.kernel, "event_store", None) if self.kernel else None)
+            or (getattr(self.durable_task_engine, "_event_store", None) if self.durable_task_engine else None)
+        )
         if store is None or self.learning is None:
             return
         try:
@@ -390,8 +496,13 @@ class ProactiveOrchestrator:
 
     def classify_risk(self, text: str, llm_hint: str = "") -> str:
         """Deterministic keyword classifier; most conservative of (pattern-match, LLM hint) wins."""
+        clean_text = text or ""
+        clean_text = re.sub(r"\bin order to\b", "", clean_text, flags=re.IGNORECASE)
+        clean_text = re.sub(r"\bpostpone\w*\b", "", clean_text, flags=re.IGNORECASE)
+        clean_text = re.sub(r"\blooking forward to\b", "", clean_text, flags=re.IGNORECASE)
+
         for pattern in _DANGEROUS_PATTERNS:
-            if pattern.search(text):
+            if pattern.search(clean_text):
                 return "dangerous"
         if llm_hint in _NOTIFY_HINT:
             return "notify"
@@ -405,8 +516,8 @@ class ProactiveOrchestrator:
 
     def _in_quiet_hours(self) -> bool:
         hour = time.localtime().tm_hour
-        qs = int(self.cfg.get("quiet_start_hour", 23))
-        qe = int(self.cfg.get("quiet_end_hour", 7))
+        qs = self._cfg_int("quiet_start_hour", 23)
+        qe = self._cfg_int("quiet_end_hour", 7)
         if qs == qe:
             return False
         return hour >= qs or hour < qe if qs > qe else qs <= hour < qe
@@ -417,12 +528,12 @@ class ProactiveOrchestrator:
             self._action_times.popleft()
         per_hour = sum(1 for t in self._action_times if now - t < 3600)
         per_day = len(self._action_times)
-        return per_hour < int(self.cfg.get("max_actions_per_hour", 3)) and \
-            per_day < int(self.cfg.get("max_actions_per_day", 20))
+        return per_hour < self._cfg_int("max_actions_per_hour", 3) and \
+            per_day < self._cfg_int("max_actions_per_day", 20)
 
     def _dedup_allow(self, key: str) -> bool:
         now = time.time()
-        window = float(self.cfg.get("dedup_window_s", 3600))
+        window = self._cfg_float("dedup_window_s", 3600.0)
         last = self._dedup.get(key, 0.0)
         if now - last < window:
             return False
@@ -512,7 +623,7 @@ class ProactiveOrchestrator:
                 description=f"[Proactive] {description}\nWhy: {rationale}",
                 risk_level="high",
             ))
-            timeout = float(self.cfg.get("confirm_timeout_s", 90))
+            timeout = self._cfg_float("confirm_timeout_s", 90.0)
             await asyncio.wait_for(event.wait(), timeout=timeout)
             return bool(res["approved"])
         except asyncio.TimeoutError:
@@ -536,7 +647,11 @@ class ProactiveOrchestrator:
     async def _audit(self, status: str, *, agent: str, description: str,
                      rationale: str, tier: str, task_id: str = "",
                      result_preview: str = "") -> None:
-        store = getattr(self.kernel, "event_store", None) if self.kernel else None
+        store = (
+            self.event_store
+            or (getattr(self.kernel, "event_store", None) if self.kernel else None)
+            or (getattr(self.durable_task_engine, "_event_store", None) if self.durable_task_engine else None)
+        )
         if store is None:
             return
         try:
@@ -557,7 +672,7 @@ class ProactiveOrchestrator:
         except Exception as e:
             logger.debug("Proactive audit failed: %s", e)
 
-    async def _emit_ws(self, event_type: str, payload: Dict[str, Any]) -> None:
+    async def _emit_ws(self, event_type: str, payload: dict[str, Any]) -> None:
         if not self.ws_broadcast:
             return
         try:

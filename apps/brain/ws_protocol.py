@@ -18,14 +18,14 @@ Rejects unknown 'v' field with version_mismatch error.
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import logging
 import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, AsyncIterator, Literal, Optional
+from typing import Any, Literal
+from collections.abc import AsyncIterator
 
 # ─── High-Speed Serialization Engines ────────────────────────────────────────
 
@@ -152,10 +152,9 @@ class ServerMessageType(str, Enum):
     STATUS_PROCESSING = "status_processing"
     STATUS_IDLE = "status_idle"
     TTS_ERROR = "tts_error"
-    STT_OFFLINE = "stt_offline"
-    STT_TRANSCRIPT_PREVIEW = "stt_transcript_preview"
-    STT_LOW_CONFIDENCE = "stt_low_confidence"
-    STT_CONFIRMED = "stt_confirmed"
+    # NOTE: legacy local-STT confirm flow (STT_OFFLINE/STT_TRANSCRIPT_PREVIEW/
+    # STT_LOW_CONFIDENCE/STT_CONFIRMED + builders) removed 2026-09-26 — Gemini
+    # Live native transcription replaced it; zero producers/consumers.
     # Hands-free browser voice session
     VOICE_SESSION_STATE = "voice_session_state"
     VOICE_TRANSCRIPT_PARTIAL = "voice_transcript_partial"
@@ -164,7 +163,8 @@ class ServerMessageType(str, Enum):
     VOICE_TTS_AUDIO = "voice_tts_audio"
     VOICE_TTS_STARTED = "voice_tts_started"
     VOICE_TTS_STOPPED = "voice_tts_stopped"
-    VOICE_AUDIO_CHUNK = "voice_audio_chunk"
+    # NOTE: VOICE_AUDIO_CHUNK removed 2026-09-26 — stale mp3-oriented builder
+    # path; live audio streams as voice_tts_audio PCM. Zero listeners.
     VOICE_ERROR = "voice_error"
     
     # Browser
@@ -257,9 +257,8 @@ class ClientMessageType(str, Enum):
     # Voice (Push-to-talk)
     PTT_DOWN = "ptt_down"
     PTT_UP = "ptt_up"
-    STT_CONFIRM = "stt_confirm"
-    STT_CORRECT = "stt_correct"
-    STT_CANCEL = "stt_cancel"
+    # NOTE: STT_CONFIRM/STT_CORRECT/STT_CANCEL removed 2026-09-26 with the
+    # dead confirm flow (handlers removed from main.py earlier same day).
     VOICE_SESSION_START = "voice_session_start"
     VOICE_AUDIO_UTTERANCE = "voice_audio_utterance"
     VOICE_SESSION_PAUSE = "voice_session_pause"
@@ -341,15 +340,12 @@ class ClientMessageType(str, Enum):
 
 class ProtocolError(Exception):
     """Base exception for WebSocket protocol errors."""
-    pass
 
 class VersionMismatchError(ProtocolError):
     """Raised when protocol version doesn't match."""
-    pass
 
 class ValidationError(ProtocolError):
     """Raised when message structure fails strict validation."""
-    pass
 
 
 # ─── Client Session Telemetry ────────────────────────────────────────────────
@@ -422,7 +418,7 @@ class WSMessage:
     v: int
     type: str
     payload: dict[str, Any] = field(default_factory=dict)
-    task_id: Optional[str] = None
+    task_id: str | None = None
     timestamp: float = field(default_factory=time.time)
     msg_id: str = field(default_factory=lambda: uuid.uuid4().hex[:16])
     
@@ -454,7 +450,7 @@ class WSMessage:
         return _msgpack_dumps(self.to_dict())
     
     @classmethod
-    def from_raw(cls, raw: str | bytes) -> "WSMessage":
+    def from_raw(cls, raw: str | bytes) -> WSMessage:
         """
         Deserialize from raw JSON (str/bytes) or MessagePack (bytes).
         Raises ProtocolError on invalid data or version mismatch.
@@ -475,12 +471,12 @@ class WSMessage:
         return cls._from_dict(data)
 
     @classmethod
-    def from_json(cls, raw: str) -> "WSMessage":
+    def from_json(cls, raw: str) -> WSMessage:
         """Backward-compatible JSON deserializer."""
         return cls.from_raw(raw)
 
     @classmethod
-    def _from_dict(cls, data: dict[str, Any]) -> "WSMessage":
+    def _from_dict(cls, data: dict[str, Any]) -> WSMessage:
         if not isinstance(data, dict):
             raise ValidationError("Message must be a JSON/MessagePack object")
             
@@ -663,8 +659,8 @@ def build_ai_chunk(
     is_final: bool = False,
     agent: str = "",
     format: str = "markdown",
-    media: Optional[list[dict[str, Any]]] = None,
-    sources: Optional[list[dict[str, Any]]] = None,
+    media: list[dict[str, Any]] | None = None,
+    sources: list[dict[str, Any]] | None = None,
 ) -> WSMessage:
     payload: dict[str, Any] = {"text": text, "is_final": is_final}
     if agent:
@@ -916,59 +912,6 @@ def build_version_mismatch(got: int) -> WSMessage:
         payload={"expected": PROTOCOL_VERSION, "got": got},
     )
 
-def build_stt_transcript_preview(task_id: str, transcript: str, confidence: float, language: str) -> WSMessage:
-    return WSMessage(
-        v=PROTOCOL_VERSION, type=ServerMessageType.STT_TRANSCRIPT_PREVIEW,
-        payload={"transcript": transcript, "confidence": confidence, "language": language}, task_id=task_id,
-    )
-
-def build_stt_confirmed(task_id: str, final_transcript: str, was_corrected: bool = False) -> WSMessage:
-    return WSMessage(
-        v=PROTOCOL_VERSION, type=ServerMessageType.STT_CONFIRMED,
-        payload={"final_transcript": final_transcript, "was_corrected": was_corrected}, task_id=task_id,
-    )
-
-
-def build_voice_audio_chunk(
-    audio_data: bytes | str,
-    format: str = "mp3",
-    sequence: int = 0,
-    is_final: bool = False,
-    session_id: str = "",
-    task_id: Optional[str] = None,
-    metadata: Optional[dict[str, Any]] = None,
-) -> WSMessage:
-    """Build a streaming voice audio chunk message.
-
-    Encodes raw audio bytes as base64 string for JSON wire compatibility.
-    Includes sequence ordering and finality markers for streaming TTS.
-    """
-    if isinstance(audio_data, bytes):
-        audio_b64 = base64.b64encode(audio_data).decode("utf-8")
-    else:
-        audio_b64 = str(audio_data)
-
-    payload: dict[str, Any] = {
-        "audio_data": audio_b64,
-        "format": format,
-        "sequence": sequence,
-        "clause_index": sequence,
-        "is_final": is_final,
-        "session_id": session_id,
-        "voice_session_id": session_id,
-    }
-    if metadata:
-        payload["metadata"] = metadata
-        payload.update(metadata)
-
-    return WSMessage(
-        v=PROTOCOL_VERSION,
-        type=ServerMessageType.VOICE_AUDIO_CHUNK,
-        task_id=task_id,
-        payload=payload,
-    )
-
-
 def build_voice_event(event_type: str, voice_session_id: str, *, task_id: str | None = None, **payload: Any) -> WSMessage:
     """Build a session-scoped voice event.
 
@@ -995,7 +938,7 @@ def build_multi_agent_progress(task_id: str, agents: list[dict]) -> WSMessage:
         payload={"agents": agents}, task_id=task_id,
     )
 
-def build_proactive_event(event_type: "str | ServerMessageType", payload: dict[str, Any]) -> WSMessage:
+def build_proactive_event(event_type: str | ServerMessageType, payload: dict[str, Any]) -> WSMessage:
     """Build a proactive-autonomy event (suggestion / action / mode change)."""
     return WSMessage(
         v=PROTOCOL_VERSION,

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Makima v7.1 — Personality Engine
 
@@ -22,12 +21,11 @@ creating a living personality that evolves with each conversation.
 from __future__ import annotations
 
 import logging
-import random
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger("makima.personality")
 
@@ -436,7 +434,7 @@ class PersonalityEngine:
     def __init__(self, config: dict = None):
         self.detector = EmotionDetector()
         self.state = EmotionState()
-        self._user_name: Optional[str] = None
+        self._user_name: str | None = None
         self._user_facts: list[str] = []
         self._relationship_depth: int = 0  # Increases over conversations
 
@@ -447,8 +445,8 @@ class PersonalityEngine:
     def process_turn(
         self,
         message: str,
-        response: Optional[str | dict[str, Any]] = None,
-        context: Optional[dict[str, Any]] = None,
+        response: str | dict[str, Any] | None = None,
+        context: dict[str, Any] | None = None,
     ) -> EmotionState:
         """Analyze a user message and optional AI response/context to update emotional state."""
         if isinstance(response, dict) and context is None:
@@ -488,8 +486,8 @@ class PersonalityEngine:
     def record_turn(
         self,
         user_message: str,
-        ai_response: Optional[str] = None,
-        context: Optional[dict[str, Any]] = None,
+        ai_response: str | None = None,
+        context: dict[str, Any] | None = None,
     ) -> EmotionState:
         """Convenience alias for process_turn."""
         return self.process_turn(user_message, ai_response, context)

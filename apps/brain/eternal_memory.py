@@ -30,7 +30,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 import numpy as np
 
@@ -39,17 +39,17 @@ from .embeddings import DEFAULT_MODEL, EmbeddingProvider
 logger = logging.getLogger("makima.eternal_memory")
 
 __all__ = [
+    "CognitiveMemoryRetriever",
     "EternalMemory",
     "MemoryConfig",
     "MemoryHit",
-    "CognitiveMemoryRetriever",
 ]
 
 
 @dataclass
 class MemoryHit:
     id: int
-    conversation_id: Optional[str]
+    conversation_id: str | None
     created_at: float
     role: str
     message: str
@@ -157,6 +157,69 @@ class CognitiveMemoryRetriever:
             except Exception as e:
                 logger.debug("FTS population check: %s", e)
 
+            # Learned Rules table & FTS5 Virtual Table for fast behavioral rule matching
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS learned_rules (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  rule TEXT NOT NULL,
+                  keywords TEXT NOT NULL,
+                  created_at REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS learned_rules_fts USING fts5(
+                    rule,
+                    keywords,
+                    content='learned_rules',
+                    content_rowid='id',
+                    tokenize='porter unicode61'
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS trg_learned_rules_ai AFTER INSERT ON learned_rules
+                BEGIN
+                    INSERT INTO learned_rules_fts(rowid, rule, keywords) VALUES (new.id, new.rule, new.keywords);
+                END;
+                """
+            )
+            conn.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS trg_learned_rules_au AFTER UPDATE OF rule, keywords ON learned_rules
+                BEGIN
+                    INSERT INTO learned_rules_fts(learned_rules_fts, rowid, rule, keywords) 
+                    VALUES('delete', old.id, old.rule, old.keywords);
+                    INSERT INTO learned_rules_fts(rowid, rule, keywords) VALUES (new.id, new.rule, new.keywords);
+                END;
+                """
+            )
+            conn.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS trg_learned_rules_ad AFTER DELETE ON learned_rules
+                BEGIN
+                    INSERT INTO learned_rules_fts(learned_rules_fts, rowid, rule, keywords) 
+                    VALUES('delete', old.id, old.rule, old.keywords);
+                END;
+                """
+            )
+            try:
+                rules_count = conn.execute("SELECT COUNT(*) FROM learned_rules").fetchone()[0]
+                rf_count = conn.execute("SELECT COUNT(*) FROM learned_rules_fts").fetchone()[0]
+                if rules_count > rf_count:
+                    conn.execute(
+                        """
+                        INSERT INTO learned_rules_fts(rowid, rule, keywords)
+                        SELECT id, rule, keywords FROM learned_rules
+                        WHERE id NOT IN (SELECT rowid FROM learned_rules_fts)
+                        """
+                    )
+            except Exception as e:
+                logger.debug("learned_rules_fts backfill check: %s", e)
+
             # Entity Knowledge Graph Triples table for Digital Twin
             conn.execute(
                 """
@@ -177,10 +240,15 @@ class CognitiveMemoryRetriever:
 
             conn.commit()
 
-    def execute_fts5_search(self, query: str, limit: int = 20) -> List[Tuple[int, float]]:
+    def execute_fts5_search(
+        self,
+        query: str,
+        limit: int = 20,
+        table_name: str = "conversation_fts",
+    ) -> list[tuple[int, float]]:
         """
         Executes native BM25 search via SQLite FTS5.
-        Returns list of (row_id, normalized_bm25_score).
+        Returns list of (row_id, normalized_bm25_score) ordered by relevance descending.
         """
         clean_q = re.sub(r"[^\w\s]", " ", query).strip()
         if not clean_q:
@@ -193,21 +261,23 @@ class CognitiveMemoryRetriever:
             return []
         match_query = " OR ".join(tokens)
 
+        valid_table = table_name if table_name in ("conversation_fts", "learned_rules_fts") else "conversation_fts"
+
         with sqlite3.connect(str(self.db_path), timeout=30.0) as conn:
             conn.row_factory = sqlite3.Row
             try:
                 # FTS5 bm25 function returns negative score where more negative = better match
                 cursor = conn.execute(
-                    """
-                    SELECT rowid, bm25(conversation_fts) as rank_score
-                    FROM conversation_fts
-                    WHERE conversation_fts MATCH ?
+                    f"""
+                    SELECT rowid, bm25({valid_table}) as rank_score
+                    FROM {valid_table}
+                    WHERE {valid_table} MATCH ?
                     ORDER BY rank_score ASC
                     LIMIT ?
                     """,
                     (match_query, limit),
                 )
-                results: List[Tuple[int, float]] = []
+                results: list[tuple[int, float]] = []
                 for row in cursor.fetchall():
                     bm25_raw = float(row["rank_score"])
                     # FTS5 returns negative bm25 score (more negative = better match).
@@ -217,13 +287,13 @@ class CognitiveMemoryRetriever:
                     results.append((int(row["rowid"]), bm25_norm))
                 return results
             except sqlite3.OperationalError as e:
-                logger.warning("FTS5 search error for '%s': %s", query, e)
+                logger.warning("FTS5 search error for '%s' in %s: %s", query, valid_table, e)
                 return []
 
     @staticmethod
     def calculate_ebbinghaus_recency(
         created_at: float,
-        last_accessed_at: Optional[float],
+        last_accessed_at: float | None,
         access_count: int,
         current_time: float,
     ) -> float:
@@ -244,21 +314,23 @@ class CognitiveMemoryRetriever:
 
     @staticmethod
     def reciprocal_rank_fusion(
-        vector_rankings: List[int],
-        fts_rankings: List[int],
+        vector_rankings: list[int],
+        fts_rankings: list[int],
         k: int = 60,
-    ) -> Dict[int, float]:
+        weight_vector: float = 0.60,
+        weight_fts: float = 0.40,
+    ) -> dict[int, float]:
         """
-        Combines disparate retrieval rankings using standard RRF:
-        RRF_Score(d) = sum_{m in models} 1.0 / (k + rank_m(d))
+        Combines disparate retrieval rankings using Weighted Reciprocal Rank Fusion (RRF):
+        RRF_Score(d) = sum_{m in models} weight_m / (k + rank_m(d))
         """
-        rrf_scores: Dict[int, float] = {}
+        rrf_scores: dict[int, float] = {}
 
         for rank, doc_id in enumerate(vector_rankings):
-            rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + (1.0 / (k + (rank + 1)))
+            rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + (weight_vector / (k + (rank + 1)))
 
         for rank, doc_id in enumerate(fts_rankings):
-            rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + (1.0 / (k + (rank + 1)))
+            rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + (weight_fts / (k + (rank + 1)))
 
         return rrf_scores
 
@@ -290,16 +362,16 @@ class CognitiveMemoryRetriever:
 
     def query_triples(
         self,
-        subject: Optional[str] = None,
-        predicate: Optional[str] = None,
-        object_val: Optional[str] = None,
+        subject: str | None = None,
+        predicate: str | None = None,
+        object_val: str | None = None,
         limit: int = 50,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Query semantic relationship triples matching specified criteria."""
         with sqlite3.connect(str(self.db_path), timeout=30.0) as conn:
             conn.row_factory = sqlite3.Row
             clauses = []
-            params: List[Any] = []
+            params: list[Any] = []
             if subject:
                 clauses.append("subject = ?")
                 params.append(subject.strip().lower())
@@ -315,12 +387,12 @@ class CognitiveMemoryRetriever:
             rows = conn.execute(sql, params).fetchall()
             return [dict(r) for r in rows]
 
-    def find_related_entities(self, entity: str, max_depth: int = 2) -> List[Dict[str, Any]]:
+    def find_related_entities(self, entity: str, max_depth: int = 2) -> list[dict[str, Any]]:
         """Perform bidirectional graph traversal starting from an entity node."""
         clean_ent = str(entity).strip().lower()
-        visited: Set[str] = set()
-        queue: List[Tuple[str, int]] = [(clean_ent, 0)]
-        results: List[Dict[str, Any]] = []
+        visited: set[str] = set()
+        queue: list[tuple[str, int]] = [(clean_ent, 0)]
+        results: list[dict[str, Any]] = []
 
         with sqlite3.connect(str(self.db_path), timeout=30.0) as conn:
             conn.row_factory = sqlite3.Row
@@ -383,7 +455,7 @@ class MemoryConfig:
 class EternalMemory:
     """Async SQLite-backed conversation memory with buffered writes."""
 
-    def __init__(self, config: dict[str, Any] | None = None, db_path: Optional[Path | str] = None, **kwargs: Any) -> None:
+    def __init__(self, config: dict[str, Any] | None = None, db_path: Path | str | None = None, **kwargs: Any) -> None:
         cfg = config or {}
         mem_cfg = cfg.get("memory", {}) if isinstance(cfg, dict) else {}
 
@@ -396,15 +468,15 @@ class EternalMemory:
         self.write_buffer_s = float(kwargs.get("flush_interval", mem_cfg.get("flush_interval_s", mem_cfg.get("write_buffer_s", 0.05))))
 
         self._queue: asyncio.Queue[tuple[str, str, float, str | None]] = asyncio.Queue()
-        self._writer_task: Optional[asyncio.Task] = None
+        self._writer_task: asyncio.Task | None = None
         self._wake_writer: asyncio.Event = asyncio.Event()
         self._background_tasks: set[asyncio.Task] = set()
-        self._retriever: Optional[CognitiveMemoryRetriever] = None
+        self._retriever: CognitiveMemoryRetriever | None = None
 
         # sqlite3.Connection is bound to the thread that created it.
         # Writer connection lives on the event-loop thread only.
         # All reads executed in run_in_executor use their own short-lived connection.
-        self._conn: Optional[sqlite3.Connection] = None
+        self._conn: sqlite3.Connection | None = None
         self._lock = asyncio.Lock()
 
         # Optional Rust facade (not strictly wired in this snapshot)
@@ -421,7 +493,7 @@ class EternalMemory:
         # projection (id → embedding) persisted next to the DB as .npy.
         # ------------------------------------------------------------------
         embed_enabled = bool(mem_cfg.get("embedding_enabled", True))
-        self._embeddings: Optional[EmbeddingProvider] = (
+        self._embeddings: EmbeddingProvider | None = (
             EmbeddingProvider(
                 model_name=mem_cfg.get("embedding_model", DEFAULT_MODEL),
                 enabled=embed_enabled,
@@ -431,9 +503,17 @@ class EternalMemory:
         )
         self._vec_ids: list[int] = []                 # conversation.id per row
         self._vec_rows: list[np.ndarray] = []         # raw vectors (normalized)
-        self._vec_mat: Optional[np.ndarray] = None    # cached N×dim (None = dirty)
+        self._vec_mat: np.ndarray | None = None    # cached N×dim (None = dirty)
         self._vec_path = Path(str(self.db_path) + ".vec.npy")
         self._vec_ids_path = Path(str(self.db_path) + ".vec.ids.npy")
+
+        # ObsidianSyncAdapter — optional human-readable mirror (no-op if not configured)
+        try:
+            from .obsidian_sync import ObsidianSyncAdapter
+            self._obsidian_sync: Any | None = ObsidianSyncAdapter(config=cfg)
+        except Exception as _obs_err:
+            logger.warning("ObsidianSyncAdapter init skipped: %s", _obs_err)
+            self._obsidian_sync = None
 
     async def start(self) -> None:
         """Initialize DB and start buffered writer loop."""
@@ -483,6 +563,13 @@ class EternalMemory:
             if not bg_task.done():
                 bg_task.cancel()
         self._background_tasks.clear()
+
+        # 5. Flush and close ObsidianSyncAdapter if present
+        if self._obsidian_sync is not None and hasattr(self._obsidian_sync, "close"):
+            try:
+                await self._obsidian_sync.close()
+            except Exception as _obs_err:
+                logger.debug("obsidian close error: %s", _obs_err)
 
         try:
             self._save_vector_index()
@@ -592,11 +679,15 @@ class EternalMemory:
         if self._conn is None:
             await self._ensure_db()
         try:
-            await self._queue.put((str(role), str(message), time.time(), conversation_id))
+            ts = time.time()
+            await self._queue.put((str(role), str(message), ts, conversation_id))
             if str(role).lower() == "user":
                 extract_task = asyncio.create_task(self.extract_and_sync_entities(message))
                 self._background_tasks.add(extract_task)
                 extract_task.add_done_callback(self._background_tasks.discard)
+            # Mirror to Obsidian vault (fire-and-forget, no-op if not configured)
+            if self._obsidian_sync is not None:
+                self._obsidian_sync.sync_turn(str(role), str(message), conversation_id, ts)
         except Exception as e:
             logger.error("save_turn queue failed: %s", e)
 
@@ -610,6 +701,12 @@ class EternalMemory:
             logger.warning("flush timed out after %.1fs — continuing without full drain", timeout)
         except Exception as e:
             logger.error("flush failed: %s", e)
+
+        if self._obsidian_sync is not None and hasattr(self._obsidian_sync, "flush"):
+            try:
+                await self._obsidian_sync.flush(timeout=timeout)
+            except Exception as _obs_err:
+                logger.debug("obsidian flush error: %s", _obs_err)
 
     async def _writer_loop(self) -> None:
         """Background writer: batch-debounce queued turns."""
@@ -727,11 +824,15 @@ class EternalMemory:
             logger.error("_store_embedding failed (id=%s): %s", row_id, e)
 
     def _index_add(self, row_id: int, vec: np.ndarray) -> None:
-        self._vec_ids.append(row_id)
-        self._vec_rows.append(np.asarray(vec, dtype=np.float32).reshape(-1))
+        if row_id in self._vec_ids:
+            idx = self._vec_ids.index(row_id)
+            self._vec_rows[idx] = np.asarray(vec, dtype=np.float32).reshape(-1)
+        else:
+            self._vec_ids.append(row_id)
+            self._vec_rows.append(np.asarray(vec, dtype=np.float32).reshape(-1))
         self._vec_mat = None  # dirty
 
-    def _build_mat(self) -> Optional[np.ndarray]:
+    def _build_mat(self) -> np.ndarray | None:
         if self._vec_mat is None and self._vec_rows:
             try:
                 self._vec_mat = np.vstack(self._vec_rows).astype(np.float32)
@@ -981,7 +1082,7 @@ class EternalMemory:
                         order = np.argsort(-sims)[:max(k * 6, 40)]
                         for idx in order:
                             sim_val = float(sims[int(idx)])
-                            if sim_val >= 0.30:
+                            if sim_val >= 0.0:
                                 rid = self._vec_ids[int(idx)]
                                 vec_sim_map[rid] = sim_val
                                 vector_rankings.append(rid)
@@ -1062,8 +1163,8 @@ class EternalMemory:
             importance = float(r.get("importance") if r.get("importance") is not None else 0.7)
 
             if not self._embeddings or not self._embeddings.available:
-                # Embedding layer disabled/unavailable: keyword-only mode
-                composite_score = bm25_norm if bm25_norm > 0.0 else 0.5
+                # Embedding layer disabled/unavailable: keyword-only mode default confidence
+                composite_score = 0.5
             else:
                 # Semantic / Hybrid RAG mode
                 if cos_sim > 0.0 and bm25_norm > 0.0:
@@ -1101,7 +1202,7 @@ class EternalMemory:
         retrieved_ids = [int(h["id"]) for h in final_hits if "id" in h]
         if retrieved_ids:
             try:
-                loop.create_task(loop.run_in_executor(None, _touch_accessed, retrieved_ids, now))
+                loop.run_in_executor(None, _touch_accessed, retrieved_ids, now)
             except Exception as e:
                 logger.debug("Failed to schedule _touch_accessed: %s", e)
 
@@ -1371,42 +1472,11 @@ class EternalMemory:
         """
         if not new_fact:
             return 0
-        if not self._embeddings or not self._embeddings.available or not self._vec_ids:
-            return await self.delete_matching("primary residence")
-        try:
-            loop = asyncio.get_running_loop()
-            qv = await loop.run_in_executor(None, self._embeddings.embed_one, new_fact)
-            if qv is None:
-                return 0
-            mat = self._build_mat()
-            if mat is None or mat.shape[0] == 0:
-                return 0
-            sims = mat @ qv
-            superseded_ids = [self._vec_ids[idx] for idx, sim in enumerate(sims) if float(sim) >= contradiction_threshold]
-            if not superseded_ids:
-                return 0
-
-            db_path = str(self.db_path)
-            def _do_archive() -> int:
-                conn = sqlite3.connect(db_path, check_same_thread=False)
-                placeholders = ",".join("?" for _ in superseded_ids)
-                cursor = conn.execute(
-                    f"DELETE FROM conversation WHERE id IN ({placeholders})",
-                    superseded_ids,
-                )
-                conn.commit()
-                count = cursor.rowcount
-                conn.close()
-                return count
-
-            count = await loop.run_in_executor(None, _do_archive)
-            if count > 0:
-                self._prune_index("superseded")
-                self._save_vector_index()
-            return count
-        except Exception as e:
-            logger.error("resolve_contradictions error: %s", e)
-            return 0
+        logger.info(
+            "Contradiction resolution requires semantic comparison rather than vector similarity; skipping destructive deletion for: %s",
+            new_fact[:80],
+        )
+        return 0
 
     def _prune_index(self, conversation_id: str) -> None:
         """Drop vectors whose conversation rows were deleted (live batch prune)."""
@@ -1443,7 +1513,12 @@ class EternalMemory:
             logger.warning("save_rule: invalid rule_text")
             return
         
-        kw_str = ",".join([k.strip().lower() for k in keywords if k and isinstance(k, str)])
+        if isinstance(keywords, str):
+            kw_str = ",".join([k.strip().lower() for k in keywords.split(",") if k.strip()])
+        elif isinstance(keywords, (list, tuple, set)):
+            kw_str = ",".join([str(k).strip().lower() for k in keywords if str(k).strip()])
+        else:
+            kw_str = ""
         db_path = str(self.db_path)
         now = time.time()
 
@@ -1503,17 +1578,24 @@ class EternalMemory:
 
         try:
             matching_rules: list[str] = []
+            query_lower = query.lower()
             for rule, keywords in rows:
                 kw_list = [k.strip() for k in keywords.split(",") if k.strip()]
-                # Check if query contains any of the keywords or vice versa
-                if any(kw in query.lower() for kw in kw_list) or any(w in rule.lower() for w in query_words):
+                # Whole-word keyword/phrase match ("app" must not match "happy").
+                kw_hit = any(
+                    len(kw) >= 3 and re.search(r"\b" + re.escape(kw.lower()) + r"\b", query_lower)
+                    for kw in kw_list
+                )
+                # Whole-word match of query words inside the rule text.
+                rule_lower = rule.lower()
+                word_hit = any(
+                    len(w) >= 3 and re.search(r"\b" + re.escape(w) + r"\b", rule_lower)
+                    for w in query_words
+                )
+                if kw_hit or word_hit:
                     matching_rules.append(rule)
                 if len(matching_rules) >= top_k:
                     break
-
-            # If no keyword match, return most recent rules as general constraints
-            if not matching_rules and rows:
-                matching_rules = [r for r, _ in rows[:top_k]]
 
             return matching_rules
         except Exception as e:
@@ -1547,11 +1629,11 @@ class EternalMemory:
 
     async def query_triples(
         self,
-        subject: Optional[str] = None,
-        predicate: Optional[str] = None,
-        object_val: Optional[str] = None,
+        subject: str | None = None,
+        predicate: str | None = None,
+        object_val: str | None = None,
         limit: int = 50,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Asynchronously query semantic relationship triples."""
         ret = self.retriever
         if not ret:
@@ -1566,7 +1648,7 @@ class EternalMemory:
             limit,
         )
 
-    async def find_related_entities(self, entity: str, max_depth: int = 2) -> List[Dict[str, Any]]:
+    async def find_related_entities(self, entity: str, max_depth: int = 2) -> list[dict[str, Any]]:
         """Asynchronously traverse Digital Twin graph to find associated nodes."""
         ret = self.retriever
         if not ret:
@@ -1579,7 +1661,7 @@ class EternalMemory:
             max_depth,
         )
 
-    async def extract_and_sync_entities(self, user_text: str, agent_text: str = "") -> List[Dict[str, Any]]:
+    async def extract_and_sync_entities(self, user_text: str, agent_text: str = "") -> list[dict[str, Any]]:
         """
         Fast regex & pattern-based heuristic extractor for projects, clients, deadlines, and tools.
         Syncs extracted triples into Digital Twin knowledge graph automatically.
@@ -1588,7 +1670,7 @@ class EternalMemory:
             return []
 
         text = user_text.strip()
-        new_triples: List[Dict[str, str]] = []
+        new_triples: list[dict[str, str]] = []
 
         # 1. Project extraction: "project X", "working on X", "mera project X hai"
         proj_match = re.search(r"(?:project|working on|repo|codebase)\s+([A-Za-z0-9_\-\.]+)", text, re.IGNORECASE)
@@ -1611,7 +1693,7 @@ class EternalMemory:
             new_triples.append({"subject": "user", "predicate": "has_deadline", "object": due})
 
         # Persist extracted triples
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         for t in new_triples:
             try:
                 tid = await self.add_triple(t["subject"], t["predicate"], t["object"], confidence=0.85, source="chat_inference")

@@ -14,7 +14,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Literal, Optional
+from typing import Literal
 
 logger = logging.getLogger("makima.health_aggregator")
 
@@ -30,9 +30,9 @@ SERVICE_CATEGORIES = {
 class ServiceHealth:
     name: str
     status: Literal["ok", "degraded", "down"]
-    latency_ms: Optional[float] = None
+    latency_ms: float | None = None
     last_checked: float = 0.0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class HealthAggregator:
@@ -46,7 +46,7 @@ class HealthAggregator:
         self.ai_handler = ai_handler
         self.ws_broadcast = ws_broadcast
         self._module_health: dict[str, ServiceHealth] = {}
-        self._poll_task: Optional[asyncio.Task] = None
+        self._poll_task: asyncio.Task | None = None
         self._last_snapshot_hash: str = ""
 
     async def start(self) -> None:
@@ -163,7 +163,7 @@ class HealthAggregator:
         self,
         module: str,
         status: Literal["ok", "degraded", "down"],
-        error: Optional[str] = None
+        error: str | None = None
     ) -> None:
         """Report type-safe health status from a Python module."""
         self._module_health[f"module.{module}"] = ServiceHealth(

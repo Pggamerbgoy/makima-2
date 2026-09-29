@@ -26,13 +26,13 @@
   - **Media Agent**: YouTube & Spotify media playback controls.
   - **Messaging Agent**: WhatsApp, Telegram, Discord, and Email drafting.
   - **Memory Agent**: EternalMemory vector index & HNSW vector search.
-  - **Voice Agent**: Kokoro-ONNX / Edge-TTS speech synthesis & Whisper STT.
+  - **Voice Agent**: Gemini Live native speech-to-speech (barge-in, 97+ langs) & native transcription.
 
 - 🎙️ **Hands-Free Voice Control & Speech Output (TTS)**:
   - **Continuous Conversation Mode**: Talk back and forth naturally without repeating wake phrases.
   - **Natural Neural Voice Output**: Speaks back naturally in high-quality English & Hindi neural voices.
   - **Auto Language Switch**: Detects Hindi, English, and Hinglish automatically.
-  - **Zero-Setup Cloud Voice**: Powered by `edge-tts` out of the box (no local model downloads required).
+  - **Zero-Setup Cloud Voice**: Powered by Gemini Live native audio (`gemini-3.8-live`) out of the box — no local model downloads required. Set `GEMINI_API_KEY`, optionally restrict the key to the Gemini API.
 
 - ⚡ **High-Speed Rust Core (`makima-core`)**:
   - Triple-store knowledge graph for entity relationships.
@@ -142,7 +142,7 @@ When you ask Makima a question or give a command via voice or chat, **Makima spe
    - **Hindi / Hinglish**: Uses fluent Indian neural voices like `hi-IN-SwaraNeural` or `hi-IN-AnanyaNeural`.
 
 2. **Instant Zero-Setup Cloud Voice**:
-   Makima uses `edge-tts` by default, requiring **no heavy model downloads** or local GPU requirements.
+   Makima uses Gemini Live native audio (`gemini-3.8-live`) by default, requiring **no heavy model downloads** or local GPU requirements — just a `GEMINI_API_KEY`.
 
 3. **Customizing Makima's Voice (`configs/voice_config.json`)**:
 

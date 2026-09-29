@@ -12,7 +12,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, Callable, Awaitable, Optional
+from typing import Any
+from collections.abc import Awaitable, Callable
 
 logger = logging.getLogger("makima.voice.wake")
 
@@ -41,8 +42,8 @@ class WakeDaemon:
         refractory_s: float = 2.0,
         sample_rate: int = 16000,
         frame_ms: int = 80,
-        device_index: Optional[int] = None,
-        on_wake_callback: Optional[Callable[[], Awaitable[None]]] = None,
+        device_index: int | None = None,
+        on_wake_callback: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self.wake_phrases = [p.lower().strip() for p in wake_phrases]
         self.threshold = threshold
@@ -53,8 +54,8 @@ class WakeDaemon:
         self.on_wake_callback = on_wake_callback
 
         self._running = False
-        self._task: Optional[asyncio.Task] = None
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._task: asyncio.Task | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._last_wake_time: float = 0.0
         self._oww_model: Any = None
 
@@ -177,6 +178,7 @@ class WakeDaemon:
         NOTE: This is a lightweight approximation — no accuracy guarantees.
         """
         import math
+
         import numpy as np
         import sounddevice as sd
 

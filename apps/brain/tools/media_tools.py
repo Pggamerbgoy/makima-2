@@ -9,10 +9,9 @@ import asyncio
 import difflib
 import json
 import logging
-import math
 import re
 import urllib.parse
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any
 
 logger = logging.getLogger("makima.tools.media")
 
@@ -227,7 +226,7 @@ _UNIVERSAL_RUNTIME_JS = r"""
 """
 
 # Module-level default BrowserController instance (can be set or discovered)
-_default_bc: Optional[Any] = None
+_default_bc: Any | None = None
 
 
 def set_default_browser_controller(bc: Any) -> None:
@@ -239,7 +238,7 @@ def set_default_browser_controller(bc: Any) -> None:
 set_browser_controller = set_default_browser_controller
 
 
-async def _get_default_bc() -> Optional[Any]:
+async def _get_default_bc() -> Any | None:
     """Resolve or lazily initialize the shared BrowserController instance across Makima."""
     global _default_bc
     if _default_bc is not None:
@@ -578,9 +577,9 @@ async def _resolve_youtube_direct_url_fast(query: str, timeout_s: float = 2.5) -
 async def media_play(
     query: str = "",
     platform: str = "youtube",
-    direct_url: Optional[str] = None,
-    exclude_title: Optional[str] = None,
-    bc: Optional[Any] = None,
+    direct_url: str | None = None,
+    exclude_title: str | None = None,
+    bc: Any | None = None,
 ) -> dict[str, Any]:
     """
     Play music, video, or audio from YouTube or Spotify, or navigate to a direct media URL on the browser media tab.
@@ -655,7 +654,7 @@ async def media_play(
     }
 
 
-async def media_pause(bc: Optional[Any] = None) -> dict[str, Any]:
+async def media_pause(bc: Any | None = None) -> dict[str, Any]:
     """Pause current playback on the active media tab."""
     bc = bc or await _get_default_bc()
     res = await execute_media_dom_action(bc, "pause")
@@ -668,7 +667,7 @@ async def media_pause(bc: Optional[Any] = None) -> dict[str, Any]:
     }
 
 
-async def media_resume(bc: Optional[Any] = None) -> dict[str, Any]:
+async def media_resume(bc: Any | None = None) -> dict[str, Any]:
     """Resume playback on the active media tab."""
     bc = bc or await _get_default_bc()
     res = await execute_media_dom_action(bc, "resume")
@@ -681,7 +680,7 @@ async def media_resume(bc: Optional[Any] = None) -> dict[str, Any]:
     }
 
 
-async def media_toggle(bc: Optional[Any] = None) -> dict[str, Any]:
+async def media_toggle(bc: Any | None = None) -> dict[str, Any]:
     """Toggle between play and pause states on the active media tab."""
     bc = bc or await _get_default_bc()
     res = await execute_media_dom_action(bc, "toggle_play")
@@ -694,7 +693,7 @@ async def media_toggle(bc: Optional[Any] = None) -> dict[str, Any]:
     }
 
 
-async def media_next(bc: Optional[Any] = None) -> dict[str, Any]:
+async def media_next(bc: Any | None = None) -> dict[str, Any]:
     """Skip to the next track or video on the active media tab."""
     bc = bc or await _get_default_bc()
     res = await execute_media_dom_action(bc, "next")
@@ -707,7 +706,7 @@ async def media_next(bc: Optional[Any] = None) -> dict[str, Any]:
     }
 
 
-async def media_previous(bc: Optional[Any] = None) -> dict[str, Any]:
+async def media_previous(bc: Any | None = None) -> dict[str, Any]:
     """Go back to the previous track or video on the active media tab."""
     bc = bc or await _get_default_bc()
     res = await execute_media_dom_action(bc, "previous")
@@ -723,7 +722,7 @@ async def media_previous(bc: Optional[Any] = None) -> dict[str, Any]:
 async def media_seek(
     seconds: float,
     relative: bool = True,
-    bc: Optional[Any] = None,
+    bc: Any | None = None,
 ) -> dict[str, Any]:
     """
     Seek playback position forward/backward by seconds or jump to an absolute timestamp.
@@ -749,7 +748,7 @@ async def media_seek(
 
 async def media_set_volume(
     level: int,
-    bc: Optional[Any] = None,
+    bc: Any | None = None,
 ) -> dict[str, Any]:
     """
     Set the volume percentage (0-100) of the active media tab.
@@ -771,7 +770,7 @@ async def media_set_volume(
     }
 
 
-async def media_get_state(bc: Optional[Any] = None) -> dict[str, Any]:
+async def media_get_state(bc: Any | None = None) -> dict[str, Any]:
     """
     Get live media state across the active media tab.
 
@@ -801,7 +800,7 @@ async def media_get_state(bc: Optional[Any] = None) -> dict[str, Any]:
     }
 
 
-async def media_skip_ad(bc: Optional[Any] = None) -> dict[str, Any]:
+async def media_skip_ad(bc: Any | None = None) -> dict[str, Any]:
     """
     Skip or accelerate advertisements on the active media tab.
 

@@ -35,16 +35,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Callable, Coroutine, Dict, List, Optional, Union
+from typing import Any
 
 logger = logging.getLogger("makima.tools.browser")
 
 # ---------------------------------------------------------------------------
 # Global Controller Hook & Singleton Lifecycle
 # ---------------------------------------------------------------------------
-_custom_browser_controller: Optional[Any] = None
-_shared_bc: Optional[Any] = None
-_bc_lock: Optional[asyncio.Lock] = None
+_custom_browser_controller: Any | None = None
+_shared_bc: Any | None = None
+_bc_lock: asyncio.Lock | None = None
 _bc_refcount: int = 0
 
 
@@ -55,13 +55,13 @@ def _get_bc_lock() -> asyncio.Lock:
     return _bc_lock
 
 
-def set_browser_controller(controller: Optional[Any]) -> None:
+def set_browser_controller(controller: Any | None) -> None:
     """Explicitly inject a BrowserController instance (useful for testing & mocking)."""
     global _custom_browser_controller
     _custom_browser_controller = controller
 
 
-def get_browser_controller() -> Optional[Any]:
+def get_browser_controller() -> Any | None:
     """Retrieve the currently injected or active BrowserController if available."""
     global _custom_browser_controller, _shared_bc
     if _custom_browser_controller is not None:
@@ -69,7 +69,7 @@ def get_browser_controller() -> Optional[Any]:
     return _shared_bc
 
 
-async def get_or_create_browser_controller(config: Optional[dict] = None) -> Any:
+async def get_or_create_browser_controller(config: dict | None = None) -> Any:
     """
     Get or create the shared BrowserController singleton with thread-safe lock.
     """
@@ -112,7 +112,7 @@ async def _dispatch_bc(method_name: str, **kwargs: Any) -> Any:
     try:
         bc = await get_or_create_browser_controller()
         if bc is None:
-            return f"[Error] BrowserController is not available."
+            return "[Error] BrowserController is not available."
         method = getattr(bc, method_name, None)
         if not callable(method):
             return f"[Error] BrowserController has no method '{method_name}'"
@@ -145,19 +145,19 @@ async def browser_fill(selector: str, text: str = "", value: str = "", tab: str 
     return str(res)
 
 
-async def browser_get_text(selector: Optional[str] = None, tab: str = "default", **kwargs: Any) -> str:
+async def browser_get_text(selector: str | None = None, tab: str = "default", **kwargs: Any) -> str:
     """Get text content of an element or the whole page."""
     res = await _dispatch_bc("get_text", selector=selector, tab=tab, **kwargs)
     return str(res)
 
 
-async def browser_distill_dom(selector: Optional[str] = None, tab: str = "default", max_chars: int = 4000, **kwargs: Any) -> str:
+async def browser_distill_dom(selector: str | None = None, tab: str = "default", max_chars: int = 4000, **kwargs: Any) -> str:
     """Return a compact, LLM-readable DOM summary of the current page."""
     res = await _dispatch_bc("distill_dom", selector=selector, tab=tab, max_chars=max_chars, **kwargs)
     return str(res)
 
 
-async def browser_screenshot(tab: str = "default", **kwargs: Any) -> Optional[str]:
+async def browser_screenshot(tab: str = "default", **kwargs: Any) -> str | None:
     """Capture a base64 screenshot of the current page."""
     return await _dispatch_bc("get_screenshot_b64", tab=tab, **kwargs)
 
@@ -277,7 +277,7 @@ async def browser_set_range(selector: str, value: float, tab: str = "default", *
 
 
 async def browser_parallel_scrape(
-    urls: Union[List[str], str],
+    urls: list[str] | str,
     max_concurrency: int = 4,
     timeout_ms: int = 15000,
     **kwargs: Any,
@@ -302,7 +302,7 @@ async def browser_parallel_search(
 # Declarative Definitions and Registry Mapping
 # ---------------------------------------------------------------------------
 
-BROWSER_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
+BROWSER_TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "browser_navigate",
         "description": "Navigate to a URL in the shared browser session. Use expected_domain to validate destination.",

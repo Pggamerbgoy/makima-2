@@ -66,7 +66,6 @@ from .ws_protocol import (
     WSMessage,
     build_ai_chunk,
     build_pong,
-    build_voice_event,
     generate_task_id,
 )
 
@@ -377,6 +376,7 @@ async def lifespan(app: FastAPI):
     _modules["memory_forget"] = services.get("memory_forget")
     _modules["skill_library"] = services.get("skill_library")
     proactive = services.get("proactive_orchestrator")
+    _modules["proactive_orchestrator"] = proactive
     if proactive and hasattr(proactive, "start"):
         try:
             await proactive.start()
@@ -1814,6 +1814,11 @@ async def save_llm_provider_config(provider_id: str, request: Request):
         if hasattr(ai_handler, "set_active_provider"):
             ai_handler.set_active_provider(target_backend_id)
 
+        # Invalidate cached unified agents so new provider configuration takes effect immediately
+        router = _modules.get("orchestration_engine") or _modules.get("router")
+        if router and hasattr(router, "invalidate_agent_cache"):
+            router.invalidate_agent_cache()
+
     overrides = store.get_llm_overrides() if store else {}
     return {"provider": _format_provider_item(spec, overrides, ai_handler)}
 
@@ -1903,15 +1908,9 @@ async def delete_media_entry(media_id: str):
         raise HTTPException(status_code=404, detail="Media not found") from e
 
 
-@app.get("/voice/audio/{artifact_id}")
-async def get_voice_audio(artifact_id: str):
-    speech = _modules.get("voice") or _modules.get("speech") or _modules.get("voice_pipeline")
-    if not speech:
-        raise HTTPException(status_code=503, detail="Voice pipeline not initialized")
-    artifact = getattr(speech, "get_tts_artifact", lambda aid: None)(artifact_id)
-    if not artifact or not getattr(artifact, "path", None) or not artifact.path.exists():
-        raise HTTPException(status_code=404, detail="Audio artifact not found or expired")
-    return FileResponse(str(artifact.path), media_type=getattr(artifact, "mime_type", "audio/wav"))
+# NOTE: GET /voice/audio/{artifact_id} removed 2026-09-26 — nothing ever
+# called it (no UI/native references) and the engine never implemented
+# get_tts_artifact, so it always returned 404. Audio streams over WS instead.
 
 
 # ---------------------------------------------------------------------------
@@ -2076,17 +2075,22 @@ async def _handle_ws_message(msg: Any, ws: WebSocket) -> None:
 
         elif msg_type == ClientMessageType.FEEDBACK.value:
             pref_eng = _modules.get("preference_engine")
-            if pref_eng and hasattr(pref_eng, "record_feedback"):
+            if pref_eng and hasattr(pref_eng, "record_message_feedback"):
                 rating = payload.get("rating") or payload.get("thumb")
                 is_positive = rating not in ("down", "negative", -1) and payload.get("positive", True)
-                tool_name = payload.get("tool_name") or payload.get("agent_name", "")
-                await pref_eng.record_feedback(
+                tool_name = payload.get("tool_name") or None
+                result = await pref_eng.record_message_feedback(
+                    task_id=task_id or "",
+                    message_id=str(payload.get("message_id") or ""),
+                    agent_name=str(payload.get("agent_name") or ""),
+                    positive=is_positive,
+                    category=str(payload.get("category") or "general"),
                     tool_name=tool_name,
-                    accepted=is_positive,
-                    rejected_params=payload.get("rejected_params"),
-                    actual_params=payload.get("actual_params"),
                 )
-                logger.info("User feedback recorded: tool=%s positive=%s", tool_name, is_positive)
+                logger.info(
+                    "User feedback recorded: tool=%s positive=%s",
+                    result.get("tool"), is_positive,
+                )
 
         elif msg_type in (ClientMessageType.FOCUS_CHANGE.value, ClientMessageType.SET_FOCUS_PROFILE.value):
             focus_profiles = _modules.get("focus_profiles")
@@ -2095,6 +2099,9 @@ async def _handle_ws_message(msg: Any, ws: WebSocket) -> None:
                 toggles = focus_profiles.apply_profile(profile_name)
                 if speech and "wake_word_enabled" in toggles and hasattr(speech, "set_wake_word_enabled"):
                     await speech.set_wake_word_enabled(toggles["wake_word_enabled"])
+                proactive = _modules.get("proactive_orchestrator")
+                if proactive and hasattr(proactive, "set_focus_profile"):
+                    proactive.set_focus_profile(profile_name, toggles)
                 logger.info(f"Focus profile changed to: {profile_name}")
 
         elif msg_type == ClientMessageType.PULL_OLLAMA_MODEL.value:
@@ -2180,12 +2187,11 @@ async def _handle_ws_message(msg: Any, ws: WebSocket) -> None:
                     await speech.stop_voice_session(payload.get("voice_session_id", ""))
 
         elif msg_type == ClientMessageType.VOICE_BARGE_IN.value:
-            if speech:
-                if hasattr(speech, "stop_session"):
-                    # Interrupt active playback
-                    await ws_broadcast(build_voice_event("voice_tts_stopped", payload.get("voice_session_id", ""), reason="barge_in"))
-                elif hasattr(speech, "barge_in"):
-                    await speech.barge_in(payload.get("voice_session_id", ""))
+            # Barge-in: generation cancel happens server-side in Gemini Live;
+            # engine.barge_in() notifies the UI, whose stopAudio() flushes
+            # queued playback so the agent stops talking over the user.
+            if speech and hasattr(speech, "barge_in"):
+                await speech.barge_in(payload.get("voice_session_id", ""))
 
         elif msg_type == ClientMessageType.VOICE_SPEAK.value:
             if speech:
@@ -2213,18 +2219,10 @@ async def _handle_ws_message(msg: Any, ws: WebSocket) -> None:
                 audio_bytes = base64.b64decode(audio_b64) if audio_b64 else b""
                 await speech.handle_ptt_up(audio_bytes)
 
-        elif msg_type == ClientMessageType.STT_CONFIRM.value:
-            if speech and hasattr(speech, "confirm_transcript"):
-                await speech.confirm_transcript(task_id)
-
-        elif msg_type == ClientMessageType.STT_CORRECT.value:
-            if speech and hasattr(speech, "correct_transcript"):
-                corrected_text = payload.get("corrected_text", "")
-                await speech.correct_transcript(task_id, corrected_text)
-
-        elif msg_type == ClientMessageType.STT_CANCEL.value:
-            if speech and hasattr(speech, "cancel_transcript"):
-                await speech.cancel_transcript(task_id)
+        # NOTE: STT_CONFIRM/STT_CORRECT/STT_CANCEL removed 2026-09-26 —
+        # Gemini Live native transcription replaced the manual confirm flow
+        # and the engine never implemented confirm_transcript/correct_transcript/
+        # cancel_transcript (dead branches). See voice engine transcription flags.
 
         # ── Credentials & Settings Handlers ──────────────────────────────────
         elif msg_type == ClientMessageType.SAVE_CREDENTIAL.value:

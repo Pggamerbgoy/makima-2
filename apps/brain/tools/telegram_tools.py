@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger("makima.tools.telegram")
 
@@ -89,16 +89,21 @@ async def telegram_send_message(
                     }
                 err_desc = data2.get("description", err_desc)
 
+            if token and token in err_desc:
+                err_desc = err_desc.replace(token, "[REDACTED_TELEGRAM_TOKEN]")
             return {
                 "status": "error",
                 "message": f"Telegram API error: {err_desc}",
                 "chat_id": clean_chat,
             }
     except Exception as exc:
-        logger.error("[telegram] Failed to send message to %s: %s", clean_chat, exc)
+        err_msg = str(exc)
+        if token and token in err_msg:
+            err_msg = err_msg.replace(token, "[REDACTED_TELEGRAM_TOKEN]")
+        logger.error("[telegram] Failed to send message to %s: %s", clean_chat, err_msg)
         return {
             "status": "error",
-            "message": f"Network or Telegram client error: {exc}",
+            "message": f"Network or Telegram client error: {err_msg}",
             "chat_id": clean_chat,
         }
 

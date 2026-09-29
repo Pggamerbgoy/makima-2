@@ -3,6 +3,7 @@ Makima v7.2 — Elite Data Tools
 Polars/Pandas integration, chart generation, dataset profiling.
 """
 from __future__ import annotations
+
 import asyncio
 import logging
 from pathlib import Path
@@ -41,6 +42,12 @@ async def profile_dataset(file_path: str) -> str:
         return stats
     except Exception as e:
         return f"[Error] Profiling failed: {e}"
+
+_BANNED_POLARS_METHODS: set[str] = {
+    "write_csv", "write_parquet", "write_json", "write_ndjson", "write_excel",
+    "write_database", "sink_csv", "sink_parquet", "sink_ipc", "sink_ndjson",
+    "read_csv", "read_parquet", "read_json",
+}
 
 async def execute_polars_query(file_path: str, query: str) -> str:
     if not _HAS_POLARS:
@@ -105,6 +112,8 @@ async def execute_polars_query(file_path: str, query: str) -> str:
             if isinstance(node, _ast.Call) and isinstance(node.func, _ast.Attribute):
                 if node.func.attr.startswith("_"):
                     return "[Error] Private attribute access denied"
+                if node.func.attr in _BANNED_POLARS_METHODS:
+                    return f"[Error] Method not allowed: {node.func.attr}"
         safe_builtins = {"len": len, "min": min, "max": max, "sum": sum, "range": range}
         result = eval(compile(tree, "<polars-query>", "eval"), {"__builtins__": safe_builtins}, {"pl": pl, "df": df})
         return str(result)

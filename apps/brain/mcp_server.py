@@ -22,7 +22,7 @@ import inspect
 import json
 import logging
 import sys
-from typing import Any, Optional
+from typing import Any
 
 # CRITICAL MCP RULE: Never write log output to stdout.
 # stdout is strictly reserved for JSON-RPC 2.0 message frames.
@@ -43,7 +43,7 @@ class MakimaMcpServer:
     SERVER_NAME = "makima-os"
     SERVER_VERSION = "1.0.0"
 
-    def __init__(self, tool_registry: Optional[Any] = None) -> None:
+    def __init__(self, tool_registry: Any | None = None) -> None:
         self.registry = tool_registry
         self._running: bool = False
 
@@ -57,7 +57,7 @@ class MakimaMcpServer:
             register_core_tools(self.registry)
             logger.info("MakimaMcpServer: Initialized %d core tools.", len(self.registry.get_all_tool_names()))
 
-    async def handle_request(self, request: dict[str, Any]) -> Optional[dict[str, Any]]:
+    async def handle_request(self, request: dict[str, Any]) -> dict[str, Any] | None:
         """Process a single JSON-RPC 2.0 request and return the response."""
         req_id = request.get("id")
         method = request.get("method", "")

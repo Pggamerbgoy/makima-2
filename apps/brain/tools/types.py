@@ -16,7 +16,8 @@ everything they need via ToolContext; they never see an Agent.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any
+from collections.abc import Awaitable, Callable
 
 # Permission levels (Phase 7)
 ALLOW = "allow"
@@ -82,13 +83,13 @@ class ToolContext:
     consumer: str = "unknown"            # agent name / "direct_llm" / "workflow"
     task_id: str = ""
     execution_id: str = ""
-    grounded_spec: Optional[GroundedSemanticSpec] = None
-    capability: Optional[ToolCapability] = None
+    grounded_spec: GroundedSemanticSpec | None = None
+    capability: ToolCapability | None = None
     observed_pre_state: dict[str, Any] = field(default_factory=dict)
     preconditions_satisfied: bool = True
     precondition_error: str = ""
     reversibility: str = "none"          # "none" | "snapshot" | "inverse"
-    snapshot_id: Optional[str] = None
+    snapshot_id: str | None = None
     compensation_tool: str = ""
     compensation_params: dict[str, Any] = field(default_factory=dict)
     verification_passed: bool = False
@@ -105,7 +106,7 @@ class ToolResult:
     """Phase 8 — the ONLY output shape any tool may return."""
     success: bool
     output: Any = ""
-    error: Optional[dict[str, Any]] = None
+    error: dict[str, Any] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     artifacts: list[Any] = field(default_factory=list)
 
@@ -152,11 +153,11 @@ class Tool:
         self,
         definition: ToolDefinition,
         handler: Callable[..., Awaitable[Any]],
-        policy: Optional[ToolPolicy] = None,
+        policy: ToolPolicy | None = None,
         *,
         category: str = "general",
-        agent_hints: Optional[list[str]] = None,
-        task_tags: Optional[list[str]] = None,
+        agent_hints: list[str] | None = None,
+        task_tags: list[str] | None = None,
         priority: int = 5,
         is_destructive: bool = False,
     ) -> None:

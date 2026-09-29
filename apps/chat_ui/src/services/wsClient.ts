@@ -322,13 +322,13 @@ export class WSClient {
     this.send('voice_tts_stop', voiceSessionId, { voice_session_id: voiceSessionId });
   }
 
-  public sendFeedback(taskId: string, positive: boolean, category: string = 'general'): void {
+  public sendFeedback(taskId: string, positive: boolean, category: string = 'general', context?: { agent_name?: string; message_id?: string }): void {
     if (this.socket && this.socket.readyState === WebSocket.OPEN) {
       this.socket.send(JSON.stringify({
         v: 1,
         type: 'feedback',
         task_id: taskId,
-        payload: { positive, category },
+        payload: { positive, category, agent_name: context?.agent_name || '', message_id: context?.message_id || '' },
       }));
     }
   }

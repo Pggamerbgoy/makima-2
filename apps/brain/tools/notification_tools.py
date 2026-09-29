@@ -4,7 +4,8 @@ import logging
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 from pydantic import BaseModel, Field, ValidationError
 
 logger = logging.getLogger("makima.brain.notification_tools")
@@ -25,7 +26,7 @@ class DNDRule(BaseModel):
     name: str
     start_time: str = Field(description="Start time in HH:MM format (UTC)")
     end_time: str = Field(description="End time in HH:MM format (UTC)")
-    allowed_priorities: List[int] = Field(default_factory=lambda: [4, 5], description="Priorities that bypass DND")
+    allowed_priorities: list[int] = Field(default_factory=lambda: [4, 5], description="Priorities that bypass DND")
 
 class WorkflowStatus(BaseModel):
     workflow_id: str
@@ -35,11 +36,11 @@ class WorkflowStatus(BaseModel):
 
 # --- Persistent Store (atomic JSON under ~/.makima/) ---
 class NotificationStore:
-    def __init__(self, path: Optional[Path] = None):
+    def __init__(self, path: Path | None = None):
         self.path: Path = Path(path) if path else _STORE_PATH
-        self.alerts: List[Alert] = []
-        self.dnd_rules: List[DNDRule] = []
-        self.workflows: Dict[str, WorkflowStatus] = {}
+        self.alerts: list[Alert] = []
+        self.dnd_rules: list[DNDRule] = []
+        self.workflows: dict[str, WorkflowStatus] = {}
         self.lock = asyncio.Lock()
         self._load()
 
@@ -97,7 +98,7 @@ class NotificationStore:
             self.dnd_rules.append(rule)
             self._save()
 
-    async def get_filtered_alerts(self, min_priority: int, unread_only: bool) -> List[Alert]:
+    async def get_filtered_alerts(self, min_priority: int, unread_only: bool) -> list[Alert]:
         async with self.lock:
             res = [a for a in self.alerts if a.priority >= min_priority]
             if unread_only:
@@ -117,7 +118,7 @@ async def _dispatch_alert(alert: Alert) -> str:
     logger.debug("Queued alert %s to local store for %s:%s", alert.id, alert.channel, alert.target)
     return "queued_local"
 
-async def send_alert(message: str, priority: int, channel: str, target: str) -> Dict[str, Any]:
+async def send_alert(message: str, priority: int, channel: str, target: str) -> dict[str, Any]:
     try:
         alert = Alert(message=message, priority=priority, channel=channel, target=target)
         success = await _store.add_alert(alert)
@@ -139,7 +140,7 @@ async def send_alert(message: str, priority: int, channel: str, target: str) -> 
         logger.error(f"send_alert failed: {e}")
         return {"status": "error", "detail": str(e)}
 
-async def create_dnd_rule(name: str, start_time: str, end_time: str, allowed_priorities: List[int]) -> Dict[str, Any]:
+async def create_dnd_rule(name: str, start_time: str, end_time: str, allowed_priorities: list[int]) -> dict[str, Any]:
     try:
         rule = DNDRule(name=name, start_time=start_time, end_time=end_time, allowed_priorities=allowed_priorities)
         await _store.add_dnd_rule(rule)
@@ -151,7 +152,7 @@ async def create_dnd_rule(name: str, start_time: str, end_time: str, allowed_pri
         logger.error(f"create_dnd_rule failed: {e}")
         return {"status": "error", "detail": str(e)}
 
-async def filter_notifications(min_priority: int = 1, unread_only: bool = False) -> Dict[str, Any]:
+async def filter_notifications(min_priority: int = 1, unread_only: bool = False) -> dict[str, Any]:
     try:
         alerts = await _store.get_filtered_alerts(min_priority, unread_only)
         return {"status": "success", "count": len(alerts), "alerts": [a.model_dump(mode="json") for a in alerts]}
@@ -159,7 +160,7 @@ async def filter_notifications(min_priority: int = 1, unread_only: bool = False)
         logger.error(f"filter_notifications failed: {e}")
         return {"status": "error", "detail": str(e)}
 
-async def broadcast_workflow_status(workflow_id: str, status: str, details: str) -> Dict[str, Any]:
+async def broadcast_workflow_status(workflow_id: str, status: str, details: str) -> dict[str, Any]:
     try:
         wf = WorkflowStatus(workflow_id=workflow_id, status=status, details=details)
         await _store.update_workflow(wf)

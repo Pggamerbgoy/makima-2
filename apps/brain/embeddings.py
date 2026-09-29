@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Optional
+from typing import Any
 
 import numpy as np
 
@@ -36,11 +36,11 @@ class EmbeddingProvider:
         self._model_name = model_name or cfg.get("embedding_model") or os.getenv("EMBEDDING_MODEL", DEFAULT_MODEL)
         self._api_key = cfg.get("embedding_api_key") or os.getenv("EMBEDDING_API_KEY") or os.getenv("OPENAI_API_KEY")
         self._api_base = cfg.get("embedding_api_base") or os.getenv("EMBEDDING_API_BASE")
-        self._dimension: Optional[int] = int(cfg.get("embedding_dim", 1536)) if "embedding_dim" in cfg else None
+        self._dimension: int | None = int(cfg.get("embedding_dim", 1536)) if "embedding_dim" in cfg else None
         
         self._local_model: Any = None
         self._load_attempted = False
-        self._load_error: Optional[str] = None
+        self._load_error: str | None = None
 
     @property
     def available(self) -> bool:
@@ -58,7 +58,7 @@ class EmbeddingProvider:
         return self._model_name
 
     @property
-    def dimension(self) -> Optional[int]:
+    def dimension(self) -> int | None:
         if not self.available:
             return None
         if self._dimension is not None:
@@ -73,6 +73,7 @@ class EmbeddingProvider:
         self._load_attempted = True
         try:
             import warnings
+
             from fastembed import TextEmbedding  # type: ignore
             cache_dir = os.path.expanduser(os.getenv("FASTEMBED_CACHE_DIR", "~/.makima/models/fastembed_cache"))
             os.makedirs(cache_dir, exist_ok=True)
@@ -92,7 +93,7 @@ class EmbeddingProvider:
         norm = float(np.linalg.norm(v))
         return v / norm if norm > 0 else v
 
-    def embed_one(self, text: str) -> Optional[np.ndarray]:
+    def embed_one(self, text: str) -> np.ndarray | None:
         """Return a normalized embedding vector for a single text, or None on failure."""
         if not self.available or not text or not isinstance(text, str):
             return None
@@ -127,7 +128,7 @@ class EmbeddingProvider:
                 
         return None
 
-    def embed_batch(self, texts: list[str]) -> Optional[np.ndarray]:
+    def embed_batch(self, texts: list[str]) -> np.ndarray | None:
         """Return an (N x dim) normalized matrix for a batch of texts, or None on failure."""
         if not self.available or not texts:
             return None

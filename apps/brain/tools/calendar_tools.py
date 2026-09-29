@@ -2,9 +2,9 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import datetime, timedelta, time
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 # Zero-crash resilience: graceful fallback for date parsing
 try:
@@ -24,17 +24,17 @@ _EVENTS_PATH = Path.home() / ".makima" / "calendar_events.json"
 
 class CalendarStore:
     """Calendar store with async locking and atomic JSON persistence under ~/.makima/."""
-    def __init__(self, path: Optional[Path] = None):
+    def __init__(self, path: Path | None = None):
         self._path: Path = Path(path) if path else _EVENTS_PATH
-        self.events: List[Dict[str, Any]] = self._load()
-        self._lock: Optional[asyncio.Lock] = None
+        self.events: list[dict[str, Any]] = self._load()
+        self._lock: asyncio.Lock | None = None
 
     def _get_lock(self) -> asyncio.Lock:
         if self._lock is None:
             self._lock = asyncio.Lock()
         return self._lock
 
-    def _load(self) -> List[Dict[str, Any]]:
+    def _load(self) -> list[dict[str, Any]]:
         try:
             if self._path.exists():
                 raw = json.loads(self._path.read_text(encoding="utf-8"))
@@ -70,16 +70,16 @@ class CalendarStore:
         except OSError as e:
             logger.error("Failed to persist calendar events to %s: %s", self._path, e)
 
-    async def add_event(self, event: Dict[str, Any]) -> None:
+    async def add_event(self, event: dict[str, Any]) -> None:
         async with self._get_lock():
             self.events.append(event)
             self._save()
 
-    async def get_overlaps(self, start: datetime, end: datetime) -> List[Dict[str, Any]]:
+    async def get_overlaps(self, start: datetime, end: datetime) -> list[dict[str, Any]]:
         async with self._get_lock():
             return [e for e in self.events if e["start"] < end and e["end"] > start]
 
-    async def get_events_on_date(self, target_date: datetime) -> List[Dict[str, Any]]:
+    async def get_events_on_date(self, target_date: datetime) -> list[dict[str, Any]]:
         async with self._get_lock():
             return [e for e in self.events if e["start"].date() == target_date.date()]
 
@@ -88,10 +88,14 @@ _store = CalendarStore()
 def _parse_dt(dt_str: str) -> datetime:
     """Robust datetime parser with fallback."""
     if date_parser:
-        return date_parser.parse(dt_str).replace(tzinfo=None)
-    return datetime.fromisoformat(dt_str.replace("Z", "+00:00")).replace(tzinfo=None)
+        dt = date_parser.parse(dt_str)
+    else:
+        dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
 
-async def schedule_meeting(title: str, start_time: str, end_time: str, attendees: List[str], location: str) -> Dict[str, Any]:
+async def schedule_meeting(title: str, start_time: str, end_time: str, attendees: list[str], location: str) -> dict[str, Any]:
     """Schedule a new meeting, checking for conflicts automatically."""
     try:
         start, end = _parse_dt(start_time), _parse_dt(end_time)
@@ -109,9 +113,9 @@ async def schedule_meeting(title: str, start_time: str, end_time: str, attendees
         return {"status": "success", "event_id": event["id"], "title": title}
     except Exception as e:
         logger.error(f"schedule_meeting failed: {e}")
-        return {"status": "error", "message": f"Failed to schedule meeting: {str(e)}"}
+        return {"status": "error", "message": f"Failed to schedule meeting: {e!s}"}
 
-async def check_schedule_conflicts(start_time: str, end_time: str) -> Dict[str, Any]:
+async def check_schedule_conflicts(start_time: str, end_time: str) -> dict[str, Any]:
     """Check for existing schedule conflicts within a given time range."""
     try:
         start, end = _parse_dt(start_time), _parse_dt(end_time)
@@ -122,9 +126,9 @@ async def check_schedule_conflicts(start_time: str, end_time: str) -> Dict[str, 
         }
     except Exception as e:
         logger.error(f"check_schedule_conflicts failed: {e}")
-        return {"status": "error", "message": f"Failed to check conflicts: {str(e)}"}
+        return {"status": "error", "message": f"Failed to check conflicts: {e!s}"}
 
-async def find_available_slots(date_str: str, duration_minutes: int, working_hours: List[int]) -> Dict[str, Any]:
+async def find_available_slots(date_str: str, duration_minutes: int, working_hours: list[int]) -> dict[str, Any]:
     """Find available time slots on a specific date within working hours."""
     try:
         target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
@@ -153,9 +157,9 @@ async def find_available_slots(date_str: str, duration_minutes: int, working_hou
         return {"status": "success", "date": date_str, "available_slots": slots}
     except Exception as e:
         logger.error(f"find_available_slots failed: {e}")
-        return {"status": "error", "message": f"Failed to find slots: {str(e)}"}
+        return {"status": "error", "message": f"Failed to find slots: {e!s}"}
 
-async def add_time_block(title: str, date_str: str, start_hour: int, duration_hours: float) -> Dict[str, Any]:
+async def add_time_block(title: str, date_str: str, start_hour: int, duration_hours: float) -> dict[str, Any]:
     """Add a dedicated time block (e.g., deep work) to the calendar."""
     try:
         target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
@@ -173,7 +177,7 @@ async def add_time_block(title: str, date_str: str, start_hour: int, duration_ho
         return {"status": "success", "event_id": event["id"], "title": title}
     except Exception as e:
         logger.error(f"add_time_block failed: {e}")
-        return {"status": "error", "message": f"Failed to add time block: {str(e)}"}
+        return {"status": "error", "message": f"Failed to add time block: {e!s}"}
 
 def register_calendar_tools(registry: Any) -> None:
     """Registers all calendar tools into the Makima OS tool registry."""

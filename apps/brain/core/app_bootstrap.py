@@ -306,7 +306,6 @@ class AppBootstrap:
         from ..eternal_memory import EternalMemory
         mem = EternalMemory(config=self.config)
         await mem.start()
-        self._stop_callbacks.append(mem.stop)
         return mem
 
     async def _init_tool_registry(self) -> Any:
@@ -347,6 +346,13 @@ class AppBootstrap:
             self._stop_callbacks.append(close_apps_fts)
         except Exception as e:
             logger.debug("close_apps_fts stop-hook registration failed: %s", e)
+
+        # Ensure Playwright browser processes are cleanly stopped on shutdown
+        try:
+            from ..tools.browser_tools import stop_browser_controller
+            self._stop_callbacks.append(stop_browser_controller)
+        except Exception as e:
+            logger.debug("stop_browser_controller stop-hook registration failed: %s", e)
 
         # Wire MCP servers: static config + UI-persisted store entries (store wins on name conflict)
         mcp_servers_config = list(self.config.get("mcp_servers") or [])
@@ -437,12 +443,18 @@ class AppBootstrap:
 
     def _init_execution_runtime(self) -> Any:
         from .execution_runtime import ExecutionRuntime
+        from .preference_engine import LearningCoordinator
+        coordinator = self.services.get(S.LEARNING_COORD)
+        if coordinator is None:
+            coordinator = LearningCoordinator(eternal_memory=self.services.get(S.MEMORY))
+            self.services.register(S.LEARNING_COORD, coordinator)
+        pref_eng = self.services.get(S.PREFERENCE_ENGINE)
+        if pref_eng and getattr(pref_eng, "learning_coordinator", None) is None:
+            pref_eng.learning_coordinator = coordinator
         return ExecutionRuntime(
             tool_registry=self.services.get(S.TOOL_REGISTRY),
-            learning_coordinator=None,
-            guardrails=None,
-            saga_recovery=None,
-            preference_engine=self.services.get(S.PREFERENCE_ENGINE),
+            learning_coordinator=coordinator,
+            preference_engine=pref_eng,
         )
 
     def _init_task_manager(self) -> Any:
@@ -488,6 +500,7 @@ class AppBootstrap:
             durable_task_engine=self.services.get(S.DURABLE_TASKS),
             preference_engine=self.services.get(S.PREFERENCE_ENGINE),
             settings_store=self.services.get(S.SETTINGS),
+            personality=self.services.get("personality") or self.services.get(S.PERSONALITY),
             config=self.config,
         )
         return orch
@@ -524,8 +537,6 @@ class AppBootstrap:
                 voice_engine._wake_enabled = bool(persisted_wake)
 
         self.gemini_voice = voice_engine
-        self._start_callbacks.append(voice_engine.start)
-        self._stop_callbacks.append(voice_engine.stop)
         return voice_engine
 
     def _init_health(self) -> Any:
@@ -542,12 +553,12 @@ class AppBootstrap:
     def _init_proactive_orchestrator(self) -> Any:
         from ..proactive_orchestrator import ProactiveOrchestrator
         from .service_registry import S
-        # TODO: ReflexionEngine will handle this
+        coordinator = self.services.get(S.LEARNING_COORD)
         return ProactiveOrchestrator(
             config=self.config,
             ws_broadcast=self.ws_broadcast,
             ai_handler=self.services.get(S.AI_HANDLER),
-            learning_engine=None,
+            learning_engine=coordinator,
             kernel=None,
             orchestration_engine=self.services.get(S.ORCH_ENGINE),
             durable_task_engine=self.services.get(S.DURABLE_TASKS),
@@ -581,7 +592,7 @@ class AppBootstrap:
 
     def _validate_critical_services(self) -> None:
         """Assert that essential services are available. Raise RuntimeError for missing ones."""
-        critical = [S.AI_HANDLER, S.ORCH_ENGINE]
+        critical = [S.AI_HANDLER, S.ORCH_ENGINE, S.TOOL_REGISTRY]
         missing = [name for name in critical if self.services.get(name) is None]
         if missing:
             msg = (

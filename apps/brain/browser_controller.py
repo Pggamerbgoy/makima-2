@@ -18,7 +18,7 @@ import logging
 import os
 import sys
 import time
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 logger = logging.getLogger("makima.browser_controller")
@@ -85,7 +85,7 @@ class BrowserController:
         self._cdp_page_is_new = False  # True if we created the CDP page ourselves
 
         self._page_timeout_ms = self.config.get("page_timeout_ms", 30_000)
-        self._playwright_available: Optional[bool] = None
+        self._playwright_available: bool | None = None
         # NOTE: headless is ALWAYS False for Makima desktop assistant — the browser
         # must be visible to the user. This is hardcoded at all launch sites below
         # and is NOT configurable. Removing the config-readable flag prevents any
@@ -577,7 +577,7 @@ class BrowserController:
             except Exception:
                 return await self.get_text(selector=selector, tab=tab)
 
-    async def get_screenshot_b64(self, tab: str = "default", **kwargs) -> Optional[str]:
+    async def get_screenshot_b64(self, tab: str = "default", **kwargs) -> str | None:
         """Take screenshot of specified tab and return base64-encoded JPEG."""
         page = await self.get_page(tab)
         if not page:
@@ -1189,12 +1189,12 @@ class BrowserController:
         target_urls = [u for u in extracted_links if isinstance(u, str) and u.startswith("http")][:max_results]
         if not target_urls:
             try:
-                from duckduckgo_search import DDGS
-                with DDGS() as ddgs:
-                    for r in ddgs.text(query, max_results=max_results):
-                        href = r.get("href") or r.get("link")
-                        if href and href.startswith("http"):
-                            target_urls.append(href)
+                from apps.brain.web_search_tool import search_web_httpx
+                res = await search_web_httpx(query, max_results=max_results)
+                for item in res.get("results", []):
+                    href = item.get("url")
+                    if href and href.startswith("http"):
+                        target_urls.append(href)
             except Exception:
                 pass
 
@@ -1348,7 +1348,6 @@ class BrowserController:
             EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int))
             GetWindowTextW = user32.GetWindowTextW
             GetWindowTextLengthW = user32.GetWindowTextLengthW
-            IsWindowVisible = user32.IsWindowVisible
             ShowWindow = user32.ShowWindow
             SetForegroundWindow = user32.SetForegroundWindow
             BringWindowToTop = user32.BringWindowToTop

@@ -208,7 +208,10 @@ export const MessageBubbleImpl: React.FC<MessageBubbleProps> = ({
 
   const handleFeedback = (isPositive: boolean) => {
     setFeedbackState(isPositive ? 'up' : 'down');
-    wsClient.sendFeedback(message.id, isPositive);
+    wsClient.sendFeedback(message.taskId || message.id, isPositive, 'general', {
+      agent_name: message.agent_name || '',
+      message_id: message.id,
+    });
   };
 
   // TTS Read Aloud — routes to Makima's voice system (Gemini Live / Kokoro / Edge-TTS)

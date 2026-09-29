@@ -20,7 +20,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from .tools.types import Tool, ToolCapability, ToolContext
 
@@ -348,9 +348,9 @@ class ToolMeta:
     call_count: int = field(default=0, compare=False, repr=False)
     failure_count: int = field(default=0, compare=False, repr=False)
     total_latency_ms: float = field(default=0.0, compare=False, repr=False)
-    _cached_tool: Optional[Any] = field(default=None, compare=False, repr=False)
+    _cached_tool: Any | None = field(default=None, compare=False, repr=False)
 
-    def get_capability(self, kwargs: Optional[dict[str, Any]] = None) -> Optional[ToolCapability]:
+    def get_capability(self, kwargs: dict[str, Any] | None = None) -> ToolCapability | None:
         """Dynamically resolve parameter-aware capability for this tool."""
         if not self.capabilities:
             return None
@@ -413,8 +413,8 @@ class ToolRegistry:
         schema: dict,
         *,
         category: str = "general",
-        agent_hints: Optional[list[str]] = None,
-        task_tags: Optional[list[str]] = None,
+        agent_hints: list[str] | None = None,
+        task_tags: list[str] | None = None,
         priority: int = 5,
         is_destructive: bool = False,
         is_deterministic: bool = False,
@@ -422,12 +422,12 @@ class ToolRegistry:
         timeout_s: float = 30.0,
         max_retries: int = 0,
         retry_backoff_s: float = 1.0,
-        retryable_keywords: Optional[tuple[str, ...] | list[str]] = None,
-        permissions: Optional[dict[str, str]] = None,
+        retryable_keywords: tuple[str, ...] | list[str] | None = None,
+        permissions: dict[str, str] | None = None,
         default_permission: str = "allow",
-        capabilities: Optional[dict[str, ToolCapability] | ToolCapability] = None,
-        critical_parameters: Optional[tuple[str, ...] | list[str]] = None,
-        parameter_domains: Optional[dict[str, Any]] = None,
+        capabilities: dict[str, ToolCapability] | ToolCapability | None = None,
+        critical_parameters: tuple[str, ...] | list[str] | None = None,
+        parameter_domains: dict[str, Any] | None = None,
     ) -> None:
         """Register an async Python function as a callable tool."""
         # Ensure description is not generic if docstring is available on func
@@ -526,15 +526,15 @@ class ToolRegistry:
         """Check if a tool is registered."""
         return name in self._tools
 
-    def get(self, name: str, default: Any = None) -> Optional[ToolMeta]:
+    def get(self, name: str, default: Any = None) -> ToolMeta | None:
         """Dictionary-compatible getter for tool metadata."""
         return self._tools.get(name, default)
 
-    def get_tool(self, name: str) -> Optional[ToolMeta]:
+    def get_tool(self, name: str) -> ToolMeta | None:
         """Accessor for tool metadata by name."""
         return self._tools.get(name)
 
-    def get_capability(self, name: str, kwargs: Optional[dict[str, Any]] = None) -> Optional[ToolCapability]:
+    def get_capability(self, name: str, kwargs: dict[str, Any] | None = None) -> ToolCapability | None:
         """Resolve capability descriptor for a tool and its execution arguments."""
         meta = self._tools.get(name)
         if not meta:
@@ -780,7 +780,7 @@ class ToolRegistry:
         self,
         detailed: bool = False,
         lang: str = "hinglish",
-        category: Optional[str] = None,
+        category: str | None = None,
     ) -> str:
         """
         Generate a human-facing executive summary of Makima's live capabilities.
@@ -923,7 +923,7 @@ class ToolRegistry:
         cls,
         tool_name: str,
         raw_params: dict[str, Any],
-        schema: Optional[dict[str, Any]] = None,
+        schema: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """
         Universal Parameter Aliasing, Normalization & Schema-Driven Type Coercion:
@@ -1075,7 +1075,7 @@ class ToolRegistry:
         name: str,
         *,
         consumer: str = "unknown",
-        context: Optional[ToolContext] = None,
+        context: ToolContext | None = None,
         **kwargs: Any,
     ) -> str:
         if name not in self._tools:
@@ -1104,15 +1104,23 @@ class ToolRegistry:
             else:
                 # Direct fallback invocation with single normalization
                 normalized = self.normalize_params(name, kwargs, schema=meta.schema)
+                from .core.execution_runtime import ExecutionRuntime
+                val_err = ExecutionRuntime._validate_params(meta.schema or {}, normalized)
+                if val_err:
+                    return f"Error executing tool {name}: {val_err}"
                 sig = inspect.signature(meta.func)
+                has_var_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+                call_args = dict(normalized)
+                if not has_var_kwargs:
+                    call_args = {k: v for k, v in call_args.items() if k in sig.parameters}
                 if "context" in sig.parameters:
-                    normalized["context"] = tool_context
+                    call_args["context"] = tool_context
                 t0 = time.monotonic()
                 try:
                     if inspect.iscoroutinefunction(meta.func):
-                        raw = await asyncio.wait_for(meta.func(**normalized), timeout=meta.timeout_s)
+                        raw = await asyncio.wait_for(meta.func(**call_args), timeout=meta.timeout_s)
                     else:
-                        r = meta.func(**normalized)
+                        r = meta.func(**call_args)
                         raw = await asyncio.wait_for(r, timeout=meta.timeout_s) if inspect.isawaitable(r) else r
                     meta.call_count += 1
                     meta.total_latency_ms += (time.monotonic() - t0) * 1000
@@ -1159,8 +1167,8 @@ class ToolRegistry:
     def to_sdk_function_tool(
         self,
         name: str,
-        execution_runtime: Optional[Any] = None,
-        agent: Optional[Any] = None,
+        execution_runtime: Any | None = None,
+        agent: Any | None = None,
     ) -> Any:
         """Convert a registered tool into an OpenAI Agents SDK FunctionTool."""
         from .core.sdk_bridge import to_sdk_function_tool
@@ -1174,8 +1182,8 @@ class ToolRegistry:
     def to_sdk_tools(
         self,
         names: Sequence[str],
-        execution_runtime: Optional[Any] = None,
-        agent: Optional[Any] = None,
+        execution_runtime: Any | None = None,
+        agent: Any | None = None,
     ) -> list[Any]:
         """Convert a list of registered tool names into OpenAI Agents SDK FunctionTool instances."""
         from .core.sdk_bridge import to_sdk_tools

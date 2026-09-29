@@ -30,12 +30,12 @@ Fixes applied (from browser_controller implementation plan):
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
-import logging
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Deque, Dict, Optional
+from typing import Any
 
 logger = logging.getLogger("makima.rate_limit_manager")
 
@@ -48,15 +48,15 @@ class ProviderBucket:
 
     # Sliding windows: (monotonic_ts, token_count) tuples for tokens;
     # monotonic_ts floats for requests.
-    tokens_used: Deque[tuple[float, int]] = field(default_factory=deque)
-    requests_used: Deque[float] = field(default_factory=deque)
+    tokens_used: deque[tuple[float, int]] = field(default_factory=deque)
+    requests_used: deque[float] = field(default_factory=deque)
 
     # O(1) running counters — kept in sync with the deques above.
     _current_tokens: int = field(default=0, init=False, repr=False)
     _current_reqs: int = field(default=0, init=False, repr=False)
 
     # monotonic timestamp until which this provider is rate-limited
-    rate_limited_until: Optional[float] = None
+    rate_limited_until: float | None = None
 
 
 class RateLimitManager:
@@ -74,7 +74,7 @@ class RateLimitManager:
         self.default_requests_per_min = int(rl_cfg.get("default_requests_per_min", 0))
 
         self.window_s = 60.0
-        self.buckets: Dict[str, ProviderBucket] = {}
+        self.buckets: dict[str, ProviderBucket] = {}
 
         # threading.Lock — safe from any call-site (sync or async).
         self._lock = threading.Lock()

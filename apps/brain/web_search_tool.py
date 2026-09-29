@@ -23,8 +23,8 @@ import html
 import logging
 import re
 from html.parser import HTMLParser
-from urllib.parse import unquote, urlparse, parse_qs
 from typing import Any
+from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
 
@@ -269,25 +269,9 @@ async def _html_search(
 
 # ─── Public API ──────────────────────────────────────────────────────────────
 
-def _format_results(query: str, results: list[dict[str, str]], max_results: int) -> str:
-    """Format result dicts into a plain-text string for the LLM to synthesize."""
-    if not results:
-        return f"No results found for '{query}'."
-
-    lines = [f"Web search results for '{query}':"]
-    for i, r in enumerate(results[:max_results], start=1):
-        title = r.get("title") or "(untitled)"
-        url = r.get("url") or ""
-        return ddg_url
-    if "duckduckgo.com/l/" in ddg_url:
-        full = ddg_url if ddg_url.startswith("http") else "https:" + ddg_url
-        try:
-            qs = parse_qs(urlparse(full).query)
-            if "uddg" in qs:
-                return unquote(qs["uddg"][0])
-        except Exception:
-            pass
-    return ddg_url
+# NOTE 2026-09-26: a broken duplicate _format_results (NameError: ddg_url)
+# used to sit here, shadowed by the correct def below. Deleted — redirect
+# unwrapping already lives in _extract_real_url + the HTML parser.
 
 
 # ─── Strategy 2: HTMLParser-based scraper ────────────────────────────────────
@@ -479,21 +463,16 @@ def _format_results(query: str, results: list[dict[str, str]], max_results: int)
     return "\n".join(lines)
 
 
-async def web_search(
+async def search_web_httpx(
     query: str, max_results: int = 5, limit: int | None = None, **kwargs: Any
-) -> str:
+) -> dict[str, Any]:
     """
-    Search the web and return a formatted string of results for agent synthesis.
-
-    Uses two strategies in order:
-      1. DDG JSON Instant Answer API (fast, structured, no regex)
-      2. DDG HTML scraping with stdlib HTMLParser fallback (broader web results)
-
-    Contract: never raises — always returns a formatted string.
+    Search the web using httpx client and return raw structured results dict:
+    {"query": str, "results": [{"url": str, "title": str, "snippet": str}, ...]}
     """
     query = (query or "").strip()
     if not query:
-        return "No search query was provided."
+        return {"query": query, "results": []}
 
     if limit is not None:
         max_results = limit
@@ -517,7 +496,35 @@ async def web_search(
         extra = [r for r in results if r["url"] not in seen_urls]
         results = html_results + extra
 
-    return _format_results(query, results, max_results)
+    return {"query": query, "results": results[:max_results]}
+
+
+async def web_search(
+    query: str, max_results: int = 5, limit: int | None = None, **kwargs: Any
+) -> str:
+    """
+    Search the web and return a formatted string of results for agent synthesis.
+
+    Uses two strategies in order:
+      1. DDG JSON Instant Answer API (fast, structured, no regex)
+      2. DDG HTML scraping with stdlib HTMLParser fallback (broader web results)
+
+    Contract: never raises — always returns a formatted string.
+    """
+    query = (query or "").strip()
+    if not query:
+        return "No search query was provided."
+
+    if limit is not None:
+        max_results = limit
+    try:
+        max_results = max(1, min(int(max_results), 10))
+    except (TypeError, ValueError):
+        max_results = 5
+
+    res = await search_web_httpx(query, max_results=max_results)
+    return _format_results(query, res.get("results", []), max_results)
+
 
 
 async def fetch_url(url: str, timeout: int = 15, **kwargs: Any) -> str:
@@ -532,7 +539,7 @@ async def fetch_url(url: str, timeout: int = 15, **kwargs: Any) -> str:
             return f"[fetch_url] HTTP {r.status_code} error fetching {clean_url}"
         body = r.text
         if len(body.encode("utf-8")) > 512 * 1024:
-            return f"[fetch_url] Response too large (> 512KB)."
+            return "[fetch_url] Response too large (> 512KB)."
         # Strip html tags if it looks like HTML
         if "<html" in body.lower() or "<body" in body.lower():
             cleaned = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", body, flags=re.DOTALL | re.IGNORECASE)

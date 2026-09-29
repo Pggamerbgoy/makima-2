@@ -123,7 +123,7 @@ async def set_reminder(
             task_name=title,
             context=ctx,
             resume_after_seconds=delay,
-            status="active",
+            status="paused" if delay > 0 else "active",
             original_prompt=clean,
         )
     except Exception as e:

@@ -12,15 +12,15 @@ import asyncio
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .types import Tool, ToolDefinition, ToolPolicy
 
 logger = logging.getLogger("makima.tools.memory")
 
-_services: Optional[Any] = None
-_memory_instance: Optional[Any] = None
-_mem_lock: Optional[asyncio.Lock] = None
+_services: Any | None = None
+_memory_instance: Any | None = None
+_mem_lock: asyncio.Lock | None = None
 
 
 def _get_mem_lock() -> asyncio.Lock:
@@ -141,12 +141,13 @@ async def memory_search(
 
     try:
         mem = await _get_memory()
-    except Exception as e:
-        return f"[]"
+    except Exception:
+        return "[]"
 
     try:
         rows = await mem.search(clean_query, k=int(k))
-        return json.dumps(rows, default=str)
+        filtered = [r for r in rows if float(r.get("relevance_score", 0.0)) >= 0.20]
+        return json.dumps(filtered, default=str)
     except Exception as e:
         logger.error("[memory] memory_search failed: %s", e)
         return "[]"
@@ -186,7 +187,7 @@ async def memory_fetch_oldest(
     """
     try:
         mem = await _get_memory()
-    except Exception as e:
+    except Exception:
         return "[]"
 
     try:
@@ -224,7 +225,7 @@ async def recall_memory(
     except Exception as e:
         return f"[Memory Error]: Memory subsystem unavailable: {e}"
 
-    results: Dict[str, Any] = {
+    results: dict[str, Any] = {
         "query": clean_query,
         "memories": [],
         "rules": [],
@@ -318,7 +319,7 @@ async def query_knowledge_graph(
     except Exception as e:
         return f"[Memory Error]: Memory subsystem unavailable: {e}"
 
-    connections: List[Dict[str, Any]] = []
+    connections: list[dict[str, Any]] = []
     if hasattr(mem, "find_related_entities"):
         try:
             related = await mem.find_related_entities(entity=clean_entity, max_depth=depth)
@@ -357,7 +358,7 @@ def register_memory_tools(tool_registry: Any, services: Any = None) -> None:
     if services is not None:
         set_memory_service(services)
 
-    tool_specs: List[Dict[str, Any]] = [
+    tool_specs: list[dict[str, Any]] = [
         # Original canonical tools
         {
             "name": "memory_store",
@@ -518,13 +519,13 @@ def register_memory_tools(tool_registry: Any, services: Any = None) -> None:
 
 
 __all__ = [
-    "memory_store",
-    "memory_search",
-    "memory_forget",
     "memory_fetch_oldest",
-    "recall_memory",
-    "remember_fact",
+    "memory_forget",
+    "memory_search",
+    "memory_store",
     "query_knowledge_graph",
+    "recall_memory",
     "register_memory_tools",
+    "remember_fact",
     "set_memory_service",
 ]

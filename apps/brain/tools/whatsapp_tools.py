@@ -20,9 +20,8 @@ import os
 import re
 import subprocess
 import sys
-import time
 import urllib.parse
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger("makima.tools.whatsapp")
 
@@ -33,7 +32,7 @@ _PHONE_RE = re.compile(r"^\+?[0-9]{7,15}$")
 # Phone number normalization
 # ---------------------------------------------------------------------------
 
-def _normalize_phone(value: str) -> Optional[str]:
+def _normalize_phone(value: str) -> str | None:
     """Return digits-only phone number (no +) if valid, else None."""
     if not value or not isinstance(value, str):
         return None
@@ -43,13 +42,13 @@ def _normalize_phone(value: str) -> Optional[str]:
     return None
 
 
-_active_adapter: Optional[WhatsAppAdapter] = None
+_active_adapter: WhatsAppAdapter | None = None
 
-def set_whatsapp_adapter(adapter: Optional[WhatsAppAdapter]) -> None:
+def set_whatsapp_adapter(adapter: WhatsAppAdapter | None) -> None:
     global _active_adapter
     _active_adapter = adapter
 
-def get_whatsapp_adapter() -> Optional[WhatsAppAdapter]:
+def get_whatsapp_adapter() -> WhatsAppAdapter | None:
     return _active_adapter
 
 
@@ -61,7 +60,7 @@ class WhatsAppAdapter:
         self.browser_controller = browser_controller
 
     @staticmethod
-    def normalize_phone(value: str) -> Optional[str]:
+    def normalize_phone(value: str) -> str | None:
         return _normalize_phone(value)
 
     async def search_contacts(self, query: str) -> list[dict[str, Any]]:
@@ -169,7 +168,7 @@ _CHAT_LIST_ITEM_TITLE = "div[aria-label='Chat list'] span[title]"
 _QR_CANVAS_SELECTOR = "canvas[aria-label], div[data-testid='qrcode']"
 
 
-async def _get_browser(config: Optional[dict] = None) -> Any:
+async def _get_browser(config: dict | None = None) -> Any:
     try:
         from .browser_tools import get_or_create_browser_controller
         return await get_or_create_browser_controller(config or {})
@@ -178,7 +177,7 @@ async def _get_browser(config: Optional[dict] = None) -> Any:
         return None
 
 
-async def _ensure_web_open(bc: Any, method: str) -> Optional[str]:
+async def _ensure_web_open(bc: Any, method: str) -> str | None:
     """
     Ensure WhatsApp Web is open and logged in.
     Returns None on success, error string on failure.
@@ -209,7 +208,7 @@ async def _ensure_web_open(bc: Any, method: str) -> Optional[str]:
     return None
 
 
-async def _send_via_web(phone: Optional[str], contact_name: Optional[str], message: str, config: Optional[dict] = None, method: str = "web_managed") -> str:
+async def _send_via_web(phone: str | None, contact_name: str | None, message: str, config: dict | None = None, method: str = "web_managed") -> str:
     """Send via WhatsApp Web (CDP or managed Chromium)."""
     bc = await _get_browser(config)
     if not bc:
@@ -241,7 +240,7 @@ async def _send_via_web(phone: Optional[str], contact_name: Optional[str], messa
     return f"Message sent via WhatsApp Web to {phone or contact_name}"
 
 
-async def _read_via_web(phone: Optional[str], contact_name: Optional[str], limit: int, config: Optional[dict] = None, method: str = "web_managed") -> list[dict]:
+async def _read_via_web(phone: str | None, contact_name: str | None, limit: int, config: dict | None = None, method: str = "web_managed") -> list[dict]:
     bc = await _get_browser(config)
     if not bc:
         return []
@@ -305,7 +304,7 @@ async def whatsapp_send_message(
     if not clean_msg:
         return {"status": "error", "message": "No message content provided."}
 
-    if not confirmed and not kwargs.get("bypass_confirmation"):
+    if not confirmed:
         return {
             "status": "needs_confirmation",
             "message": (
@@ -344,8 +343,8 @@ async def whatsapp_send_message(
             return {
                 "status": "error",
                 "message": (
-                    f"WhatsApp Desktop is installed but requires a phone number (not a contact name) "
-                    f"for sending. Please provide the phone number with country code, e.g. +919876543210."
+                    "WhatsApp Desktop is installed but requires a phone number (not a contact name) "
+                    "for sending. Please provide the phone number with country code, e.g. +919876543210."
                 ),
             }
         result = await _send_via_uri_scheme(phone, clean_msg)

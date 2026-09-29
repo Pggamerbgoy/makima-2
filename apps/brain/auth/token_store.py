@@ -12,7 +12,6 @@ import logging
 import os
 import sqlite3
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger("makima.auth.token_store")
 
@@ -26,8 +25,8 @@ def _init_fernet():
     generated and stored there on first boot. Falls back to a local key file
     if keyring is unavailable (e.g., headless environments).
     """
-    from cryptography.fernet import Fernet
     import keyring as kr
+    from cryptography.fernet import Fernet
 
     try:
         key = kr.get_password(_KEYRING_SERVICE, _KEYRING_USERNAME)
@@ -94,7 +93,7 @@ class TokenStore:
         except Exception as exc:
             logger.error("[auth] save failed for %s: %s", provider, exc)
 
-    def get(self, provider: str) -> Optional[dict]:
+    def get(self, provider: str) -> dict | None:
         """Decrypt and return token_data for the given provider, or None."""
         try:
             with sqlite3.connect(self.db_path) as conn:

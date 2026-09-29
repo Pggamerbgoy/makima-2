@@ -63,7 +63,22 @@ class OSWorldState:
         self._last_fg_window: str = ""
         self._last_fg_time: float = time.monotonic()
         self._clipboard_history: deque[dict[str, Any]] = deque(maxlen=5)
-        self._lock = asyncio.Lock()
+        self._async_lock: asyncio.Lock | None = None
+
+    @property
+    def _lock(self) -> asyncio.Lock:
+        """Loop-safe lock accessor to prevent cross-event-loop binding failures in singletons."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if self._async_lock is None or getattr(self._async_lock, "_loop", None) is not loop:
+            self._async_lock = asyncio.Lock()
+        return self._async_lock
+
+    @_lock.setter
+    def _lock(self, val: asyncio.Lock | None) -> None:
+        self._async_lock = val
 
     # ── Process cache ─────────────────────────────────────────────────────────
 

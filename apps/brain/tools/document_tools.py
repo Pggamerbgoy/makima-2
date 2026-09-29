@@ -15,9 +15,7 @@ Headless document engineering, parsing, formatting, and conversion engine:
 from __future__ import annotations
 
 import asyncio
-import base64
 import csv
-import io
 import json
 import logging
 import os
@@ -25,10 +23,10 @@ import re
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any
+from collections.abc import Callable
 
 from ..core.known_folders import resolve_known_folder
 
@@ -67,7 +65,8 @@ except ImportError:
 try:
     from pptx import Presentation
     from pptx.dml.color import RGBColor as PptxRGBColor
-    from pptx.util import Inches as PptxInches, Pt as PptxPt
+    from pptx.util import Inches as PptxInches
+    from pptx.util import Pt as PptxPt
     _HAS_PPTX = True
 except ImportError:
     _HAS_PPTX = False
@@ -158,7 +157,7 @@ THEMES: dict[str, ThemePalette] = {
 }
 
 
-def get_theme_palette(theme_name: Optional[str] = None) -> ThemePalette:
+def get_theme_palette(theme_name: str | None = None) -> ThemePalette:
     """Resolve theme name to ThemePalette instance."""
     if not theme_name:
         return THEMES["slate"]
@@ -175,7 +174,7 @@ def get_theme_palette(theme_name: Optional[str] = None) -> ThemePalette:
 # ---------------------------------------------------------------------------
 # Global Shared Executor & Temp Folder Management
 # ---------------------------------------------------------------------------
-_doc_executor: Optional[ThreadPoolExecutor] = None
+_doc_executor: ThreadPoolExecutor | None = None
 _DEFAULT_TEMP_DIR = Path(tempfile.gettempdir()) / "makima_documents"
 
 
@@ -191,7 +190,7 @@ async def _run_in_executor(func: Callable[..., Any], *args: Any) -> Any:
     return await loop.run_in_executor(_get_executor(), func, *args)
 
 
-def resolve_target_dir(destination: Optional[str] = None, is_temporary: bool = False) -> Path:
+def resolve_target_dir(destination: str | None = None, is_temporary: bool = False) -> Path:
     """
     Resolves target output directory.
     Uses known folder mapping (desktop, downloads, documents) or user home / custom path.
@@ -317,22 +316,29 @@ def _simple_markdown_to_html(md_text: str) -> str:
     return "\n".join(html_lines)
 
 
+def _sanitize_cell(val: Any) -> Any:
+    """Prepend a single quote to string values starting with formula chars (CWE-1236)."""
+    if isinstance(val, str) and val.startswith(("=", "+", "-", "@", "\t", "\r")):
+        return f"'{val}"
+    return val
+
+
 # =============================================================================
 # 1. EXCEL GENERATION (.xlsx)
 # =============================================================================
 async def create_excel(
     filename: str = "report.xlsx",
-    sheets_data: Optional[Dict[str, Any]] = None,
+    sheets_data: dict[str, Any] | None = None,
     title: str = "",
-    columns: Optional[List[Any]] = None,
-    rows: Optional[List[Any]] = None,
+    columns: list[Any] | None = None,
+    rows: list[Any] | None = None,
     theme: str = "slate",
     add_summary_row: bool = True,
-    destination: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
+    destination: str | None = None,
+    metadata: dict[str, Any] | None = None,
     is_temporary: bool = False,
     **kwargs: Any,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Generate publication-grade Excel spreadsheets (.xlsx) with theme styling,
     auto-filtering, formulas (=SUM/=AVERAGE), and auto column width.
@@ -417,7 +423,7 @@ async def create_excel(
 
             if headers:
                 for col_idx, header in enumerate(headers, start=1):
-                    cell = ws.cell(row=header_row_idx, column=col_idx, value=str(header))
+                    cell = ws.cell(row=header_row_idx, column=col_idx, value=_sanitize_cell(str(header)))
                     cell.fill = header_fill
                     cell.font = header_font
                     cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -439,7 +445,7 @@ async def create_excel(
                     row_list = [row_values]
 
                 for col_idx, val in enumerate(row_list, start=1):
-                    cell = ws.cell(row=row_num, column=col_idx, value=val)
+                    cell = ws.cell(row=row_num, column=col_idx, value=_sanitize_cell(val))
                     cell.font = body_font
                     cell.border = thin_border
                     if is_even:
@@ -492,8 +498,7 @@ async def create_excel(
                 col_letter = get_column_letter(col[0].column)
                 for cell in col:
                     val_str = str(cell.value or "")
-                    if len(val_str) > max_len:
-                        max_len = len(val_str)
+                    max_len = max(max_len, len(val_str))
                 ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
 
         filepath.parent.mkdir(parents=True, exist_ok=True)
@@ -514,16 +519,16 @@ async def create_excel(
 # =============================================================================
 async def create_word(
     filename: str = "document.docx",
-    content_blocks: Optional[List[Dict[str, Any]]] = None,
-    sections: Optional[List[Dict[str, Any]]] = None,
+    content_blocks: list[dict[str, Any]] | None = None,
+    sections: list[dict[str, Any]] | None = None,
     title: str = "",
     theme: str = "slate",
     has_cover_page: bool = False,
-    destination: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
+    destination: str | None = None,
+    metadata: dict[str, Any] | None = None,
     is_temporary: bool = False,
     **kwargs: Any,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Generate publication-ready Microsoft Word documents (.docx) with auto-updating
     TOC, headings, styled tables, cover pages, and callouts.
@@ -705,15 +710,15 @@ async def create_word(
 # =============================================================================
 async def create_pdf(
     filename: str = "document.pdf",
-    md_filepath: Optional[str] = None,
-    html_content: Optional[str] = None,
-    markdown_content: Optional[str] = None,
+    md_filepath: str | None = None,
+    html_content: str | None = None,
+    markdown_content: str | None = None,
     title: str = "",
     theme: str = "slate",
-    destination: Optional[str] = None,
+    destination: str | None = None,
     is_temporary: bool = False,
     **kwargs: Any,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Generate enterprise-grade PDF documents compiled from Markdown or HTML with
     theme palettes via Playwright (or fallback HTML).
@@ -825,14 +830,14 @@ async def create_pdf(
 # =============================================================================
 async def create_powerpoint(
     filename: str = "presentation.pptx",
-    slides_data: Optional[List[Dict[str, Any]]] = None,
+    slides_data: list[dict[str, Any]] | None = None,
     title: str = "",
     theme: str = "slate",
-    destination: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
+    destination: str | None = None,
+    metadata: dict[str, Any] | None = None,
     is_temporary: bool = False,
     **kwargs: Any,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Generate executive PowerPoint presentations (.pptx) with modern 16:9 widescreen layout.
     """
@@ -972,10 +977,10 @@ create_ppt = create_powerpoint
 # 5. UNIVERSAL DOCUMENT PARSING (PDF, DOCX, XLSX, CSV, TXT, MD, JSON, PPTX)
 # =============================================================================
 async def parse_document(
-    filepath: Union[str, Path] = "",
-    file_path: Union[str, Path] = "",
+    filepath: str | Path = "",
+    file_path: str | Path = "",
     **kwargs: Any,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Parse and extract structured text, tables, and sheets from PDF, DOCX, XLSX, CSV, TXT, MD, JSON, or PPTX.
     """
@@ -1072,14 +1077,14 @@ async def parse_document(
 # 6. UNIVERSAL DOCUMENT CONVERSION ENGINE
 # =============================================================================
 async def convert_document(
-    source_path: Union[str, Path],
+    source_path: str | Path,
     target_format: str,
-    output_filename: Optional[str] = None,
+    output_filename: str | None = None,
     theme: str = "slate",
-    destination: Optional[str] = None,
+    destination: str | None = None,
     is_temporary: bool = False,
     **kwargs: Any,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Universal document converter: transforms files between CSV, XLSX, DOCX, PDF, HTML, and Markdown.
     """
@@ -1148,8 +1153,12 @@ async def convert_document(
             with open(out_path, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 if headers:
-                    writer.writerow(headers)
-                writer.writerows(rows)
+                    writer.writerow([_sanitize_cell(h) for h in headers])
+                for r in rows:
+                    if isinstance(r, (list, tuple)):
+                        writer.writerow([_sanitize_cell(c) for c in r])
+                    else:
+                        writer.writerow([_sanitize_cell(r)])
             return {"status": "ok", "format": "csv", "path": str(out_path), "filename": out_path.name}
         else:
             raw_text = parsed.get("content", str(parsed))
@@ -1170,13 +1179,13 @@ async def convert_document(
 # =============================================================================
 async def generate_report(
     filename: str = "report.html",
-    sections: Optional[List[Dict[str, Any]]] = None,
-    metadata: Optional[Dict[str, Any]] = None,
+    sections: list[dict[str, Any]] | None = None,
+    metadata: dict[str, Any] | None = None,
     theme: str = "slate",
-    destination: Optional[str] = None,
+    destination: str | None = None,
     is_temporary: bool = False,
     **kwargs: Any,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Generates a structured Markdown and HTML executive report."""
     palette = get_theme_palette(theme)
     base_stem = Path(filename).stem
@@ -1235,7 +1244,7 @@ async def generate_report(
 # =============================================================================
 # 8. EPHEMERAL DOCUMENT CLEANUP & MANAGEMENT
 # =============================================================================
-async def delete_document(filepath: Union[str, Path]) -> Dict[str, Any]:
+async def delete_document(filepath: str | Path) -> dict[str, Any]:
     """Safely delete a generated or temporary document file."""
     path = Path(filepath)
     if not path.exists():
@@ -1257,7 +1266,7 @@ async def delete_document(filepath: Union[str, Path]) -> Dict[str, Any]:
         return {"status": "error", "message": f"Failed to delete {path}: {e}"}
 
 
-async def cleanup_temp_documents(max_age_hours: Optional[float] = None) -> Dict[str, Any]:
+async def cleanup_temp_documents(max_age_hours: float | None = None) -> dict[str, Any]:
     """Clean up all temporary documents generated in the temp directory."""
     if not _DEFAULT_TEMP_DIR.exists():
         return {"status": "ok", "message": "No temp documents found", "deleted_count": 0}
@@ -1279,7 +1288,7 @@ async def cleanup_temp_documents(max_age_hours: Optional[float] = None) -> Dict[
 # Declarative Definitions and Registry Mapping
 # ---------------------------------------------------------------------------
 
-DOCUMENT_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
+DOCUMENT_TOOL_DEFINITIONS: list[dict[str, Any]] = [
     {
         "name": "create_excel",
         "description": "Generate publication-grade Excel spreadsheets (.xlsx) with formatting, live formulas, and theme palettes.",

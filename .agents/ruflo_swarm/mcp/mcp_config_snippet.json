@@ -1,0 +1,12 @@
+{
+  "ruflo": {
+    "command": "cmd.exe",
+    "args": [
+      "/c",
+      "ruflo",
+      "mcp",
+      "start"
+    ],
+    "description": "Ruflo v3.45.0 MCP Server — AI Agent Swarm Orchestration Platform (Swarm, Hive-Mind, Raft Consensus, HNSW Vector Memory, Static Analysis)"
+  }
+}

@@ -4,7 +4,6 @@
 //! - VectorIndex (HNSW)
 //! - TripleStore (SQLite WAL)
 //! - Checkpointer (CBOR atomic write)
-//! - FileIndexer (hash-based re-indexing)
 
 use pyo3::prelude::*;
 

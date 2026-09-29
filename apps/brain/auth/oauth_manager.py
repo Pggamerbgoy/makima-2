@@ -31,8 +31,7 @@ import logging
 import os
 import secrets
 import time
-from typing import Optional
-from urllib.parse import urlencode, urlparse, parse_qs
+from urllib.parse import urlencode
 
 import httpx
 
@@ -131,7 +130,7 @@ class OAuthManager:
     Instances are singleton — typically created once at Brain startup.
     """
 
-    def __init__(self, token_store: Optional[TokenStore] = None) -> None:
+    def __init__(self, token_store: TokenStore | None = None) -> None:
         self._store = token_store or TokenStore()
         # Pending states: {state_param -> {"verifier": str, "provider": str}}
         self._pending: dict[str, dict] = {}
@@ -151,7 +150,7 @@ class OAuthManager:
 
         client_id = os.environ.get(cfg["client_id_env"], "")
         if not client_id:
-            raise EnvironmentError(
+            raise OSError(
                 f"Missing env var {cfg['client_id_env']!r}. "
                 f"Register a {provider} OAuth App and set that variable."
             )
@@ -251,7 +250,7 @@ class OAuthManager:
 
     # ─────────────────────────── Token access ──────────────────────────────
 
-    async def get_access_token(self, provider: str) -> Optional[str]:
+    async def get_access_token(self, provider: str) -> str | None:
         """
         Returns a valid access token for the given provider.
         Automatically refreshes if the token is expired.
@@ -269,7 +268,7 @@ class OAuthManager:
 
         return token_data.get("access_token")
 
-    async def _refresh_token(self, provider: str, token_data: dict) -> Optional[dict]:
+    async def _refresh_token(self, provider: str, token_data: dict) -> dict | None:
         """Attempt to refresh an expired access token using the refresh_token."""
         cfg = PROVIDERS.get(provider)
         if not cfg:

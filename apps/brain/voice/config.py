@@ -12,7 +12,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger("makima.voice.config")
 
@@ -30,30 +30,13 @@ class VADConfig:
 
 
 @dataclass
-class NoiseGateConfig:
-    """Adaptive noise gate calibration."""
-    calibration_window_s: float = 3.0
-    rolling_window_size: int = 50
-    percentile: int = 90
-
-
-@dataclass
 class TTSConfig:
-    """TTS engine settings."""
+    """TTS engine settings — engine id only.
+
+    NOTE 2026-09-26: queue/priority knobs removed (nothing consumed them;
+    live audio streams straight through). Synthesis is Gemini-native.
+    """
     engine: str = "gemini_live"
-    priority_urgent: int = 0
-    priority_normal: int = 5
-    queue_maxsize: int = 20
-    cancel_on_ptt: bool = True
-
-
-@dataclass
-class ConfidenceConfig:
-    """STT confidence thresholds."""
-    high_threshold: float = 0.7
-    low_threshold: float = 0.3
-    auto_confirm_timeout_s: float = 10.0
-    auto_confirm_min_confidence: float = 0.5
 
 
 @dataclass
@@ -63,17 +46,33 @@ class WakeDaemonConfig:
     model: str = "hey_makima"
     threshold: float = 0.6
     refractory_s: float = 2.0
-    device_index: Optional[int] = None
+    device_index: int | None = None
 
 
 @dataclass
-class LanguageHints:
-    """Language detection hints."""
-    default: str = "auto"
-    devanagari_threshold: float = 0.3
-    latin_only: str = "en"
-    devanagari_dominant: str = "hi"
-    mixed: str = "auto"
+class LiveSessionConfig:
+    """Gemini Live server-native features (no local re-implementation).
+
+    These map 1:1 onto LiveConnectConfig fields — the model does the work,
+    we only configure + consume. See engine._connect_and_stream.
+    """
+    vad_start_sensitivity: str = "high"   # high|low → server start-of-speech
+    vad_end_sensitivity: str = "high"     # high|low → server end-of-speech
+    prefix_padding_ms: int = 300
+    silence_duration_ms: int = 600
+    input_transcription: bool = True      # native STT (replaces local Whisper path)
+    output_transcription: bool = True     # native model-output transcripts
+    context_compression: bool = True      # sliding-window (audio ~25 tok/s)
+    compression_trigger_tokens: int = 12000
+    session_resumption: bool = True       # server resumption protocol
+    reconnect_max_attempts: int = 10      # 0 = unlimited; explicit stop always exits
+    reconnect_base_delay_s: float = 2.0   # exponential backoff base
+    reconnect_max_delay_s: float = 30.0   # backoff cap
+    receive_max_errors: int = 5           # consecutive transport errors before reconnect
+
+
+# NOTE 2026-09-26: LanguageHints removed — zero consumers; multilingual
+# handling is Gemini-native (model matches user language per system prompt).
 
 
 @dataclass
@@ -82,24 +81,23 @@ class VoiceConfig:
     Complete voice subsystem configuration.
     Mirrors configs/voice_config.json with typed access.
     """
-    wake_phrases: List[str] = field(default_factory=lambda: [
+    wake_phrases: list[str] = field(default_factory=lambda: [
         "hey makima", "makima", "aye makima", "ok makima", "hello makima",
     ])
-    wake_fuzzy_threshold: float = 0.75
-
-    language_hints: LanguageHints = field(default_factory=LanguageHints)
+    # NOTE 2026-09-26: wake_fuzzy_threshold/language_hints/noise_gate/
+    # confidence removed — zero consumers (fuzzy path uses wake_daemon
+    # threshold; language+denoise+STT are Gemini-native).
     vad: VADConfig = field(default_factory=VADConfig)
-    noise_gate: NoiseGateConfig = field(default_factory=NoiseGateConfig)
     tts: TTSConfig = field(default_factory=TTSConfig)
-    confidence: ConfidenceConfig = field(default_factory=ConfidenceConfig)
     wake_daemon: WakeDaemonConfig = field(default_factory=WakeDaemonConfig)
+    live: LiveSessionConfig = field(default_factory=LiveSessionConfig)
     gemini_model: str = "gemini-3.8-live"
 
     @classmethod
-    def load(cls, path: Optional[Path] = None) -> "VoiceConfig":
+    def load(cls, path: Path | None = None) -> VoiceConfig:
         """Load configuration from JSON file, falling back to defaults for missing keys."""
         config_path = path or _DEFAULT_CONFIG_PATH
-        raw: Dict[str, Any] = {}
+        raw: dict[str, Any] = {}
         if config_path.exists():
             try:
                 with open(config_path, encoding="utf-8") as f:
@@ -114,13 +112,10 @@ class VoiceConfig:
             wake_phrases=raw.get("wake_phrases") or [
                 "hey makima", "makima", "aye makima", "ok makima", "hello makima",
             ],
-            wake_fuzzy_threshold=float(raw.get("wake_fuzzy_threshold", 0.75)),
-            language_hints=cls._load_sub(LanguageHints, raw.get("language_hints", {})),
             vad=cls._load_sub(VADConfig, raw.get("vad", {})),
-            noise_gate=cls._load_sub(NoiseGateConfig, raw.get("noise_gate", {})),
             tts=cls._load_sub(TTSConfig, raw.get("tts", {})),
-            confidence=cls._load_sub(ConfidenceConfig, raw.get("confidence", {})),
             wake_daemon=cls._load_sub(WakeDaemonConfig, raw.get("wake_daemon", {})),
+            live=cls._load_sub(LiveSessionConfig, raw.get("live", {})),
             gemini_model=raw.get("gemini_model", "gemini-3.8-live"),
         )
 
@@ -134,6 +129,6 @@ class VoiceConfig:
         filtered = {k: v for k, v in data.items() if k in valid_fields}
         return cls_type(**filtered)
 
-    def reload(self, path: Optional[Path] = None) -> "VoiceConfig":
+    def reload(self, path: Path | None = None) -> VoiceConfig:
         """Hot-reload from disk and return a fresh instance."""
         return self.load(path)

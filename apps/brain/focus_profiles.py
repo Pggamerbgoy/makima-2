@@ -13,12 +13,10 @@ This snapshot provides:
 
 from __future__ import annotations
 
-import os
-import yaml
-import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
+import yaml
 
 DEFAULT_PROFILE = {
     "wake_word_enabled": True,
@@ -34,44 +32,16 @@ DEFAULT_PROFILE = {
 
 FALLBACK_PROFILES: dict[str, dict] = {
     "work": dict(DEFAULT_PROFILE),
-    "quiet": dict(DEFAULT_PROFILE, **{
-        "wake_word_enabled": True,
-        "proactive_suggestions_enabled": False,
-        "tts_speak_unrequested": False,
-        "hud_level": "minimal",
-        "notification_outbound": False,
-        "notification_inbound": False,
-        "clipboard_events": False,
-    }),
-    "meeting": dict(DEFAULT_PROFILE, **{
-        "wake_word_enabled": False,
-        "screen_capture_enabled": False,
-        "proactive_suggestions_enabled": False,
-        "tts_speak_unrequested": False,
-        "hud_level": "hidden",
-        "cpu_priority": "low",
-        "notification_outbound": False,
-        "notification_inbound": False,
-        "clipboard_events": False,
-    }),
-    "gaming": dict(DEFAULT_PROFILE, **{
-        "wake_word_enabled": False,
-        "screen_capture_enabled": False,
-        "proactive_suggestions_enabled": False,
-        "tts_speak_unrequested": False,
-        "hud_level": "hidden",
-        "cpu_priority": "low",
-        "notification_outbound": False,
-        "notification_inbound": False,
-        "clipboard_events": False,
-    }),
+    "quiet": dict(DEFAULT_PROFILE, wake_word_enabled=True, proactive_suggestions_enabled=False, tts_speak_unrequested=False, hud_level="minimal", notification_outbound=False, notification_inbound=False, clipboard_events=False),
+    "meeting": dict(DEFAULT_PROFILE, wake_word_enabled=False, screen_capture_enabled=False, proactive_suggestions_enabled=False, tts_speak_unrequested=False, hud_level="hidden", cpu_priority="low", notification_outbound=False, notification_inbound=False, clipboard_events=False),
+    "gaming": dict(DEFAULT_PROFILE, wake_word_enabled=False, screen_capture_enabled=False, proactive_suggestions_enabled=False, tts_speak_unrequested=False, hud_level="hidden", cpu_priority="low", notification_outbound=False, notification_inbound=False, clipboard_events=False),
 }
 
 
 class FocusProfiles:
     def __init__(self, configs_dir: str | None = None):
         self.configs_dir = Path(configs_dir or Path(__file__).resolve().parents[2] / "configs")
-        self._profiles: Dict[str, Any] = {}
+        self._profiles: dict[str, Any] = {}
         self.active_profile: str = "work"
         self.load()
 
@@ -92,7 +62,7 @@ class FocusProfiles:
         merged.update(profile)
         return merged
 
-    def apply_profile(self, name: str) -> Dict[str, Any]:
+    def apply_profile(self, name: str) -> dict[str, Any]:
         profile = self._profiles.get(name.lower())
         if not profile:
             profile = self._profiles.get("work", {})

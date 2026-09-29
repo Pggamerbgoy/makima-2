@@ -5,7 +5,7 @@ import re
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 logger = logging.getLogger("makima.os.finance")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -17,17 +17,17 @@ _EXPENSES_PATH = _DEFAULT_BASE / "finance_expenses.json"
 class FinanceStore:
     """Thread-safe expense store with atomic JSON persistence under ~/.makima/."""
 
-    def __init__(self, path: Optional[Path] = None) -> None:
-        self._lock: Optional[asyncio.Lock] = None
+    def __init__(self, path: Path | None = None) -> None:
+        self._lock: asyncio.Lock | None = None
         self._path: Path = Path(path) if path else _EXPENSES_PATH
-        self._expenses: List[Dict[str, Any]] = self._load()
+        self._expenses: list[dict[str, Any]] = self._load()
 
     def _get_lock(self) -> asyncio.Lock:
         if self._lock is None:
             self._lock = asyncio.Lock()
         return self._lock
 
-    def _load(self) -> List[Dict[str, Any]]:
+    def _load(self) -> list[dict[str, Any]]:
         try:
             if self._path.exists():
                 raw = json.loads(self._path.read_text(encoding="utf-8"))
@@ -59,12 +59,12 @@ class FinanceStore:
         except OSError as e:
             logger.error("Failed to persist finance expenses to %s: %s", self._path, e)
 
-    async def add_expense(self, expense: Dict[str, Any]) -> None:
+    async def add_expense(self, expense: dict[str, Any]) -> None:
         async with self._get_lock():
             self._expenses.append(expense)
             self._save()
 
-    async def get_expenses(self, month: Optional[int] = None, year: Optional[int] = None) -> List[Dict[str, Any]]:
+    async def get_expenses(self, month: int | None = None, year: int | None = None) -> list[dict[str, Any]]:
         async with self._get_lock():
             if not month or not year:
                 return list(self._expenses)
@@ -77,7 +77,7 @@ class FinanceStore:
 
 _store = FinanceStore()
 
-async def track_expense(amount: float, category: str, description: str, currency: str = "USD") -> Dict[str, Any]:
+async def track_expense(amount: float, category: str, description: str, currency: str = "USD") -> dict[str, Any]:
     """Records a new financial expense with strict validation and async safety."""
     try:
         if amount <= 0:
@@ -96,9 +96,9 @@ async def track_expense(amount: float, category: str, description: str, currency
         return {"status": "success", "data": {**record, "timestamp": record["timestamp"].isoformat()}}
     except Exception as e:
         logger.exception("Failed to track expense")
-        return {"status": "error", "message": f"Tracking failed: {str(e)}"}
+        return {"status": "error", "message": f"Tracking failed: {e!s}"}
 
-async def analyze_budget(month: int, year: int, target_budget: float) -> Dict[str, Any]:
+async def analyze_budget(month: int, year: int, target_budget: float) -> dict[str, Any]:
     """Analyzes monthly spending against a target budget, providing utilization metrics."""
     try:
         if not (1 <= month <= 12) or year < 2000:
@@ -109,7 +109,7 @@ async def analyze_budget(month: int, year: int, target_budget: float) -> Dict[st
         remaining = target_budget - total_spent
         utilization = (total_spent / target_budget) * 100 if target_budget > 0 else 0.0
 
-        category_breakdown: Dict[str, float] = {}
+        category_breakdown: dict[str, float] = {}
         for e in expenses:
             cat = e["category"]
             category_breakdown[cat] = category_breakdown.get(cat, 0.0) + e["amount"]
@@ -125,9 +125,9 @@ async def analyze_budget(month: int, year: int, target_budget: float) -> Dict[st
         return {"status": "success", "data": analysis}
     except Exception as e:
         logger.exception("Failed to analyze budget")
-        return {"status": "error", "message": f"Analysis failed: {str(e)}"}
+        return {"status": "error", "message": f"Analysis failed: {e!s}"}
 
-async def parse_receipt_ocr(receipt_text: str) -> Dict[str, Any]:
+async def parse_receipt_ocr(receipt_text: str) -> dict[str, Any]:
     """Parses raw OCR receipt text using advanced regex to extract merchant, date, total, and tax."""
     try:
         if not receipt_text or not isinstance(receipt_text, str):
@@ -164,9 +164,9 @@ async def parse_receipt_ocr(receipt_text: str) -> Dict[str, Any]:
         return {"status": "success", "data": parsed}
     except Exception as e:
         logger.exception("Failed to parse receipt")
-        return {"status": "error", "message": f"OCR parsing failed: {str(e)}"}
+        return {"status": "error", "message": f"OCR parsing failed: {e!s}"}
 
-async def get_portfolio_summary(assets: List[Dict[str, Union[str, float, int]]]) -> Dict[str, Any]:
+async def get_portfolio_summary(assets: list[dict[str, str | float | int]]) -> dict[str, Any]:
     """Calculates portfolio valuation, allocation weights, and concentration risk (HHI)."""
     try:
         if not assets or not isinstance(assets, list):
@@ -203,7 +203,7 @@ async def get_portfolio_summary(assets: List[Dict[str, Union[str, float, int]]])
         return {"status": "success", "data": summary}
     except Exception as e:
         logger.exception("Failed to generate portfolio summary")
-        return {"status": "error", "message": f"Portfolio calculation failed: {str(e)}"}
+        return {"status": "error", "message": f"Portfolio calculation failed: {e!s}"}
 
 def register_finance_tools(registry: Any) -> None:
     """Registers the elite finance toolset into the Makima OS tool registry."""
@@ -302,4 +302,4 @@ def register_finance_tools(registry: Any) -> None:
 
         logger.info(f"Successfully registered {len(tools)} elite finance tools to Makima OS registry.")
     except Exception as e:
-        logger.critical(f"Critical failure during finance tools registration: {str(e)}")
+        logger.critical(f"Critical failure during finance tools registration: {e!s}")

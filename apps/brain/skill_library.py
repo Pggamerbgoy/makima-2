@@ -19,7 +19,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 
@@ -45,7 +45,7 @@ class Skill:
     use_count: int = 0
     success_count: int = 0
     created_at: float = field(default_factory=time.time)
-    embedding: Optional[list[float]] = None
+    embedding: list[float] | None = None
 
     @property
     def success_rate(self) -> float:
@@ -63,7 +63,7 @@ class SkillExecutionContext:
         self,
         execution_runtime: Any,
         tool_registry: Any,
-        base_context: Optional[dict[str, Any]] = None,
+        base_context: dict[str, Any] | None = None,
     ) -> None:
         self.execution_runtime = execution_runtime
         self.tool_registry = tool_registry
@@ -148,7 +148,7 @@ class SkillLibrary:
         # In-memory caches
         self._skill_cache: dict[str, Skill] = {}
         self._cached_skill_ids: list[str] = []
-        self._embeddings_matrix: Optional[np.ndarray] = None  # (N, dim), normalized
+        self._embeddings_matrix: np.ndarray | None = None  # (N, dim), normalized
         self._lock = asyncio.Lock()
         self._initialized = False
 
@@ -379,7 +379,7 @@ class SkillLibrary:
         task: str,
         trajectory: list[dict],
         final_output: str,
-    ) -> Optional[Skill]:
+    ) -> Skill | None:
         """
         Synthesize a successful multi-step task trajectory into a reusable program.
         Requires 3+ tool calls.
@@ -405,7 +405,7 @@ class SkillLibrary:
             "}"
         )
 
-        parsed: Optional[dict[str, Any]] = None
+        parsed: dict[str, Any] | None = None
         if self.ai_handler and hasattr(self.ai_handler, "generate"):
             try:
                 if hasattr(self.ai_handler, "generate_structured"):
@@ -479,7 +479,7 @@ class SkillLibrary:
         for i, call in enumerate(trajectory, start=1):
             tool = call.get("tool_name") or call.get("tool") or call.get("name") or "execute"
             params = call.get("params") or call.get("parameters") or {}
-            params_str = ", ".join(f"{k}={repr(v)}" for k, v in params.items())
+            params_str = ", ".join(f"{k}={v!r}" for k, v in params.items())
             lines.append(f"res{i} = await context.execute_tool('{tool}', {params_str})")
         lines.append(f"result = res{len(trajectory)}")
 
@@ -498,7 +498,7 @@ class SkillLibrary:
         if not skill:
             return False
 
-        blob: Optional[bytes] = None
+        blob: bytes | None = None
         if skill.embedding:
             try:
                 vec = np.array(skill.embedding, dtype=np.float32)
@@ -569,7 +569,7 @@ class SkillLibrary:
         self,
         task_description: str,
         threshold: float = 0.88,
-    ) -> Optional[Skill]:
+    ) -> Skill | None:
         """
         Embed task_description, compute cosine similarity against cached skill embeddings,
         and return the best matching Skill above threshold.
@@ -707,7 +707,12 @@ class SkillLibrary:
         try:
             exec(wrapped_code, safe_globals, local_scope)
             run_func = local_scope["_run_skill"]
-            return await run_func(exec_ctx, params)
+            # P0: bound execution time — skill code runs on the event loop,
+            # so an infinite loop would hang the brain. Fail closed on timeout.
+            return await asyncio.wait_for(run_func(exec_ctx, params), timeout=30.0)
+        except asyncio.TimeoutError:
+            logger.error("Skill execution timed out after 30s time budget")
+            raise TimeoutError("Skill execution exceeded 30s time budget")
         except Exception as exec_err:
             logger.error("Skill execution failed: %s", exec_err)
             raise
