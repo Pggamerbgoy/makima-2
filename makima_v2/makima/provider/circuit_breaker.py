@@ -42,7 +42,7 @@ class CircuitBreaker:
     ):
         self.name = name
         self.max_failures = max(1, max_failures)
-        self.cooldown_seconds = max(1.0, cooldown_seconds)
+        self.cooldown_seconds = max(0.01, cooldown_seconds)
         self.jitter = jitter
 
         self._state = CircuitState.CLOSED
